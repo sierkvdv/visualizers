@@ -626,9 +626,39 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); });
   MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type });
   addClip(g.animations[0]);
-  if (MODELS[type].length === 1) { if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); }
+  if (MODELS[type].length === 1) { if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); if (type === 'pop') buildWalkers(); }
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
+// Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
+const ACT_FILES = ['models/act-30.glb', 'models/act-123.glb', 'models/act-342.glb', 'models/act-56.glb', 'models/act-312.glb'];
+const ACTS = {};
+for (const f of ACT_FILES) gltf.load(f, g => g.animations.forEach(c => {
+  const name = c.name.split('|')[1] || c.name;
+  // looprichting uit de clip halen: wij verplaatsen het figuur zelf (anders springt het terug bij elke herhaling)
+  const hip = c.tracks.find(t => /Hips\.position$/.test(t.name));
+  if (hip && /Walk/.test(name)) {
+    const v = hip.values, n = v.length / 3, drift = [0, 1, 2].map(a => v[(n - 1) * 3 + a] - v[a]);
+    const ax = drift.map(Math.abs).indexOf(Math.max(...drift.map(Math.abs)));
+    for (let i = 0; i < n; i++) v[i * 3 + ax] = v[ax];
+  }
+  ACTS[name] = c;
+}), undefined, () => {});
+// een glas met lichtgevend drankje in de rechterhand
+const glassGeo = new THREE.CylinderGeometry(0.035, 0.028, 0.12, 12), drinkGeo = new THREE.CylinderGeometry(0.03, 0.025, 0.07, 12);
+const glassMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, shininess: 120 });
+function giveDrink(d) {
+  let hand = null;
+  d.body.traverse(o => { if (!hand && o.isBone && /RightHand$/.test(o.name)) hand = o; });
+  if (!hand) return;
+  d.body.updateMatrixWorld(true);
+  const g = new THREE.Group(), ws = new THREE.Vector3();
+  hand.getWorldScale(ws);
+  g.add(new THREE.Mesh(glassGeo, glassMat), new THREE.Mesh(drinkGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL(pick([0.95, 0.08, 0.55, 0.3, 0.8]), 1, 0.55) })));
+  g.children[1].position.y = -0.02;
+  g.scale.setScalar(1 / ws.x);
+  g.position.set(0, 0.09 / ws.y, 0.04 / ws.z);
+  hand.add(g);
+}
 
 // Andere kleuren per figuur zonder opnieuw te genereren: de textuur wordt per pixel ingedeeld
 // (felle kleur = top, licht grijs/wit = jas en schoenen, donker = broek, licht geel = haar, bruin = huid) en per figuur herkleurd.
@@ -681,6 +711,30 @@ function makeModelDancer(M, calm) {
            nextChange: 0, home: new THREE.Vector3(), face: 0, tq: 0 };
 }
 // elke 8 of 16 tellen een andere dans (soms gespiegeld); de vorige vloeit er in een tel uit
+// niet-dansen: een van de eigen handelingen spelen en om de 6-14 s wisselen
+function setClip(d, clip, fade = 0.6) {
+  if (d.cur && d.cur.getClip() === clip) return;
+  if (d.prev) d.prev.stop();
+  d.prev = d.cur;
+  d.cur = d.mixer.clipAction(clip);
+  d.cur.time = 0; d.cur.play();
+  d.fade = d.prev ? 0 : 1; d.fadeRate = 1 / fade;
+}
+function blend(d, dt) {
+  d.fade = Math.min(1, d.fade + dt * (d.fadeRate || 2));
+  if (d.cur) d.cur.setEffectiveWeight(d.fade);
+  if (d.prev) d.prev.setEffectiveWeight(1 - d.fade);
+  d.mixer.update(dt);
+}
+function act(d, dt) {
+  d.actT = (d.actT || 0) - dt;
+  if (d.actT <= 0) {
+    const c = ACTS[pick(d.acts)];
+    if (c) setClip(d, c);
+    d.actT = rnd(6, 14);
+  }
+  blend(d, dt);
+}
 function nextDance(d, t) {
   const opts = CLIPS.filter(c => !d.cur || c !== d.cur.getClip());
   const clip = pick(opts.length ? opts : CLIPS);
@@ -830,6 +884,7 @@ function pose(d, tb, A, dt) {
   if (d.type === 'model') {
     d.root.position.set(d.home.x, 0, d.home.z);
     d.root.rotation.set(0, d.face, 0);
+    if (d.acts) { act(d, dt); return; }
     if (!CLIPS.length) return;
     if (!d.cur || (A >= 0.08 && tb >= d.nextChange)) nextDance(d, tb);
     // bij muziek op de beat (publiek op halve snelheid), in stilte langzaam doorwiegen
@@ -980,17 +1035,111 @@ function buildClub() {
   scene.add(exit);
   // publiek aan de rand: staat mee te bewegen bij de bar, de lounge en de ingang
   const spots = [[11.0, -2.6, -1.6], [10.9, -0.8, -1.4], [11.0, 1.9, -1.9], [10.8, 3.4, -1.3], [13.0, 1.0, -1.57], [-11.6, -4, 1.6], [-11.2, -1.6, 1.3], [-11.5, 2.2, 1.8], [-11.0, 4.6, 1.4],
-                 [-3, 12, 3.14], [2.6, 12.3, 3.0], [7.5, 11.6, -2.6], [-8, 11.4, 2.5], [-8.5, -9.5, 0.6], [8.5, -9.5, -0.6]];
+                 [-3, 12, 3.14], [2.6, 12.3, 3.0], [7.5, 11.6, -2.6], [-7.4, 13.2, -1.57], [-6.6, 13.25, -1.5], [-8.5, -9.5, 0.6], [8.5, -9.5, -0.6]];
+  // wc's in de voorwand, met een rij ervoor
+  add(scene, BOX, wood, [-9, 1.15, ROOM - 0.08], [1.3, 2.3, 0.12]);
+  const wcDoor = add(scene, BOX, std(0x1d1a24, 0.5, 0.3), [-9, 1.05, ROOM - 0.16], [1.0, 2.1, 0.05]);
+  wcDoor.receiveShadow = true;
+  const wc = neonSign('WC', '#b06bff', 0.9, 0.3);
+  wc.position.set(-9, 2.6, ROOM - 0.2); wc.rotation.y = Math.PI;
+  scene.add(wc);
   CROWD_SPOTS = spots;
   buildCrowd();
 }
 let CROWD_SPOTS = [];
+// Rondlopers. Route langs een pad om de dansvloer heen (achterkant zit dicht: dj en speakers)
+const RING = [[-7.6, -6.6], [-7.6, 0], [-7.6, 7.6], [0, 7.6], [7.6, 7.6], [7.6, 0], [7.6, -6.6]];
+const POIS = [
+  { at: () => [10.4, rnd(-3.8, 3.8)], node: 5, face: Math.PI / 2, acts: ['Stand_and_Drink', 'Stand_and_Chat'], stay: [8, 18] },
+  { at: () => [-10.4, rnd(-5, 5)], node: 1, face: -Math.PI / 2, acts: ['Stand_and_Chat', 'Phone_Conversation'], stay: [8, 16] },
+  { at: () => [-9, 13.3], node: 2, gone: [10, 25] },  // de wc in, even weg
+  { at: () => [0, 13.4], node: 3, gone: [15, 40] },   // even naar buiten
+  { at: () => [rnd(-7.4, -6.6), rnd(-5, 5)], node: 1, dance: [16, 32] },
+  { at: () => [rnd(6.6, 7.4), rnd(-5, 5)], node: 5, dance: [16, 32] },
+];
+const walkers = [];
+function nearestNode(x, z) { let b = 0, bd = 1e9; RING.forEach(([rx, rz], i) => { const dd = Math.hypot(rx - x, rz - z); if (dd < bd) { bd = dd; b = i; } }); return b; }
+function planRoute(w) {
+  let poi = pick(POIS);
+  if (poi === w.poi) poi = pick(POIS);
+  w.poi = poi;
+  const [tx, tz] = poi.at(), a = nearestNode(w.root.position.x, w.root.position.z), b = poi.node, path = [];
+  for (let i = a; i !== b; i += Math.sign(b - a)) path.push(RING[i]);
+  path.push(RING[b], [tx, tz]);
+  w.path = path; w.state = 'walk';
+  setClip(w, w.walkClip, 0.4);
+}
+function buildWalkers() {
+  for (const w of walkers) scene.remove(w.root);
+  walkers.length = 0;
+  if (!MODELS.pop.length) return;
+  for (let i = 0; i < 6; i++) {
+    const w = makeModelDancer(pick(MODELS.pop), true);
+    w.root.traverse(o => { o.castShadow = false; });
+    const [x, z] = RING[Math.floor(Math.random() * RING.length)];
+    w.root.position.set(x + rnd(-0.5, 0.5), 0, z + rnd(-0.5, 0.5));
+    w.drunk = i === 0;
+    w.state = 'wait'; w.wait = rnd(0, 6);
+    if (Math.random() < 0.5) giveDrink(w);
+    walkers.push(w);
+  }
+}
+function updateWalkers(dt, tb, A) {
+  const walkC = ACTS.Casual_Walk;
+  if (!walkC || !walkers.length) return;
+  for (const w of walkers) {
+    w.walkClip = w.drunk && ACTS.Unsteady_Walk ? ACTS.Unsteady_Walk : walkC;
+    if (w.state === 'wait' || w.state === 'gone') {
+      w.wait -= dt;
+      if (w.state === 'wait' && w.poi && w.poi.dance && CLIPS.length) {  // aan de rand meedansen
+        if (!w.cur || tb >= w.nextChange) nextDance(w, tb);
+        const c = w.cur.getClip(), u = (tb + w.off) / c.beats;
+        w.cur.time = (u - Math.floor(u)) * c.duration;
+        w.fade = Math.min(1, w.fade + dt * 2); w.cur.setEffectiveWeight(w.fade); if (w.prev) w.prev.setEffectiveWeight(1 - w.fade);
+        w.mixer.update(0);
+      } else if (w.state === 'wait') {
+        if (w.acts) act(w, dt);
+        else if (ACTS.Stand_and_Chat) { setClip(w, ACTS.Stand_and_Chat); blend(w, dt); }
+      }
+      if (w.wait <= 0) { w.root.visible = true; w.acts = null; planRoute(w); }
+      continue;
+    }
+    // lopen naar het volgende punt
+    const [tx, tz] = w.path[0], p = w.root.position, dx = tx - p.x, dz = tz - p.z, dist = Math.hypot(dx, dz);
+    const speed = w.drunk ? 0.7 : 1.15;  // m/s; de clip loopt (na het weghalen van de drift) op de plaats
+    if (dist < 0.15) {
+      w.path.shift();
+      if (!w.path.length) {
+        const poi = w.poi;
+        if (poi.gone) { w.state = 'gone'; w.root.visible = false; w.wait = rnd(...poi.gone); }
+        else {
+          w.state = 'wait';
+          if (poi.dance) { w.wait = rnd(...poi.dance) * 0.5; if (w.cur) w.cur.stop(); if (w.prev) w.prev.stop(); w.cur = w.prev = null; w.nextChange = 0; w.root.rotation.y = Math.atan2(-p.x, -p.z); }
+          else { w.wait = rnd(...poi.stay); w.acts = poi.acts; w.actT = 0; w.root.rotation.y = poi.face; }
+        }
+      }
+    } else {
+      const step = Math.min(dist, speed * dt);
+      p.x += dx / dist * step; p.z += dz / dist * step;
+      const want = Math.atan2(dx, dz);
+      let dr = want - w.root.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr));
+      w.root.rotation.y += dr * Math.min(1, dt * 6);
+    }
+    blend(w, dt);
+  }
+}
 function buildCrowd() {
   for (const d of crowd) scene.remove(d.root);
   crowd.length = 0;
   for (const [x, z, face] of CROWD_SPOTS) {
-    const d = makeDancer(MODELS.pop.length && Math.random() < 0.6 ? 'pop' : pick(['robot', 'alien', 'wizard']), true);
+    // bij de bar, in de lounge en in de rij voor de wc staan mensen (geen dansers) met een drankje of telefoon
+    const social = x > 10 || x < -10.5 || z > 13;
+    const d = makeDancer(MODELS.pop.length && (social || Math.random() < 0.6) ? 'pop' : pick(['robot', 'alien', 'wizard']), true);
     d.home.set(x, 0, z);
+    if (d.type === 'model' && social) {
+      d.acts = z > 13 ? ['Phone_Conversation', 'Stand_and_Chat'] : x > 12.5 ? ['Stand_and_Chat'] : ['Stand_and_Drink', 'Stand_and_Drink', 'Stand_and_Chat'];
+      if (z <= 13 && Math.random() < 0.8) giveDrink(d);
+    }
     d.face = face + rnd(-0.3, 0.3);
     d.move = pick([1, 8, 0, 8]);
     if (d.type !== 'model') d.nextChange = Infinity;
@@ -1422,6 +1571,7 @@ function frame(nowMs) {
   }
   pose(dj, beatPos, energy * 0.7, dt);
   for (const c of crowd) pose(c, beatPos, energy * 0.4, dt);
+  updateWalkers(dt, beatPos, energy);
   washMats.forEach((m, i) => m.color.copy(pal[i & 1]).multiplyScalar((0.25 + 0.45 * bands[i].v) * L.wash * dim));
   pillarLed.color.copy(pal[(beat >> 1) & 1]).multiplyScalar((0.2 + 0.8 * hit) * dim);
 
