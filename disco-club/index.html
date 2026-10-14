@@ -1344,7 +1344,6 @@ function buildCast() {
     d.home.set(x + rnd(-0.3, 0.3), 0, z + rnd(-0.3, 0.3));
     d.face = Math.atan2(-d.home.x, -d.home.z) + rnd(-1.1, 1.1);  // ongeveer naar het midden van de vloer gekeerd
     d.face0 = d.face; d.base = new THREE.Vector3(d.home.x, Math.random() * 6, d.home.z);
-    if (d.type === 'model' && Math.random() < 0.3) giveDrink(d, pick(['glas', 'bier', 'sigaret']));
     d.move = Math.floor(Math.random() * MOVES.length);
     dancers.push(d);
   }
