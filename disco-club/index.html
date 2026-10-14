@@ -613,37 +613,37 @@ const BUILD = {
 };
 // Gegenereerde 3D-mensen (models/*.glb, met skelet en dansclip). Zolang ze laden of als ze ontbreken: de gebouwde poppetjes.
 // Alle Meshy-rigs hebben dezelfde botnamen, dus elke dansclip (ook de losse dans-*.glb) past op elk figuur.
-const MODEL_FILES = ['models/pop-1.glb'];
+const MODEL_FILES = { pop: ['models/pop-1.glb'], wizard: ['models/wizard-1.glb'], alien: ['models/alien-1.glb'] };
 const DANCE_FILES = ['models/dans-65.glb', 'models/dans-66.glb', 'models/dans-594.glb', 'models/dans-84.glb'];
-const MODELS = [], CLIPS = [], gltf = new THREE.GLTFLoader();
+const MODELS = { pop: [], wizard: [], alien: [] }, CLIPS = [], gltf = new THREE.GLTFLoader();
 const addClip = c => { if (c && !CLIPS.some(x => x.name === c.name)) { c.beats = Math.max(1, Math.round(c.duration * 2)); CLIPS.push(c); } };  // tellen ≈ duur bij 120 bpm
-for (const f of MODEL_FILES) gltf.load(f, g => {
+for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) gltf.load(f, g => {
   g.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
   // lengte uit de botten: de bounding box van een skinned mesh klopt niet (armature staat op schaal 0.01)
   g.scene.updateMatrixWorld(true);
   const box = new THREE.Box3(), v = new THREE.Vector3();
   g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); });
-  MODELS.push({ scene: g.scene, h: box.max.y + 0.08 });
+  MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type });
   addClip(g.animations[0]);
-  if (MODELS.length === 1) { if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); }
+  if (MODELS[type].length === 1) { if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); }
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 
 // Andere kleuren per figuur zonder opnieuw te genereren: de textuur wordt per pixel ingedeeld
 // (felle kleur = top, licht grijs/wit = jas en schoenen, donker = broek, licht geel = haar, bruin = huid) en per figuur herkleurd.
 const HAIR = [0x2a1a10, 0x0d0d0f, 0xe8d6a8, 0xb5432a, 0xff3fa4, 0x3fd2ff, 0x9b6bff, 0xf2f2f2, 0x6b3e22];
-function recolorMat(src) {
+function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders alleen de felle kleuren een andere tint
   const m = src.clone(), u = {
-    uTop: { value: Math.random() }, uCloth: { value: new THREE.Color().setHSL(Math.random(), rnd(0.2, 0.9), rnd(0.35, 0.8)) },
-    uDark: { value: new THREE.Color().setHSL(Math.random(), rnd(0.3, 0.9), rnd(0.15, 0.4)) }, uDarkMix: { value: Math.random() < 0.35 ? 0 : rnd(0.5, 1) },
+    uTop: { value: full ? Math.random() : rnd(-0.25, 0.25) }, uCloth: { value: new THREE.Color().setHSL(Math.random(), rnd(0.2, 0.9), rnd(0.35, 0.8)) },
+    uDark: { value: new THREE.Color().setHSL(Math.random(), rnd(0.3, 0.9), rnd(0.15, 0.4)) }, uDarkMix: { value: full && Math.random() > 0.35 ? rnd(0.5, 1) : 0 }, uFull: { value: full ? 1 : 0 },
     uHair: { value: new THREE.Color(pick(HAIR)) }, uSkin: { value: pick([0.55, 0.75, 1, 1.25, 1.45]) } };
   for (const k of ['uCloth', 'uDark', 'uHair']) u[k].value.convertLinearToSRGB();
-  m.metalness = 0.35;  // vol metaal spiegelt de donkere zaal en maakt elke jas zwart
+  if (full) m.metalness = 0.35;  // vol metaal spiegelt de donkere zaal en maakt elke jas zwart
   m.emissiveMap = null; m.emissive.setRGB(0, 0, 0);
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-      uniform float uTop, uDarkMix, uSkin; uniform vec3 uCloth, uDark, uHair;
+      uniform float uTop, uDarkMix, uSkin, uFull; uniform vec3 uCloth, uDark, uHair;
       vec3 hueRot(vec3 c, float a) { float t = a * 6.2831853, k = cos(t), s = sin(t); vec3 w = vec3(0.57735);
         return c * k + cross(w, c) * s + w * dot(w, c) * (1.0 - k); }`).replace('#include <map_fragment>', `#include <map_fragment>
       {
@@ -660,10 +660,10 @@ function recolorMat(src) {
         float wCloth = (1.0 - smoothstep(0.12, 0.25, sat)) * smoothstep(0.35, 0.5, mx);
         vec3 o = s;
         o = mix(o, hueRot(s, uTop), wTop);
-        o = mix(o, uCloth * (0.35 + 0.75 * mx), wCloth * 0.8);
+        o = mix(o, uCloth * (0.35 + 0.75 * mx), wCloth * 0.8 * uFull);
         o = mix(o, uDark * (0.6 + 2.5 * mx), wDark * uDarkMix);
-        o = mix(o, uHair * (0.45 + 0.6 * mx), wHair);
-        o = mix(o, s * uSkin, wSkin);
+        o = mix(o, uHair * (0.45 + 0.6 * mx), wHair * uFull);
+        o = mix(o, s * uSkin, wSkin * uFull);
         diffuseColor.rgb = pow(clamp(o, 0.0, 1.0), vec3(2.2));
       }`);
   };
@@ -673,7 +673,7 @@ function recolorMat(src) {
 function makeModelDancer(M, calm) {
   const root = new THREE.Group(), body = THREE.SkeletonUtils.clone(M.scene);
   body.scale.setScalar(rnd(1.6, 1.85) / M.h);
-  body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material); });
+  body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop'); });
   root.add(body);
   scene.add(root);
   return { type: 'model', root, body, mixer: new THREE.AnimationMixer(body), calm, cur: null, prev: null, fade: 1, off: Math.floor(rnd(0, 8)),
@@ -693,7 +693,9 @@ function nextDance(d, t) {
   d.nextChange = Math.floor(t) + pick([8, 16, 16]);
 }
 function makeDancer(type, calm) {
-  if (type === 'pop' && MODELS.length) return makeModelDancer(pick(MODELS), calm);
+  // 3D-figuur als die er is: mensen en tovenaars altijd, aliens half (de gebouwde alien blijft ook meedoen)
+  const ms = MODELS[type];
+  if (ms && ms.length && (type !== 'alien' || Math.random() < 0.5)) return makeModelDancer(pick(ms), calm);
   const T = TYPES[type];
   const root = new THREE.Group(), hips = new THREE.Group(), torso = new THREE.Group(), head = new THREE.Group();
   const hipY = T.leg * 2 + T.foot;
@@ -986,7 +988,7 @@ function buildCrowd() {
   for (const d of crowd) scene.remove(d.root);
   crowd.length = 0;
   for (const [x, z, face] of CROWD_SPOTS) {
-    const d = makeDancer(MODELS.length && Math.random() < 0.6 ? 'pop' : pick(['robot', 'alien', 'wizard']), true);
+    const d = makeDancer(MODELS.pop.length && Math.random() < 0.6 ? 'pop' : pick(['robot', 'alien', 'wizard']), true);
     d.home.set(x, 0, z);
     d.face = face + rnd(-0.3, 0.3);
     d.move = pick([1, 8, 0, 8]);
