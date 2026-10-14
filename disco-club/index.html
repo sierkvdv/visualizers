@@ -719,7 +719,7 @@ const BUILD = {
 // Alle Meshy-rigs hebben dezelfde botnamen, dus elke dansclip (ook de losse dans-*.glb) past op elk figuur.
 const MODEL_FILES = { pop: ['models/pop-1.glb', 'models/rick-1.glb'], wizard: ['models/wizard-1.glb', 'models/witch-1.glb'], alien: ['models/alien-1.glb'] };
 const KEEP_LOOK = /rick/;  // vaste figuren: niet herkleuren
-const DANCE_FILES = ['models/dans-65.glb', 'models/dans-66.glb', 'models/dans-594.glb', 'models/dans-84.glb'];
+const DANCE_FILES = ['models/dans-65.glb', 'models/dans-66.glb', 'models/dans-594.glb', 'models/dans-84.glb', 'models/dans-63.glb'];
 const MODELS = { pop: [], wizard: [], alien: [] }, CLIPS = [], gltf = new THREE.GLTFLoader();
 const addClip = c => { if (c && !CLIPS.some(x => x.name === c.name)) { c.beats = Math.max(1, Math.round(c.duration * 2)); CLIPS.push(c); } };  // tellen ≈ duur bij 120 bpm
 for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) gltf.load(f, g => {
@@ -735,7 +735,8 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
-const ACT_FILES = ['models/act-30.glb', 'models/act-123.glb', 'models/act-342.glb', 'models/act-56.glb', 'models/act-312.glb'];
+const ACT_FILES = ['models/act-30.glb', 'models/act-123.glb', 'models/act-342.glb', 'models/act-56.glb', 'models/act-312.glb',
+  'models/act-298.glb', 'models/act-44.glb', 'models/act-596.glb'];  // + juichen, blije sprong, YMCA (voor de momenten)
 const ACTS = {};
 for (const f of ACT_FILES) gltf.load(f, g => g.animations.forEach(c => {
   const name = c.name.split('|')[1] || c.name;
@@ -1000,7 +1001,19 @@ function act(d, dt) {
   }
   blend(d, dt);
 }
+function forceDance(d, clip, tb, beats, sync) {
+  if (!clip) return;
+  if (!clip.beats) clip.beats = Math.max(1, Math.round(clip.duration * 2));
+  const a = d.mixer.clipAction(clip);
+  if (a !== d.cur) { if (d.prev && d.prev !== a) d.prev.stop(); d.prev = d.cur; d.cur = a; a.play(); d.fade = d.prev ? 0 : 1; }
+  const tq = d.tq || tb;
+  a.beatOff = clip.beats - (tq % clip.beats);  // begint nu bij het begin (wie tegelijk start, loopt gelijk)
+  d.nextChange = Math.floor(tb) + beats;
+  d.fadeK = 2.2;  // momenten vloeien sneller in dan gewone danswissels
+}
 function nextDance(d, t) {
+  if (d.queue && d.queue.length) { const [c, n] = d.queue.shift(); return forceDance(d, c, t, n); }
+  d.fadeK = 0.7;
   const opts = CLIPS.filter(c => !d.cur || c !== d.cur.getClip());
   const clip = pick(opts.length ? opts : CLIPS);
   if (d.prev) d.prev.stop();
@@ -1149,6 +1162,8 @@ const MOVES = [
 ];
 function pose(d, tb, A, dt) {
   if (d.type === 'model') {
+    if (d.faceT !== undefined) { let dr = d.faceT - d.face; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); d.face += dr * Math.min(1, dt * 1.6); }
+    if (d.base) d.home.set(d.base.x + Math.sin(tb * 0.05 + d.base.y) * 0.45, 0, d.base.z + Math.cos(tb * 0.04 + d.base.y * 2) * 0.45);  // zachtjes rondschuifelen
     d.root.position.set(d.home.x, 0, d.home.z);
     d.root.rotation.set(0, d.face, 0);
     if (d.acts) { act(d, dt); return; }
@@ -1157,7 +1172,7 @@ function pose(d, tb, A, dt) {
     // bij muziek op de beat (publiek op halve snelheid), in stilte langzaam doorwiegen
     const sp = d.calm ? 0.5 : 1;
     d.tq = A < 0.08 ? d.tq + dt * 0.3 : tb * sp;
-    d.fade = Math.min(1, d.fade + dt * 0.7);  // ~1,5 s overvloeien naar de nieuwe dans
+    d.fade = Math.min(1, d.fade + dt * (d.fadeK || 0.7));  // ~1,5 s overvloeien naar de nieuwe dans (momenten sneller)
     for (const [a, w] of [[d.cur, d.fade], [d.prev, 1 - d.fade]]) {
       if (!a) continue;
       const c = a.getClip(), u = (d.tq + a.beatOff) / c.beats;
@@ -1182,7 +1197,8 @@ function pose(d, tb, A, dt) {
   } else {
     MOVES[d.move](d, t, phi, A);
     d.head.rotation.x += 0.16 * Math.sin(TAU * t) * A;
-    if (t >= d.nextChange) {  // elke 8 of 16 beats een andere move
+    if (t >= d.nextChange && d.pq != null) { d.move = d.pq; d.pq = null; d.nextChange = Math.floor(t) + 8; }  // vervolg van een moment
+    else if (t >= d.nextChange) {  // elke 8 of 16 beats een andere move
       d.move = d.type === 'robot' && Math.random() < 0.5 ? 3 : Math.floor(Math.random() * MOVES.length);
       d.nextChange = Math.floor(t) + pick([8, 8, 16]);
       if (Math.random() < 0.5) d.faceT = d.face + rnd(-1.3, 1.3);  // en soms een andere kant op draaien
@@ -1198,6 +1214,58 @@ function pose(d, tb, A, dt) {
 }
 
 let dancers = [], dj = null;
+// Momenten op de dansvloer (gratis variatie met dezelfde clips):
+//  drop    - na een opbouw springt de energie omhoog: iedereen juicht 8 tellen en springt daarna 8 tellen
+//  ymca    - zo nu en dan doet de hele vloer 16 tellen tegelijk YMCA (het enige moment dat ze synchroon zijn)
+//  solo    - één danser krijgt de ruimte, de anderen in de buurt draaien naar hem toe en juichen hem toe
+//  paartje - twee buren draaien naar elkaar toe en dansen samen
+let lastMoment = -999, slowE = 0, lastMomentBeat = -1;
+const floorModels = () => dancers.filter(d => d.type === 'model' && !d.acts);
+const builtMove = (d, tb, move, beats, next) => { d.move = move; d.nextChange = Math.floor(tb + d.off) + beats; d.pq = next; };
+function startMoment(kind, tb) {
+  const ds = floorModels(), built = dancers.filter(d => d.type !== 'model');
+  lastMoment = tb;
+  if (kind === 'drop') for (const d of built) builtMove(d, tb, 9, 8, 4);  // handen in de lucht, dan springen
+  if (kind === 'ymca') for (const d of built) { builtMove(d, tb, 9, 16, null); d.faceT = Math.atan2(-d.home.x, -8.5 - d.home.z); }
+  if (!ds.length && (kind === 'solo' || kind === 'paar')) {  // geen 3D-figuren: een gebouwde solist met klappers eromheen
+    const star = pick(built); if (!star) return;
+    builtMove(star, tb, pick([0, 2, 5, 6]), 16, null);
+    for (const d of built) if (d !== star && d.home.distanceTo(star.home) < 4.5) { d.faceT = Math.atan2(star.home.x - d.home.x, star.home.z - d.home.z); builtMove(d, tb, 9, 8, null); }
+    return;
+  }
+  if (kind === 'drop') for (const d of ds) { forceDance(d, ACTS.Cheer_with_Both_Hands_Up, tb, 8); d.queue = [[ACTS.Happy_jump_f, 8]]; }
+  if (kind === 'ymca') for (const d of ds) { forceDance(d, ACTS.ymca_dance, tb, 16, true); d.faceT = Math.atan2(-d.home.x, -8.5 - d.home.z); }  // allemaal naar de dj
+  if (kind === 'solo') {
+    const star = pick(ds); forceDance(star, pick(CLIPS), tb, 16);
+    for (const d of built) if (d.home.distanceTo(star.home) < 4.5) { d.faceT = Math.atan2(star.home.x - d.home.x, star.home.z - d.home.z); builtMove(d, tb, 9, 8, null); }
+    for (const d of ds) if (d !== star && d.home.distanceTo(star.home) < 4.5) {
+      d.faceT = Math.atan2(star.home.x - d.home.x, star.home.z - d.home.z);
+      forceDance(d, ACTS.Cheer_with_Both_Hands_Up, tb, 6); d.queue = [[pick(CLIPS), 10]];
+    }
+  }
+  if (kind === 'paar') {
+    const pool = [...ds, ...built], a = pick(pool), b = pool.filter(d => d !== a).sort((p, q) => p.home.distanceTo(a.home) - q.home.distanceTo(a.home))[0];
+    if (!b) return;
+    a.faceT = Math.atan2(b.home.x - a.home.x, b.home.z - a.home.z); b.faceT = Math.atan2(a.home.x - b.home.x, a.home.z - b.home.z);
+    const c = pick(CLIPS), mv = pick([0, 1, 5, 8]);
+    for (const d of [a, b]) { if (d.type === 'model') forceDance(d, c, tb, 16); else builtMove(d, tb, mv, 16, null); }
+  }
+}
+function updateMoments(tb, E) {
+  slowE += (E - slowE) * 0.01;
+  const beat = Math.floor(tb);
+  if (beat === lastMomentBeat) return;
+  lastMomentBeat = beat;
+  // na een moment weer losjes de eigen kant op
+  if (beat - lastMoment === 20) for (const d of dancers) if (d.face0 !== undefined) d.faceT = d.face0;
+  if (beat - lastMoment < 32 || beat % 4) return;
+  if (E > 0.55 && E - slowE > 0.25 && ACTS.Cheer_with_Both_Hands_Up) return startMoment('drop', tb);
+  if (E < 0.08) return;
+  const r = Math.random();
+  if (r < 0.04 && ACTS.ymca_dance) startMoment('ymca', tb);
+  else if (r < 0.14) startMoment('solo', tb);
+  else if (r < 0.26) startMoment('paar', tb);
+}
 function buildCast() {
   for (const d of dancers) dropDancer(d);
   dancers = [];
@@ -1210,6 +1278,7 @@ function buildCast() {
     const [x, z] = free.pop();
     d.home.set(x + rnd(-0.3, 0.3), 0, z + rnd(-0.3, 0.3));
     d.face = Math.atan2(-d.home.x, -d.home.z) + rnd(-1.1, 1.1);  // ongeveer naar het midden van de vloer gekeerd
+    d.face0 = d.face; d.base = new THREE.Vector3(d.home.x, Math.random() * 6, d.home.z);
     d.move = Math.floor(Math.random() * MOVES.length);
     dancers.push(d);
   }
@@ -1892,6 +1961,7 @@ function frame(nowMs) {
   updateFog(dt, beat, energy);
 
   // dansers
+  updateMoments(beatPos, energy);
   for (const d of dancers) {
     pose(d, beatPos, energy, dt);
     if (d.light) d.light.material.color.setHSL(0.52, 1, 0.25 + 0.5 * pulse);
