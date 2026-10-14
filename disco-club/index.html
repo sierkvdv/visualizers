@@ -1031,7 +1031,7 @@ function makeModelDancer(M, calm) {
   M.used = (M.used || 0) + 1;
   const root = new THREE.Group(), body = THREE.SkeletonUtils.clone(M.scene);
   body.scale.setScalar((M.type === 'alien' ? rnd(2.05, 2.35) : rnd(1.6, 1.85)) / M.h);
-  if (!M.keep) body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop'); });
+  if (!M.keep) body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop' && !/man-1/.test(M.file)); });  // de leren man houdt zijn zwarte leer
   if (!M.keep && Math.random() < 0.4) body.scale.x *= -1;
   root.add(body);
   scene.add(root);
@@ -1225,8 +1225,8 @@ const MOVES = [
 function pose(d, tb, A, dt) {
   if (d.type === 'model') {
     if (d.faceT !== undefined) { let dr = d.faceT - d.face; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); d.face += dr * Math.min(1, dt * 1.6); }
-    if (d.base) d.home.set(d.base.x + Math.sin(tb * 0.05 + d.base.y) * 0.45, 0, d.base.z + Math.cos(tb * 0.04 + d.base.y * 2) * 0.45);  // zachtjes rondschuifelen
-    d.root.position.set(d.home.x, d.yOff || 0, d.home.z);
+    if (d.base) d.home.set(d.base.x + Math.sin(tb * 0.05 + d.base.y) * 0.3, 0, d.base.z + Math.cos(tb * 0.04 + d.base.y * 2) * 0.3);  // zachtjes rondschuifelen
+    d.root.position.set(d.home.x + (d.px || 0), d.yOff || 0, d.home.z + (d.pz || 0));
     d.root.rotation.set(0, d.face, 0);
     if (d.acts) { act(d, dt); return; }
     if (!CLIPS.length) return;
@@ -1313,6 +1313,26 @@ function startMoment(kind, tb) {
     for (const d of [a, b]) { if (d.type === 'model') forceDance(d, c, tb, 16); else builtMove(d, tb, mv, 16, null); }
   }
 }
+// niemand door elkaar heen: dansers op de vloer duwen elkaar zacht weg als hun heupen dichter dan 0,9 m komen
+const sepA = new THREE.Vector3(), sepB = new THREE.Vector3();
+function hipsOf(d) { if (!d.hips3) d.body && d.body.traverse(o => { if (o.name === 'Hips') d.hips3 = o; }); return d.hips3; }
+function separate(dt) {
+  const list = dancers.filter(d => d.type === 'model');
+  for (const d of list) { d.wx = 0; d.wz = 0; }
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = list[i], b = list[j], ha = hipsOf(a), hb = hipsOf(b);
+    if (!ha || !hb) continue;
+    ha.getWorldPosition(sepA); hb.getWorldPosition(sepB);
+    const dx = sepA.x - sepB.x, dz = sepA.z - sepB.z, d = Math.hypot(dx, dz) || 1e-3, gap = 0.9 - d;
+    if (gap <= 0) continue;
+    a.wx += dx / d * gap * 0.5; a.wz += dz / d * gap * 0.5; b.wx -= dx / d * gap * 0.5; b.wz -= dz / d * gap * 0.5;
+  }
+  const k = 1 - Math.exp(-dt * 6);
+  for (const d of list) {  // duw opbouwen zolang ze botsen, anders langzaam terug naar de eigen plek
+    d.px = (d.px || 0) + d.wx * k * 2 - (d.px || 0) * (d.wx || d.wz ? 0 : k * 0.15);
+    d.pz = (d.pz || 0) + d.wz * k * 2 - (d.pz || 0) * (d.wx || d.wz ? 0 : k * 0.15);
+  }
+}
 function updateMoments(tb, E) {
   slowE += (E - slowE) * 0.01;
   const beat = Math.floor(tb);
@@ -1339,7 +1359,9 @@ function buildCast() {
     const want = S.cast === 'mix' ? pick(['pop', 'pop', 'pop', 'pop', 'robot', 'alien', 'wizard']) : S.cast;
     // een gebouwd figuur alleen als het mag (max 3 robots, 2 aliens); anders blijft de plek leeg
     const d = (want === 'robot' || !anyModel()) ? builtOrNull(want === 'robot' ? ['robot'] : ['robot', 'alien'], false) : makeDancer(want);
-    const [x, z] = free.pop();
+    let k = free.findIndex(([fx, fz]) => dancers.every(o => Math.hypot(o.home.x - fx, o.home.z - fz) > 1.8));
+    if (k < 0) k = free.length - 1;
+    const [x, z] = free.splice(k, 1)[0];
     if (!d) continue;
     d.home.set(x + rnd(-0.3, 0.3), 0, z + rnd(-0.3, 0.3));
     d.face = Math.atan2(-d.home.x, -d.home.z) + rnd(-1.1, 1.1);  // ongeveer naar het midden van de vloer gekeerd
@@ -2067,6 +2089,7 @@ function frame(nowMs) {
 
   // dansers
   updateMoments(beatPos, energy);
+  separate(dt);
   for (const d of dancers) {
     pose(d, beatPos, energy, dt);
     if (d.light) d.light.material.color.setHSL(0.52, 1, 0.25 + 0.5 * pulse);
