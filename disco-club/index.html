@@ -501,6 +501,51 @@ function updateSmoke(dt) {
   }
 }
 
+// Rookmachines: kastjes op de vloer die bij een climax (en om de 32 tellen) een straal rook de zaal in blazen
+const FOGGERS = [[-2.6, -6.25, 0], [2.6, -6.25, 0], [-4, 6.8, Math.PI], [4, 6.8, Math.PI]].map(([x, z, ry]) => ({ x, z, dir: new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry)) }));
+const fogPool = [];
+for (let i = 0; i < 90; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex[i % 3], color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, rotation: rnd(0, TAU) }));
+  sp.visible = false; scene.add(sp);
+  fogPool.push({ sp, v: new THREE.Vector3(), age: 0, life: 0, s0: 0, lit: new THREE.Color() });
+}
+let fogQueue = [], lastFogBeat = -99;
+function fireFog(m, dur = 1.6) {  // een stoot van ~1,6 s: elke ~0,05 s een wolkje
+  for (let t = 0; t < dur; t += 0.05) fogQueue.push({ m, at: performance.now() / 1000 + t });
+}
+function updateFog(dt, beat, energy) {
+  if (beat !== lastFogBeat && beat % 32 === 16) { const k = 1 + Math.floor(Math.random() * 2); for (let i = 0; i < k; i++) fireFog(pick(FOGGERS)); }
+  if (beat !== lastFogBeat && energy > 0.75 && Math.random() < 0.04) fireFog(pick(FOGGERS), 1.0);
+  lastFogBeat = beat;
+  const now = performance.now() / 1000;
+  fogQueue = fogQueue.filter(q => {
+    if (q.at > now) return true;
+    const f = fogPool.find(f => !f.sp.visible);
+    if (f) {
+      const m = q.m;
+      f.sp.visible = true; f.age = 0; f.life = rnd(6, 10); f.s0 = rnd(0.8, 1.2);
+      f.sp.position.set(m.x + m.dir.x * 0.3, 0.35, m.z + m.dir.z * 0.3);
+      f.v.copy(m.dir).multiplyScalar(rnd(3.5, 5)).add(new THREE.Vector3(rnd(-0.6, 0.6), rnd(0.1, 0.5), rnd(-0.6, 0.6)));
+    }
+    return false;
+  });
+  for (const f of fogPool) {
+    if (!f.sp.visible) continue;
+    f.age += dt;
+    if (f.age > f.life) { f.sp.visible = false; continue; }
+    f.v.multiplyScalar(Math.exp(-dt * 1.4));  // remt af en blijft laag hangen
+    f.sp.position.addScaledVector(f.v, dt);
+    const sc = f.s0 + f.age * 1.4;
+    f.sp.scale.set(sc * 1.4, sc, 1);
+    const p = f.sp.position;
+    f.lit.setRGB(0.05, 0.045, 0.06);
+    for (const s of spots) { const d = distToBeam(p, s.beam.g.position, s.beam.target); addColor(f.lit, s.light.color, s.beam.mat.uniforms.strength.value * 0.6 * Math.exp(-d * d * 0.35)); }
+    for (const h of heads) { const d = distToBeam(p, h.beam.g.position, h.beam.target); addColor(f.lit, h.beam.mat.uniforms.color.value, h.beam.mat.uniforms.strength.value * 0.45 * Math.exp(-d * d * 1.4)); }
+    const fade = Math.min(1, f.age * 3) * (1 - f.age / f.life);
+    f.sp.material.color.copy(f.lit).multiplyScalar(fade * 0.9 * (0.4 + S.smoke));
+  }
+}
+
 // Achterwand: equalizer, speakers, dj-tafel en ledbalken op de zijwanden
 const BARS = 28, bars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 1, 0.2), new THREE.MeshBasicMaterial(), BARS);
 scene.add(bars);
@@ -629,7 +674,7 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type, file: f, keep: KEEP_LOOK.test(f) });
   if (g.animations[0] && !/clip0/.test(g.animations[0].name)) addClip(g.animations[0]);  // clip0 = alleen rig, geen dans
   rebuildAll();  // opnieuw verdelen zodra er een figuur bij komt
-  tryBakePole(); if (POLE_CLIP) buildPoleDancer();
+  buildPoleDancers();
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
@@ -653,15 +698,15 @@ const BVH_MAP = { hips_JNT: 'Hips', spine_JNT: 'Spine02', spine1_JNT: 'Spine01',
   r_shoulder_JNT: 'RightShoulder', r_arm_JNT: 'RightArm', r_forearm_JNT: 'RightForeArm', r_hand_JNT: 'RightHand',
   l_upleg_JNT: 'LeftUpLeg', l_leg_JNT: 'LeftLeg', l_foot_JNT: 'LeftFoot', l_toebase_JNT: 'LeftToeBase',
   r_upleg_JNT: 'RightUpLeg', r_leg_JNT: 'RightLeg', r_foot_JNT: 'RightFoot', r_toebase_JNT: 'RightToeBase' };
-let poleBVH = null, POLE_CLIP = null;
-new THREE.BVHLoader().load(POLE_BVH, r => { poleBVH = r; tryBakePole(); }, undefined, () => {});
+let poleBVH = null;
+const POLE_CLIPS = new Map();  // per figuur een eigen omzetting (andere armlengtes = andere grepen)
+new THREE.BVHLoader().load(POLE_BVH, r => { poleBVH = r; buildPoleDancers(); }, undefined, () => {});
 // Elke bron-botrichting wordt eerst op de rustrichting van het doelbot gelegd (T-pose vs A-pose),
 // daarna krijgt het doelbot dezelfde draaiing in wereldruimte als het bronbot. Gebakken naar een gewone clip.
-// de danseres: de heks (zodra die geladen is); de grepen worden op haar eigen skelet uitgerekend
-const poleModel = () => MODELS.wizard.find(M => /witch/.test(M.file));
-function tryBakePole() {
-  const M = poleModel();
-  if (POLE_CLIP || !poleBVH || !M) return;
+// paaldanseressen: de heks en de vrouw met de krullen, elk op haar eigen skelet uitgerekend
+const poleModels = () => [MODELS.wizard.find(M => /witch/.test(M.file)), MODELS.pop.find(M => /pop-1/.test(M.file))].filter(Boolean);
+function poleClipFor(M) {
+  if (POLE_CLIPS.has(M)) return POLE_CLIPS.get(M);
   const sb = poleBVH.skeleton.bones, sRoot = new THREE.Group();
   sRoot.add(sb[0]);
   const helper = new THREE.SkeletonHelper(sb[0]); helper.skeleton = poleBVH.skeleton;
@@ -773,19 +818,29 @@ function tryBakePole() {
   }
   const tracks = pairs.map((p, j) => new THREE.QuaternionKeyframeTrack(p.t.name + '.quaternion', outT, outQ[j]));
   tracks.push(new THREE.VectorKeyframeTrack('Hips.position', outT, outP));
-  POLE_CLIP = new THREE.AnimationClip('Paaldans', L / fps, tracks);
-  buildPoleDancer();
+  const out = new THREE.AnimationClip('Paaldans', L / fps, tracks);
+  POLE_CLIPS.set(M, out);
+  return out;
 }
-let poleDancer = null;
-function buildPoleDancer() {
-  if (poleDancer) { dropDancer(poleDancer); poleDancer = null; }
-  if (!POLE_CLIP) return;
-  const M = poleModel();
-  if (!M) return;
-  poleDancer = makeModelDancer(M, false);
-  poleDancer.body.scale.setScalar(1);  // de grepen om de paal zijn op ware grootte berekend
-  poleDancer.root.position.set(POLE.x, 0.4, POLE.z);
-  poleDancer.cur = poleDancer.mixer.clipAction(POLE_CLIP); poleDancer.cur.play();
+const poleDancers = [];
+function buildPoleDancers() {
+  for (const d of poleDancers) dropDancer(d);
+  poleDancers.length = 0;
+  const ms = poleModels();
+  if (!poleBVH || !ms.length) return;
+  POLES.forEach((P, i) => {
+    const M = ms[i % ms.length], clip = poleClipFor(M);
+    const d = makeModelDancer(M, false);
+    // eigen kleuren (ook de heks), eigen startmoment, eigen tempo en soms gespiegeld: nooit twee gelijk
+    d.body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material.userData.src || o.material, true); });
+    d.body.scale.set(Math.random() < 0.5 ? -1 : 1, 1, 1);  // ware grootte: de grepen zijn zo berekend
+    d.root.position.set(P.x, P.h, P.z);
+    d.root.rotation.y = rnd(0, TAU);
+    d.cur = d.mixer.clipAction(clip); d.cur.play();
+    d.cur.time = (i / POLES.length + rnd(-0.08, 0.08) + 1) % 1 * clip.duration;
+    d.cur.timeScale = rnd(0.9, 1.1);
+    poleDancers.push(d);
+  });
 }
 // een glas met lichtgevend drankje in de rechterhand
 const glassGeo = new THREE.CylinderGeometry(0.035, 0.028, 0.12, 12), drinkGeo = new THREE.CylinderGeometry(0.03, 0.025, 0.07, 12);
@@ -843,6 +898,7 @@ function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders all
       }`);
   };
   m.customProgramCacheKey = () => 'recolor';
+  m.userData.src = src.userData.src || src;
   return m;
 }
 // elk gegenereerd figuur hooguit 3 keer in de zaal (anders zie je kopieën)
@@ -1178,18 +1234,24 @@ function buildClub() {
   scene.add(club1, club2);
   const loungeLight = new THREE.PointLight(0xff4d9a, 1.1, 9, 1.5);
   loungeLight.position.set(-11.5, 2.4, 0);
-  // podium met paal in de hoek rechtsvoor (de paaldanseres komt erop zodra haar beweging er is)
-  const pole = POLE;
-  add(scene, CYL, glossy, [pole.x, 0.2, pole.z], [1.35, 0.4, 1.35]).receiveShadow = true;
-  add(scene, new THREE.TorusGeometry(1.35, 0.03, 8, 48), additive(0xff3fa4, 0.9), [pole.x, 0.4, pole.z]).rotation.x = Math.PI / 2;
-  add(scene, CYL, shiny(0xdddddd, 0.9, 140), [pole.x, CEIL / 2 + 0.2, pole.z], [0.025, CEIL - 0.4, 0.025]);
-  const poleLight = new THREE.SpotLight(0xff5ab4, 2.2, 9, 0.45, 0.5, 1.2);
-  poleLight.position.set(pole.x, CEIL - 0.3, pole.z);
-  poleLight.target.position.set(pole.x, 0.4, pole.z);
-  scene.add(poleLight, poleLight.target);
-  const poleFill = new THREE.PointLight(0xffb0d8, 1.6, 6, 1.5);  // vast vullicht, zodat ze bij donkere cues zichtbaar blijft
-  poleFill.position.set(pole.x - 1.8, 2.4, pole.z - 1.8);
-  scene.add(poleFill);
+  // rookmachines: zwarte kastjes met een mondstuk richting de vloer
+  for (const m of FOGGERS) {
+    const g = new THREE.Group(); g.position.set(m.x, 0, m.z); g.rotation.y = Math.atan2(m.dir.x, m.dir.z);
+    add(g, BOX, std(0x111116, 0.5, 0.4), [0, 0.18, 0], [0.45, 0.36, 0.6]);
+    add(g, CYL, std(0x2a2a30, 0.4, 0.6), [0, 0.22, 0.34], [0.06, 0.12, 0.06]).rotation.x = Math.PI / 2;
+    add(g, BOX, glowMat(0xff2020), [0.15, 0.3, 0.301], [0.03, 0.03, 0.01]);  // rood lampje
+    scene.add(g);
+  }
+  // paalpodia: twee in de voorhoeken, twee naast de dj; elk met een lichtrand, chromen paal en eigen vullicht
+  POLES.forEach((P, i) => {
+    const col = [0xff3fa4, 0x3fd2ff, 0xb06bff, 0xff8a3c][i];
+    add(scene, CYL, glossy, [P.x, P.h / 2, P.z], [P.r, P.h, P.r]).receiveShadow = true;
+    add(scene, new THREE.TorusGeometry(P.r, 0.03, 8, 48), additive(col, 0.9), [P.x, P.h, P.z]).rotation.x = Math.PI / 2;
+    add(scene, CYL, shiny(0xdddddd, 0.9, 140), [P.x, (CEIL + P.h) / 2, P.z], [0.025, CEIL - P.h, 0.025]);
+    const fill = new THREE.PointLight(new THREE.Color(col).lerp(white, 0.5), 1.7, 6, 1.5);  // zodat ze bij donkere cues zichtbaar blijven
+    fill.position.set(P.x - Math.sign(P.x) * 1.6, 2.5, P.z - Math.sign(P.z) * 1.6);
+    scene.add(fill);
+  });
   scene.add(loungeLight);
   // ingang in de voorwand: verlichte deuropening met uitgangsbordje
   add(scene, BOX, wood, [0, 1.25, ROOM - 0.1], [2.4, 2.5, 0.16]);
@@ -1213,7 +1275,7 @@ function buildClub() {
   buildCrowd();
 }
 let CROWD_SPOTS = [];
-const POLE = { x: 9.6, z: 9.6 };  // paalpodium rechtsvoor
+const POLES = [{ x: 9.6, z: 9.6, r: 1.35, h: 0.4 }, { x: -10.1, z: 9.2, r: 1.25, h: 0.4 }, { x: 6.1, z: -9.3, r: 1.0, h: 0.55 }, { x: -6.1, z: -9.3, r: 1.0, h: 0.55 }];  // paalpodia
 // Rondlopers. Route langs een pad om de dansvloer heen (achterkant zit dicht: dj en speakers)
 const RING = [[-7.6, -6.6], [-7.6, 0], [-7.6, 7.6], [0, 7.6], [7.6, 7.6], [7.6, 0], [7.6, -6.6]];
 const POIS = [
@@ -1753,6 +1815,7 @@ function frame(nowMs) {
   glintMat.opacity = 0.3 + 0.7 * treble;
   updateFlecks(ball.rotation.y, (0.45 + 0.5 * treble + 0.3 * hit) * L.flecks * (strobing ? 0.3 : 1));
   updateSmoke(dt);
+  updateFog(dt, beat, energy);
 
   // dansers
   for (const d of dancers) {
@@ -1762,7 +1825,7 @@ function frame(nowMs) {
   pose(dj, beatPos, energy * 0.7, dt);
   for (const c of crowd) pose(c, beatPos, energy * 0.4, dt);
   updateWalkers(dt, beatPos, energy);
-  if (poleDancer) poleDancer.mixer.update(dt);
+  for (const d of poleDancers) d.mixer.update(dt);
   washMats.forEach((m, i) => m.color.copy(pal[i & 1]).multiplyScalar((0.25 + 0.45 * bands[i].v) * L.wash * dim));
   pillarLed.color.copy(pal[(beat >> 1) & 1]).multiplyScalar((0.2 + 0.8 * hit) * dim);
 
