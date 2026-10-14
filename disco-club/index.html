@@ -625,9 +625,9 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   g.scene.updateMatrixWorld(true);
   const box = new THREE.Box3(), v = new THREE.Vector3();
   g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); });
-  MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type, keep: KEEP_LOOK.test(f) });
+  MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type, file: f, keep: KEEP_LOOK.test(f) });
   if (g.animations[0] && !/clip0/.test(g.animations[0].name)) addClip(g.animations[0]);  // clip0 = alleen rig, geen dans
-  if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); buildWalkers();  // opnieuw verdelen zodra er een figuur bij komt
+  rebuildAll();  // opnieuw verdelen zodra er een figuur bij komt
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
@@ -704,7 +704,9 @@ function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders all
 }
 // elk gegenereerd figuur hooguit 3 keer in de zaal (anders zie je kopieën)
 const MAX_COPIES = 3;
-const freeModel = type => { const ms = (MODELS[type] || []).filter(M => (M.used || 0) < MAX_COPIES); return ms.length ? pick(ms) : null; };
+const leastUsed = list => { const ms = list.filter(M => (M.used || 0) < MAX_COPIES); if (!ms.length) return null; const lo = Math.min(...ms.map(M => M.used || 0)); return pick(ms.filter(M => (M.used || 0) === lo)); };
+const freeModel = type => leastUsed(MODELS[type] || []);
+const anyModel = () => leastUsed([].concat(...Object.values(MODELS)));
 const dropDancer = d => { scene.remove(d.root); if (d.M) d.M.used--; };
 function makeModelDancer(M, calm) {
   M.used = (M.used || 0) + 1;
@@ -1078,18 +1080,27 @@ function planRoute(w) {
   w.path = path; w.state = 'walk';
   setClip(w, w.walkClip, 0.4);
 }
+// alles opnieuw verdelen; volgorde = voorrang: lopers, dan publiek, dan de dansvloer
+function rebuildAll() {
+  for (const d of [...walkers, ...crowd, ...dancers]) dropDancer(d);
+  walkers.length = crowd.length = dancers.length = 0;
+  buildWalkers();
+  if (CROWD_SPOTS.length) buildCrowd();
+  buildCast();
+}
 function buildWalkers() {
   for (const w of walkers) dropDancer(w);
   walkers.length = 0;
-  if (!MODELS.pop.length) return;
-  for (let i = 0; i < 6; i++) {
-    const M = freeModel('pop');
+  for (let i = 0; i < 4; i++) {
+    // de eerste loper is Rick, en die is dronken
+    const rick = i === 0 && [].concat(...Object.values(MODELS)).find(M => /rick/.test(M.file) && (M.used || 0) < MAX_COPIES);
+    const M = rick || anyModel();
     if (!M) break;
     const w = makeModelDancer(M, true);
     w.root.traverse(o => { o.castShadow = false; });
     const [x, z] = RING[Math.floor(Math.random() * RING.length)];
     w.root.position.set(x + rnd(-0.5, 0.5), 0, z + rnd(-0.5, 0.5));
-    w.drunk = i === 0;
+    w.drunk = !!rick;
     w.state = 'wait'; w.wait = rnd(0, 6);
     if (Math.random() < 0.5) giveDrink(w);
     walkers.push(w);
@@ -1153,11 +1164,15 @@ function buildCrowd() {
   for (const [x, z, face] of CROWD_SPOTS) {
     // bij de bar, in de lounge en in de rij voor de wc staan mensen (geen dansers) met een drankje of telefoon
     const social = x > 10 || x < -10.5 || z > 13;
-    const d = makeDancer(MODELS.pop.length && (social || Math.random() < 0.6) ? 'pop' : pick(['robot', 'alien', 'wizard']), true);
+    // aan de bar staat in elk geval een alien met een drankje; verder het minst gebruikte figuur, anders een robot
+    const firstBar = x > 10 && x < 12.5 && !crowd.some(c => c.home.x > 10 && c.home.x < 12.5);
+    // gedeelde voorraad (max 3 per figuur): ongeveer de helft van bar en lounge, de rest gaat naar de dansvloer
+    const M = social && (firstBar || Math.random() < 0.5) ? (firstBar && freeModel('alien')) || anyModel() : null;
+    const d = M ? makeModelDancer(M, true) : makeDancer(pick(['robot', 'robot', 'alien']), true);
     d.home.set(x, 0, z);
     if (d.type === 'model' && social) {
       d.acts = z > 13 ? ['Phone_Conversation', 'Stand_and_Chat'] : x > 12.5 ? ['Stand_and_Chat'] : ['Stand_and_Drink', 'Stand_and_Drink', 'Stand_and_Chat'];
-      if (z <= 13 && Math.random() < 0.8) giveDrink(d);
+      if (z <= 13 && (firstBar || Math.random() < 0.8)) giveDrink(d);
     }
     d.face = face + rnd(-0.3, 0.3);
     d.move = pick([1, 8, 0, 8]);
