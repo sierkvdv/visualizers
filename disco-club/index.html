@@ -232,6 +232,7 @@ wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
 wallTex.repeat.set(5, 1);
 const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x77708a, map: wallTex, roughness: 0.85, side: THREE.BackSide }), [0, CEIL / 2, 0]);
 room.receiveShadow = true;
+room.position.y -= 0.03;  // bodem van de doos net onder de spiegelvloer (y=0), anders strepen ze door elkaar
 const ambient = new THREE.AmbientLight(0x554466, 1.1);
 scene.add(ambient);
 
