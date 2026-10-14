@@ -721,7 +721,7 @@ const BUILD = {
 };
 // Gegenereerde 3D-mensen (models/*.glb, met skelet en dansclip). Zolang ze laden of als ze ontbreken: de gebouwde poppetjes.
 // Alle Meshy-rigs hebben dezelfde botnamen, dus elke dansclip (ook de losse dans-*.glb) past op elk figuur.
-const MODEL_FILES = { pop: ['models/pop-1.glb', 'models/rick-1.glb', 'models/burlesque-1.glb', 'models/showgirl-1.glb'], wizard: ['models/wizard-1.glb', 'models/witch-1.glb'], alien: ['models/alien-1.glb'] };
+const MODEL_FILES = { pop: ['models/pop-1.glb', 'models/rick-1.glb', 'models/burlesque-1.glb', 'models/showgirl-1.glb', 'models/man-1.glb'], wizard: ['models/wizard-1.glb', 'models/witch-1.glb'], alien: ['models/alien-1.glb', 'models/alien-2.glb'] };
 const KEEP_LOOK = /rick/;  // vaste figuren: niet herkleuren
 const DANCE_FILES = ['models/dans-65.glb', 'models/dans-66.glb', 'models/dans-594.glb', 'models/dans-84.glb', 'models/dans-63.glb'];
 const MODELS = { pop: [], wizard: [], alien: [] }, CLIPS = [], gltf = new THREE.GLTFLoader();
@@ -766,7 +766,7 @@ new THREE.BVHLoader().load(POLE_BVH, r => { poleBVH = r; buildPoleDancers(); }, 
 // Elke bron-botrichting wordt eerst op de rustrichting van het doelbot gelegd (T-pose vs A-pose),
 // daarna krijgt het doelbot dezelfde draaiing in wereldruimte als het bronbot. Gebakken naar een gewone clip.
 // paaldanseressen: de heks en de vrouw met de krullen, elk op haar eigen skelet uitgerekend
-const poleModels = () => ['burlesque', 'showgirl', 'witch', 'pop-1'].map(n => [].concat(...Object.values(MODELS)).find(M => M.file.includes(n))).filter(Boolean);
+const poleModels = () => ['burlesque', 'showgirl'].map(n => allModels().find(M => M.file.includes(n))).filter(Boolean);
 function poleClipFor(M) {
   if (POLE_CLIPS.has(M)) return POLE_CLIPS.get(M);
   const sb = poleBVH.skeleton.bones, sRoot = new THREE.Group();
@@ -907,9 +907,9 @@ function buildPoleDancers() {
 // een glas met lichtgevend drankje in de rechterhand
 const glassGeo = new THREE.CylinderGeometry(0.035, 0.028, 0.12, 12), drinkGeo = new THREE.CylinderGeometry(0.03, 0.025, 0.07, 12);
 const glassMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, shininess: 120 });
-const bottleMat = [new THREE.MeshPhongMaterial({ color: 0x2f6b2a, shininess: 90, transparent: true, opacity: 0.85 }), new THREE.MeshPhongMaterial({ color: 0x6b3d12, shininess: 90, transparent: true, opacity: 0.85 })];
+const bottleMat = [new THREE.MeshPhongMaterial({ color: 0x3f9b38, emissive: 0x14400f, shininess: 120, transparent: true, opacity: 0.9 }), new THREE.MeshPhongMaterial({ color: 0x9b5a1c, emissive: 0x40200a, shininess: 120, transparent: true, opacity: 0.9 })];  // licht gloeiend, zichtbaar in het donker
 const cigGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.085, 6), tipGeo = new THREE.SphereGeometry(0.008, 6, 4);
-const smokers = [];
+const smokers = [], held = [];
 function giveDrink(d, kind) {
   let hand = null;
   d.body.traverse(o => { if (!hand && o.isBone && /RightHand$/.test(o.name)) hand = o; });
@@ -917,23 +917,26 @@ function giveDrink(d, kind) {
   d.body.updateMatrixWorld(true);
   const g = new THREE.Group(), ws = new THREE.Vector3();
   hand.getWorldScale(ws);
+  const k = Math.abs(ws.x);  // gespiegelde figuren hebben een negatieve schaal: anders staat het glas op z'n kop
   kind = kind || pick(['glas', 'glas', 'bier']);
   if (kind === 'glas') {  // cocktail met een lichtgevend drankje: valt op in het donker
     g.add(new THREE.Mesh(glassGeo, glassMat), new THREE.Mesh(drinkGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL(pick([0.95, 0.08, 0.55, 0.3, 0.8, 0.15]), 1, 0.6) })));
     g.children[1].position.y = -0.02;
-    g.scale.setScalar(1.5 / ws.x);
+    g.scale.setScalar(1.7);
   } else if (kind === 'bier') {
     const b = new THREE.Mesh(CYL, pick(bottleMat)); b.scale.set(0.03, 0.16, 0.03); g.add(b);
     const neck = new THREE.Mesh(CYL, b.material); neck.scale.set(0.013, 0.07, 0.013); neck.position.y = 0.11; g.add(neck);
-    g.scale.setScalar(1.3 / ws.x);
+    g.scale.setScalar(1.4);
   } else {  // sigaret: wit staafje met gloeiend puntje; rook komt van het puntje
     const c = new THREE.Mesh(cigGeo, new THREE.MeshBasicMaterial({ color: 0xeeeeee })); c.rotation.z = Math.PI / 2; g.add(c);
     const tip = new THREE.Mesh(tipGeo, new THREE.MeshBasicMaterial({ color: 0xff5a1a })); tip.position.x = 0.045; g.add(tip);
-    g.scale.setScalar(1.6 / ws.x);
+    g.scale.setScalar(1.6 / k);
     smokers.push({ d, tip, next: 0 });
   }
-  g.position.set(0, 0.09 / ws.y, 0.04 / ws.z);
-  hand.add(g);
+  // het handbot wijst naar de vingers (omlaag bij een hangende arm): glas omdraaien, in de handpalm achter de vingers
+  // sigaret zit vast in de hand; glas en fles volgen alleen de plek van de hand en blijven altijd rechtop
+  if (kind === 'sigaret') { g.position.set(0, 0.1 / k, 0); hand.add(g); }
+  else { scene.add(g); held.push({ d, g, hand, off: new THREE.Vector3(0, 0.07 / k, -0.055 / k) }); }
 }
 // rookpluimpjes van de sigaretten: kleine wolkjes die opstijgen en uitwaaieren
 const wisps = [];
@@ -942,7 +945,17 @@ for (let i = 0; i < 70; i++) {
   sp.visible = false; scene.add(sp); wisps.push({ sp, age: 0, v: new THREE.Vector3() });
 }
 const tipW = new THREE.Vector3();
+function updateHeld() {
+  for (let i = held.length - 1; i >= 0; i--) {
+    const h = held[i];
+    if (!h.d.root.parent) { scene.remove(h.g); held.splice(i, 1); continue; }
+    h.g.visible = h.d.root.visible;
+    h.g.position.copy(h.off); h.hand.localToWorld(h.g.position);
+    h.g.rotation.set(0, h.d.root.rotation.y, 0);
+  }
+}
 function updateCigs(dt, now) {
+  updateHeld();
   for (let i = smokers.length - 1; i >= 0; i--) {
     const s = smokers[i];
     if (!s.d.root.parent) { smokers.splice(i, 1); continue; }
@@ -1007,10 +1020,12 @@ function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders all
 }
 // elk gegenereerd figuur hooguit 3 keer in de zaal (anders zie je kopieën)
 const MAX_COPIES = 4;  // herkleurd en gespiegeld, dus geen herkenbare kopieën
-const maxOf = M => M.keep ? 2 : MAX_COPIES;
+const SEXY = /burlesque|showgirl/;
+const maxOf = M => M.keep ? 2 : SEXY.test(M.file) ? 6 : MAX_COPIES;  // de twee danseressen elk 6x, steeds anders gekleurd
 const leastUsed = list => { const ms = list.filter(M => (M.used || 0) < maxOf(M)); if (!ms.length) return null; const lo = Math.min(...ms.map(M => M.used || 0)); return pick(ms.filter(M => (M.used || 0) === lo)); };
 const freeModel = type => leastUsed(MODELS[type] || []);
-const anyModel = () => leastUsed([].concat(...Object.values(MODELS)));
+const allModels = () => [].concat(...Object.values(MODELS));
+const anyModel = () => (Math.random() < 0.45 && leastUsed(allModels().filter(M => SEXY.test(M.file)))) || leastUsed(allModels());
 const dropDancer = d => { scene.remove(d.root); if (d.M) d.M.used--; };
 function makeModelDancer(M, calm) {
   M.used = (M.used || 0) + 1;
@@ -1513,13 +1528,14 @@ function buildWalkers() {
   for (let i = 0; i < 4; i++) {
     // de eerste loper is Rick, en die is dronken
     const rick = i === 0 && [].concat(...Object.values(MODELS)).find(M => /rick/.test(M.file) && (M.used || 0) < maxOf(M));
-    const M = rick || anyModel();
+    const sexyDrunk = i === 1 && leastUsed(allModels().filter(M => SEXY.test(M.file)));
+    const M = rick || sexyDrunk || anyModel();
     if (!M) break;
     const w = makeModelDancer(M, true);
     w.root.traverse(o => { o.castShadow = false; });
     const [x, z] = RING[Math.floor(Math.random() * RING.length)];
     w.root.position.set(x + rnd(-0.5, 0.5), 0, z + rnd(-0.5, 0.5));
-    w.drunk = !!rick;
+    w.drunk = !!rick || !!sexyDrunk;
     w.state = 'wait'; w.wait = rnd(0, 6);
     if (Math.random() < 0.75) giveDrink(w, w.drunk ? 'bier' : null);
     walkers.push(w);
