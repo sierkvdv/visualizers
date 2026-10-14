@@ -88,6 +88,7 @@
 <script src="lib/UnrealBloomPass.js"></script>
 <script src="lib/GLTFLoader.js"></script>
 <script src="lib/SkeletonUtils.js"></script>
+<script src="lib/BVHLoader.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const status = $('status');
@@ -628,6 +629,7 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type, file: f, keep: KEEP_LOOK.test(f) });
   if (g.animations[0] && !/clip0/.test(g.animations[0].name)) addClip(g.animations[0]);  // clip0 = alleen rig, geen dans
   rebuildAll();  // opnieuw verdelen zodra er een figuur bij komt
+  tryBakePole(); if (POLE_CLIP) buildPoleDancer();
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
@@ -644,6 +646,82 @@ for (const f of ACT_FILES) gltf.load(f, g => g.animations.forEach(c => {
   }
   ACTS[name] = c;
 }), undefined, () => {});
+// Paaldans: beweging uit video (DeepMotion, BVH) omgezet naar het Meshy-skelet. Lokaal bestand, niet in de publieke repo.
+const POLE_BVH = 'models/paal-dans.bvh';
+const BVH_MAP = { hips_JNT: 'Hips', spine_JNT: 'Spine02', spine1_JNT: 'Spine01', spine2_JNT: 'Spine', neck_JNT: 'neck', head_JNT: 'Head',
+  l_shoulder_JNT: 'LeftShoulder', l_arm_JNT: 'LeftArm', l_forearm_JNT: 'LeftForeArm', l_hand_JNT: 'LeftHand',
+  r_shoulder_JNT: 'RightShoulder', r_arm_JNT: 'RightArm', r_forearm_JNT: 'RightForeArm', r_hand_JNT: 'RightHand',
+  l_upleg_JNT: 'LeftUpLeg', l_leg_JNT: 'LeftLeg', l_foot_JNT: 'LeftFoot', l_toebase_JNT: 'LeftToeBase',
+  r_upleg_JNT: 'RightUpLeg', r_leg_JNT: 'RightLeg', r_foot_JNT: 'RightFoot', r_toebase_JNT: 'RightToeBase' };
+let poleBVH = null, POLE_CLIP = null;
+new THREE.BVHLoader().load(POLE_BVH, r => { poleBVH = r; tryBakePole(); }, undefined, () => {});
+// Elke bron-botrichting wordt eerst op de rustrichting van het doelbot gelegd (T-pose vs A-pose),
+// daarna krijgt het doelbot dezelfde draaiing in wereldruimte als het bronbot. Gebakken naar een gewone clip.
+function tryBakePole() {
+  const M = MODELS.pop[0] || MODELS.wizard[0];
+  if (POLE_CLIP || !poleBVH || !M) return;
+  const sb = poleBVH.skeleton.bones, sRoot = new THREE.Group();
+  sRoot.add(sb[0]);
+  const helper = new THREE.SkeletonHelper(sb[0]); helper.skeleton = poleBVH.skeleton;
+  const smix = new THREE.AnimationMixer(helper), sact = smix.clipAction(poleBVH.clip); sact.play();
+  const tgt = THREE.SkeletonUtils.clone(M.scene), tb = {};
+  tgt.traverse(o => { if (o.isBone) tb[o.name] = o; });
+  const pairs = sb.filter(b => BVH_MAP[b.name] && tb[BVH_MAP[b.name]]).map(b => ({ s: b, t: tb[BVH_MAP[b.name]] }));
+  const child = (bone, map) => bone.children.find(c => map(c));
+  const q = () => new THREE.Quaternion(), v = () => new THREE.Vector3();
+  // rust (frame 0 vóór de clip = rustpose van beide skeletten)
+  smix.setTime(0); sact.weight = 0; smix.update(0);
+  sRoot.updateMatrixWorld(true); tgt.updateMatrixWorld(true);
+  for (const p of pairs) {
+    p.sRest = p.s.getWorldQuaternion(q()); p.tRest = p.t.getWorldQuaternion(q());
+    const sc = child(p.s, c => BVH_MAP[c.name]), tc = sc && tb[BVH_MAP[sc.name]];
+    p.align = q();
+    if (sc && tc) {
+      const ds = sc.getWorldPosition(v()).sub(p.s.getWorldPosition(v())).normalize();
+      const dt = tc.getWorldPosition(v()).sub(p.t.getWorldPosition(v())).normalize();
+      p.align.setFromUnitVectors(dt, ds);
+    }
+  }
+  const legLen = (bones, names) => { let L = 0; for (let i = 1; i < names.length; i++) L += bones[names[i]].getWorldPosition(v()).distanceTo(bones[names[i - 1]].getWorldPosition(v())); return L; };
+  const sByName = {}; sb.forEach(b => sByName[b.name] = b);
+  const k = legLen(tb, ['LeftUpLeg', 'LeftLeg', 'LeftFoot']) / legLen(sByName, ['l_upleg_JNT', 'l_leg_JNT', 'l_foot_JNT']);
+  sact.weight = 1;
+  const clip = poleBVH.clip, fps = 30, n = Math.floor(clip.duration * fps);
+  const times = new Float32Array(n), quats = pairs.map(() => new Float32Array(n * 4)), hipW = [], footMin = [];
+  const tParentW = q(), want = q(), tmpQ = q();
+  for (let i = 0; i < n; i++) {
+    times[i] = i / fps;
+    smix.setTime(times[i]); sRoot.updateMatrixWorld(true);
+    hipW.push(sb[0].getWorldPosition(v()));
+    footMin.push(Math.min(sByName.l_foot_JNT.getWorldPosition(v()).y, sByName.r_foot_JNT.getWorldPosition(v()).y));
+    pairs.forEach((p, j) => {  // ouders eerst (volgorde van het skelet)
+      const sW = p.s.getWorldQuaternion(q());
+      want.copy(sW).multiply(tmpQ.copy(p.sRest).invert()).multiply(p.align).multiply(p.tRest);
+      p.t.parent.getWorldQuaternion(tParentW);
+      p.t.quaternion.copy(tParentW.invert().multiply(want));
+      p.t.updateMatrixWorld(true);
+      p.t.quaternion.toArray(quats[j], i * 4);
+    });
+  }
+  // heup: rond het midden van haar baan (= de paal), hoogte boven de grond, geschaald naar het doelfiguur
+  const cx = hipW.reduce((a, p) => a + p.x, 0) / n, cz = hipW.reduce((a, p) => a + p.z, 0) / n, ground = Math.min(...footMin);
+  const arm = tb.Hips.parent, pos = new Float32Array(n * 3);
+  hipW.forEach((p, i) => { const w = new THREE.Vector3((p.x - cx) * k, (p.y - ground) * k, (p.z - cz) * k); arm.worldToLocal(w); w.toArray(pos, i * 3); });
+  const tracks = pairs.map((p, j) => new THREE.QuaternionKeyframeTrack(p.t.name + '.quaternion', times, quats[j]));
+  tracks.push(new THREE.VectorKeyframeTrack('Hips.position', times, pos));
+  POLE_CLIP = new THREE.AnimationClip('Paaldans', clip.duration, tracks);
+  buildPoleDancer();
+}
+let poleDancer = null;
+function buildPoleDancer() {
+  if (poleDancer) { dropDancer(poleDancer); poleDancer = null; }
+  if (!POLE_CLIP) return;
+  const M = MODELS.wizard.find(M => /witch/.test(M.file)) || MODELS.pop[0];
+  if (!M) return;
+  poleDancer = makeModelDancer(M, false);
+  poleDancer.root.position.set(POLE.x, 0.4, POLE.z);
+  poleDancer.cur = poleDancer.mixer.clipAction(POLE_CLIP); poleDancer.cur.play();
+}
 // een glas met lichtgevend drankje in de rechterhand
 const glassGeo = new THREE.CylinderGeometry(0.035, 0.028, 0.12, 12), drinkGeo = new THREE.CylinderGeometry(0.03, 0.025, 0.07, 12);
 const glassMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, shininess: 120 });
@@ -1035,6 +1113,18 @@ function buildClub() {
   scene.add(club1, club2);
   const loungeLight = new THREE.PointLight(0xff4d9a, 1.1, 9, 1.5);
   loungeLight.position.set(-11.5, 2.4, 0);
+  // podium met paal in de hoek rechtsvoor (de paaldanseres komt erop zodra haar beweging er is)
+  const pole = POLE;
+  add(scene, CYL, glossy, [pole.x, 0.2, pole.z], [1.35, 0.4, 1.35]).receiveShadow = true;
+  add(scene, new THREE.TorusGeometry(1.35, 0.03, 8, 48), additive(0xff3fa4, 0.9), [pole.x, 0.4, pole.z]).rotation.x = Math.PI / 2;
+  add(scene, CYL, shiny(0xdddddd, 0.9, 140), [pole.x, CEIL / 2 + 0.2, pole.z], [0.025, CEIL - 0.4, 0.025]);
+  const poleLight = new THREE.SpotLight(0xff5ab4, 2.2, 9, 0.45, 0.5, 1.2);
+  poleLight.position.set(pole.x, CEIL - 0.3, pole.z);
+  poleLight.target.position.set(pole.x, 0.4, pole.z);
+  scene.add(poleLight, poleLight.target);
+  const poleFill = new THREE.PointLight(0xffb0d8, 1.6, 6, 1.5);  // vast vullicht, zodat ze bij donkere cues zichtbaar blijft
+  poleFill.position.set(pole.x - 1.8, 2.4, pole.z - 1.8);
+  scene.add(poleFill);
   scene.add(loungeLight);
   // ingang in de voorwand: verlichte deuropening met uitgangsbordje
   add(scene, BOX, wood, [0, 1.25, ROOM - 0.1], [2.4, 2.5, 0.16]);
@@ -1058,6 +1148,7 @@ function buildClub() {
   buildCrowd();
 }
 let CROWD_SPOTS = [];
+const POLE = { x: 9.6, z: 9.6 };  // paalpodium rechtsvoor
 // Rondlopers. Route langs een pad om de dansvloer heen (achterkant zit dicht: dj en speakers)
 const RING = [[-7.6, -6.6], [-7.6, 0], [-7.6, 7.6], [0, 7.6], [7.6, 7.6], [7.6, 0], [7.6, -6.6]];
 const POIS = [
@@ -1606,6 +1697,7 @@ function frame(nowMs) {
   pose(dj, beatPos, energy * 0.7, dt);
   for (const c of crowd) pose(c, beatPos, energy * 0.4, dt);
   updateWalkers(dt, beatPos, energy);
+  if (poleDancer) poleDancer.mixer.update(dt);
   washMats.forEach((m, i) => m.color.copy(pal[i & 1]).multiplyScalar((0.25 + 0.45 * bands[i].v) * L.wash * dim));
   pillarLed.color.copy(pal[(beat >> 1) & 1]).multiplyScalar((0.2 + 0.8 * hit) * dim);
 
