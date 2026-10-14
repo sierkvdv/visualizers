@@ -50,6 +50,10 @@
     <option value="omdanser">Camera: rondje om een danser</option>
     <option value="voorlangs">Camera: voor de vloer langs</option>
     <option value="dj">Camera: vanaf de dj</option>
+    <option value="ster">Camera: figuren van dichtbij</option>
+    <option value="volg">Camera: achter een loper aan</option>
+    <option value="bar">Camera: langs de bar</option>
+    <option value="paal">Camera: paaldanseres</option>
   </select>
   <select id="strobe">
     <option value="uit">Stroboscoop: uit</option>
@@ -1686,7 +1690,10 @@ function along(curve, u, lookUp) {  // camera op het pad; rustig vertrekken en a
   curve.getTangent(k, camLook).multiplyScalar(9).add(camPos);
   camLook.y += lookUp;
 }
-const anyDancer = () => pick(dancers) || dj;
+const anyDancer = () => { const m = dancers.filter(d => d.type === 'model'); return (m.length && Math.random() < 0.7 ? pick(m) : pick(dancers)) || dj; };
+// de 3D-figuren in de hele zaal (vloer, bar, lounge, lopers, podia): voor de shots die onze figuren in beeld brengen
+const stars = () => [...dancers, ...crowd, ...walkers, ...poleDancers].filter(d => d.type === 'model' && d.root.visible);
+const starPos = (d, out) => out.set(d.root.position.x, d.root.position.y, d.root.position.z);
 const STILL = [[[-9, 3, 9], [0, 1.3, 0]], [[9, 2.2, -3], [0, 1.2, 1]], [[0, 1.5, 9.8], [0, 1.6, 0]], [[7, 5.8, 7], [0, 0.5, 0]], [[-9.5, 0.8, 0], [0, 1.6, 0]], [[6, 1.1, 8], [-1, 1.4, -2]],
                [[11.2, 1.55, 2.5], [0, 1.3, -1]], [[-11.4, 1.3, -2], [0, 1.4, 0]], [[0, 1.7, 12.6], [0, 1.5, 0]], [[-9, 1.6, 12], [2, 1.4, 0]]];  // vanaf de bar, de lounge en de ingang
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), wantLook = new THREE.Vector3();
@@ -1761,6 +1768,23 @@ const SHOTS = {
   // de twee oude standpunten: rondje om één danser, en heen en weer voor de vloer langs
   omdanser:   { w: 2.5, beats: 8, make: () => ({ d: anyDancer(), a: rnd(0, TAU) }), at(s, u, t) { const h = s.d.home, a = s.a + t * 0.3; camPos.set(h.x + 2.6 * Math.cos(a), 1.5, h.z + 2.6 * Math.sin(a)); camLook.set(h.x, 1.1, h.z); camFov = 55; } },
   voorlangs:  { w: 2.5, beats: 16, make: () => ({ a: rnd(0, TAU) }), at(s, u, t) { camPos.set(8.5 * Math.sin(s.a + t * 0.2), 2.4, 9.5); camLook.set(0, 1.6, -1); camFov = 55; } },
+  // onze figuren van dichtbij: langzaam om een 3D-figuur heen, waar die ook staat
+  ster:       { w: 4, beats: 8, make: () => ({ d: pick(stars()) || anyDancer(), a: rnd(0, TAU), dir: pick([-1, 1]), r: rnd(1.7, 2.4) }),
+    at(s, u, t) { const p = starPos(s.d, tmpV2), a = s.a + s.dir * t * 0.22; camPos.set(p.x + s.r * Math.cos(a), p.y + 1.45, p.z + s.r * Math.sin(a)); camLook.set(p.x, p.y + 1.25, p.z); camFov = 42; } },
+  // achter een loper aan (het liefst de dronken Rick)
+  volg:       { w: 2.5, beats: 16, make: () => ({ d: walkers.find(w => w.drunk && w.root.visible && Math.random() < 0.6) || pick(walkers.filter(w => w.root.visible)) || anyDancer(), look: null }),
+    at(s, u, t) {
+      const p = starPos(s.d, tmpV2), r = s.d.root.rotation.y;
+      wantLook.set(p.x - Math.sin(r) * 2.6 + Math.cos(r) * 0.8, 1.75, p.z - Math.cos(r) * 2.6 - Math.sin(r) * 0.8);
+      if (!s.look) s.look = wantLook.clone(); else s.look.lerp(wantLook, 0.05);  // zacht achterna
+      camPos.copy(s.look); camLook.set(p.x, 1.2, p.z); camFov = 50;
+    } },
+  // langs de bar rijden, met de drinkers in beeld
+  bar:        { w: 1.5, beats: 16, make: () => ({ dir: pick([-1, 1]) }),
+    at(s, u) { const z = (u * 2 - 1) * 4 * s.dir; camPos.set(9.2, 1.55, z); camLook.set(11.2, 1.3, z + 1.2 * s.dir); camFov = 48; } },
+  // om een paaldanseres heen
+  paal:       { w: 2.5, beats: 8, make: () => ({ P: pick(POLES), a: rnd(0, TAU), dir: pick([-1, 1]) }),
+    at(s, u, t) { const P = s.P, a = s.a + s.dir * t * 0.25; camPos.set(P.x + 2.7 * Math.cos(a), P.h + 1.3, P.z + 2.7 * Math.sin(a)); camLook.set(P.x, P.h + 1.2, P.z); camFov = 46; } },
   dj:         { w: 1, beats: 8, make: () => ({ side: pick([-1, 1]) }), at(s, u, t) { camPos.set(s.side * 1.1, 2.35, -9.9); camLook.set(-s.side * 1.5 + Math.sin(t * 0.3), 0.9, 0); camFov = 60 - 8 * ease(u); } },
 };
 const SHOT_KINDS = Object.keys(SHOTS);
