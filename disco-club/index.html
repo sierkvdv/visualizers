@@ -217,21 +217,42 @@ function add(parent, geo, mat, pos, scl) {
 // Zaal: donkere doos om de dansvloer
 const ROOM = 14, CEIL = 7;
 function canvasTexture(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); return new THREE.CanvasTexture(c); }
-// wand: gecapitonneerde panelen met een plint, zodat de muren geen zwart vlak zijn
-const wallTex = canvasTexture(256, 256, (g, w, h) => {
-  g.fillStyle = '#2b2634'; g.fillRect(0, 0, w, h);
-  for (let x = 0; x < 4; x++) {
-    const gr = g.createLinearGradient(x * 64, 0, x * 64 + 64, 0);
-    gr.addColorStop(0, '#15121b'); gr.addColorStop(0.12, '#3a3346'); gr.addColorStop(0.5, '#2b2634'); gr.addColorStop(0.88, '#221d2a'); gr.addColorStop(1, '#100e15');
-    g.fillStyle = gr; g.fillRect(x * 64, 0, 64, h * 0.8);
-    for (let y = 0; y < 4; y++) { g.fillStyle = '#0d0b11'; g.beginPath(); g.arc(x * 64 + 32, 26 + y * 50, 3, 0, 7); g.fill(); }
+// wand: ruw beton met naden, vochtplekken, roestvegen en graffiti (underground)
+const wallTex = canvasTexture(1024, 512, (g, w, h) => {
+  g.fillStyle = '#3a3836'; g.fillRect(0, 0, w, h);
+  const img = g.getImageData(0, 0, w, h), d = img.data;  // korrel
+  for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 34; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+  g.putImageData(img, 0, 0);
+  for (let i = 0; i < 40; i++) {  // vlekken en vocht
+    const x = rnd(0, w), y = rnd(0, h), r = rnd(20, 140), gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, pick(['rgba(10,10,12,0.35)', 'rgba(70,45,25,0.22)', 'rgba(255,255,255,0.05)'])); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
   }
-  g.fillStyle = '#0c0a10'; g.fillRect(0, h * 0.8, w, h * 0.2);
-  g.fillStyle = '#4a4058'; g.fillRect(0, h * 0.8, w, 3);
+  for (let i = 0; i < 26; i++) {  // druipsporen naar beneden
+    const x = rnd(0, w), y = rnd(0, h * 0.5), gr = g.createLinearGradient(0, y, 0, y + rnd(60, 220));
+    gr.addColorStop(0, 'rgba(15,12,10,0.35)'); gr.addColorStop(1, 'rgba(15,12,10,0)');
+    g.fillStyle = gr; g.fillRect(x, y, rnd(2, 7), 240);
+  }
+  g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 2;  // bekistingsnaden
+  for (let x = 0; x <= w; x += 256) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+  for (const y of [170, 340]) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+  for (let x = 32; x < w; x += 128) for (const y of [85, 255, 425]) { g.fillStyle = 'rgba(0,0,0,0.5)'; g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); }
+  // graffiti: snelle tags in spuitbuskleuren
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  for (let t = 0; t < 7; t++) {
+    const cx = rnd(60, w - 160), cy = rnd(150, h - 60), col = pick(['#ff2d95', '#00e5ff', '#e8ff3c', '#ffffff', '#ff6a00', '#9b6bff']);
+    g.strokeStyle = col; g.globalAlpha = rnd(0.35, 0.7); g.lineWidth = rnd(3, 7); g.shadowColor = col; g.shadowBlur = 6;
+    g.beginPath(); let x = cx, y = cy; g.moveTo(x, y);
+    for (let k = 0; k < 14; k++) { const nx = x + rnd(8, 22), ny = cy + rnd(-34, 18); g.quadraticCurveTo(x + rnd(-14, 14), y + rnd(-40, 40), nx, ny); x = nx; y = ny; }
+    g.stroke();
+    if (Math.random() < 0.5) { g.lineWidth = 2; g.beginPath(); g.moveTo(cx - 6, cy + 14); g.lineTo(x + 10, cy + 10); g.stroke(); }
+  }
+  g.globalAlpha = 1; g.shadowBlur = 0;
+  g.fillStyle = 'rgba(8,8,10,0.85)'; g.fillRect(0, h * 0.86, w, h * 0.14);  // vuile plint
 });
 wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
-wallTex.repeat.set(5, 1);
-const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x77708a, map: wallTex, roughness: 0.85, side: THREE.BackSide }), [0, CEIL / 2, 0]);
+wallTex.repeat.set(3, 1);
+const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x8a8580, map: wallTex, roughness: 0.95, side: THREE.BackSide }), [0, CEIL / 2, 0]);
 room.receiveShadow = true;
 room.position.y -= 0.03;  // bodem van de doos net onder de spiegelvloer (y=0), anders strepen ze door elkaar
 const ambient = new THREE.AmbientLight(0x554466, 1.1);
@@ -510,8 +531,8 @@ for (let i = 0; i < 90; i++) {
   fogPool.push({ sp, v: new THREE.Vector3(), age: 0, life: 0, s0: 0, lit: new THREE.Color() });
 }
 let fogQueue = [], lastFogBeat = -99;
-function fireFog(m, dur = 1.6) {  // een stoot van ~1,6 s: elke ~0,05 s een wolkje
-  for (let t = 0; t < dur; t += 0.05) fogQueue.push({ m, at: performance.now() / 1000 + t });
+function fireFog(m, dur = 1.6) {  // een stoot van ~1,6 s: elke ~0,12 s een wolkje
+  for (let t = 0; t < dur; t += 0.12) fogQueue.push({ m, at: performance.now() / 1000 + t });
 }
 function updateFog(dt, beat, energy) {
   if (beat !== lastFogBeat && beat % 32 === 16) { const k = 1 + Math.floor(Math.random() * 2); for (let i = 0; i < k; i++) fireFog(pick(FOGGERS)); }
@@ -542,22 +563,48 @@ function updateFog(dt, beat, energy) {
     for (const s of spots) { const d = distToBeam(p, s.beam.g.position, s.beam.target); addColor(f.lit, s.light.color, s.beam.mat.uniforms.strength.value * 0.6 * Math.exp(-d * d * 0.35)); }
     for (const h of heads) { const d = distToBeam(p, h.beam.g.position, h.beam.target); addColor(f.lit, h.beam.mat.uniforms.color.value, h.beam.mat.uniforms.strength.value * 0.45 * Math.exp(-d * d * 1.4)); }
     const fade = Math.min(1, f.age * 3) * (1 - f.age / f.life);
-    f.sp.material.color.copy(f.lit).multiplyScalar(fade * 0.9 * (0.4 + S.smoke));
+    const peak = Math.max(f.lit.r, f.lit.g, f.lit.b);
+    if (peak > 0.3) f.lit.multiplyScalar(0.3 / peak);  // nooit een witte muur onder een felle spot
+    f.sp.material.color.copy(f.lit).multiplyScalar(fade * 0.3 * (0.4 + S.smoke));
   }
 }
 
 // Achterwand: equalizer, speakers, dj-tafel en ledbalken op de zijwanden
 const BARS = 28, bars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 1, 0.2), new THREE.MeshBasicMaterial(), BARS);
 scene.add(bars);
-const speakers = [], darkBox = new THREE.MeshStandardMaterial({ color: 0x1b1b22, roughness: 0.7 });
-for (const sx of [-1, 1]) {
-  add(scene, BOX, darkBox, [sx * 8.6, 1.7, -8.6], [1.8, 3.4, 1.2]).castShadow = true;
-  for (const y of [0.85, 2.45]) {
-    const cone = add(scene, new THREE.CylinderGeometry(0.62, 0.3, 0.3, 24), new THREE.MeshStandardMaterial({ color: 0x33333d, roughness: 0.4, metalness: 0.4 }), [sx * 8.6, y, -7.95]);
-    cone.rotation.x = Math.PI / 2;
-    speakers.push(cone);
+const speakers = [], darkBox = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.85 });
+// Stacks in de stijl van Function One: twee subkasten met elk twee grote conussen en een poortspleet, daarop twee tops
+// met een brede trechtervormige hoorn (conus in de keel) en een kleine hoog-hoorn erboven. Matzwart, getrapt.
+const coneMat = new THREE.MeshStandardMaterial({ color: 0x1f1f23, roughness: 0.6, metalness: 0.2 }), hornMat = new THREE.MeshStandardMaterial({ color: 0x0d0d0f, roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide });
+const dustCap = new THREE.MeshStandardMaterial({ color: 0x2e2e33, roughness: 0.3, metalness: 0.6 });
+function speakerCone(parent, r, pos) {
+  const c = add(parent, new THREE.CylinderGeometry(r, r * 0.45, r * 0.5, 28, 1, true), coneMat, pos);
+  c.rotation.x = Math.PI / 2;
+  add(c, SPH, dustCap, [0, -r * 0.2, 0], [r * 0.32, r * 0.12, r * 0.32]);
+  speakers.push(c);
+  return c;
+}
+function f1Stack(x, z, ry) {
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; scene.add(g);
+  for (let i = 0; i < 2; i++) {  // subs
+    const y = 0.62 + i * 1.24;
+    add(g, BOX, darkBox, [0, y, 0], [1.7, 1.2, 1.1]).castShadow = true;
+    for (const sx of [-0.4, 0.4]) speakerCone(g, 0.34, [sx, y + 0.08, 0.53]);
+    add(g, BOX, hornMat, [0, y - 0.45, 0.555], [1.4, 0.08, 0.02]);  // poortspleet
+  }
+  for (let i = 0; i < 2; i++) {  // tops
+    const y = 2.48 + 0.42 + i * 0.86, top = new THREE.Group(); top.position.set(0, y, -0.05); g.add(top);
+    top.rotation.x = i === 1 ? 0.12 : 0.04;  // bovenste licht omlaag gericht
+    add(top, BOX, darkBox, [0, 0, 0], [1.5, 0.82, 1.0]).castShadow = true;
+    const mouth = add(top, lathe([[0.16, 0], [0.24, 0.12], [0.36, 0.22], [0.52, 0.3], [0.62, 0.33]], 32), hornMat, [0, -0.05, 0.38], [1, 1, 0.55]);
+    mouth.rotation.x = Math.PI / 2;  // trechter naar voren open
+    speakerCone(top, 0.15, [0, -0.05, 0.42]);
+    add(top, BOX, hornMat, [0, 0.3, 0.5], [0.5, 0.1, 0.04]);  // hoog-hoorn
+    add(top, BOX, dustCap, [0, 0.3, 0.505], [0.08, 0.03, 0.01]);
   }
 }
+// extra subs onder de dj-tafel
+for (const sx of [-1, 1]) { add(scene, BOX, darkBox, [sx * 1.3, 0.6, -6.95], [1.2, 1.2, 0.1]); }
 add(scene, BOX, new THREE.MeshStandardMaterial({ color: 0x22222c, roughness: 0.5, metalness: 0.3 }), [0, 0.55, -7.6], [4, 1.1, 1.2]).castShadow = true;
 for (const x of [-0.9, 0.9]) add(scene, CYL, new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.3, metalness: 0.5 }), [x, 1.12, -7.6], [0.42, 0.03, 0.42]);
 const wallBars = [];
@@ -1179,7 +1226,16 @@ function neonSign(text, color, w, h) {
   return new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
 }
 function buildClub() {
-  const velvet = std(0x5a1226, 0.9), wood = std(0x2a1d16, 0.6), glossy = shiny(0x0c0c12, 0.5, 120);
+  const velvet = std(0x1a1716, 0.75), wood = std(0x2a2522, 0.85), glossy = shiny(0x0c0c12, 0.5, 120);  // versleten zwart leer, oud hout
+  // plafond: kale leidingen, een grote ventilatiekoker en kabelgoten (underground)
+  const pipe = std(0x3a3a3c, 0.5, 0.7), rust = std(0x4a2e1e, 0.9, 0.3), duct = std(0x6a6a6e, 0.45, 0.8);
+  add(scene, BOX, duct, [-4.5, CEIL - 0.45, 0], [0.9, 0.6, ROOM * 2]);
+  for (let z = -12; z <= 12; z += 3) add(scene, BOX, std(0x55555a, 0.5, 0.8), [-4.5, CEIL - 0.45, z], [0.95, 0.65, 0.06]);
+  for (const [x, r, m] of [[5.2, 0.09, pipe], [5.6, 0.06, rust], [6.0, 0.12, pipe], [-9.5, 0.07, rust], [-9.8, 0.05, pipe]]) {
+    const c = add(scene, CYL, m, [x, CEIL - 0.25, 0], [r, ROOM * 2, r]); c.rotation.x = Math.PI / 2;
+  }
+  for (const z of [-3, 3]) add(scene, BOX, std(0x2a2a2c, 0.6, 0.6), [0, CEIL - 0.2, z], [ROOM * 2, 0.06, 0.35]);  // kabelgoot
+  for (let i = 0; i < 10; i++) { const c = add(scene, CYL, std(0x0a0a0a, 0.8), [rnd(-12, 12), CEIL - 0.3 - rnd(0, 0.25), rnd(-3.15, -2.85) + (i % 2) * 6], [0.015, ROOM * 0.7, 0.015]); c.rotation.z = Math.PI / 2 + rnd(-0.03, 0.03); }  // hangende kabels
   // podium en led-wand achter de dj
   add(scene, BOX, std(0x0b0b10, 0.7), [0, 3.2, -11.1], [15.4, 6.4, 0.3]);
   add(scene, BOX, std(0x16161d, 0.6, 0.3), [0, 0.12, -8.6], [9, 0.24, 4.2]).receiveShadow = true;
@@ -1234,6 +1290,7 @@ function buildClub() {
   scene.add(club1, club2);
   const loungeLight = new THREE.PointLight(0xff4d9a, 1.1, 9, 1.5);
   loungeLight.position.set(-11.5, 2.4, 0);
+  f1Stack(-8.6, -8.4, 0.25); f1Stack(8.6, -8.4, -0.25);
   // rookmachines: zwarte kastjes met een mondstuk richting de vloer
   for (const m of FOGGERS) {
     const g = new THREE.Group(); g.position.set(m.x, 0, m.z); g.rotation.y = Math.atan2(m.dir.x, m.dir.z);
@@ -1263,7 +1320,7 @@ function buildClub() {
   scene.add(exit);
   // publiek aan de rand: staat mee te bewegen bij de bar, de lounge en de ingang
   const spots = [[11.0, -2.6, -1.6], [10.9, -0.8, -1.4], [11.0, 1.9, -1.9], [10.8, 3.4, -1.3], [13.0, 1.0, -1.57], [-11.6, -4, 1.6], [-11.2, -1.6, 1.3], [-11.5, 2.2, 1.8], [-11.0, 4.6, 1.4],
-                 [-3, 12, 3.14], [2.6, 12.3, 3.0], [7.5, 11.6, -2.6], [-7.4, 13.2, -1.57], [-6.6, 13.25, -1.5], [-8.5, -9.5, 0.6], [8.5, -9.5, -0.6]];
+                 [-3, 12, 3.14], [2.6, 12.3, 3.0], [7.5, 11.6, -2.6], [-7.4, 13.2, -1.57], [-6.6, 13.25, -1.5], [-10.7, -8.4, 1.0], [10.7, -8.4, -1.0]];
   // wc's in de voorwand, met een rij ervoor
   add(scene, BOX, wood, [-9, 1.15, ROOM - 0.08], [1.3, 2.3, 0.12]);
   const wcDoor = add(scene, BOX, std(0x1d1a24, 0.5, 0.3), [-9, 1.05, ROOM - 0.16], [1.0, 2.1, 0.05]);
