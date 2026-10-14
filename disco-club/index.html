@@ -626,7 +626,7 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); });
   MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type });
   addClip(g.animations[0]);
-  if (MODELS[type].length === 1) { if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); if (type === 'pop') buildWalkers(); }
+  if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); buildWalkers();  // opnieuw verdelen zodra er een figuur bij komt
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
@@ -701,13 +701,19 @@ function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders all
   m.customProgramCacheKey = () => 'recolor';
   return m;
 }
+// elk gegenereerd figuur hooguit 3 keer in de zaal (anders zie je kopieën)
+const MAX_COPIES = 3;
+const freeModel = type => { const ms = (MODELS[type] || []).filter(M => (M.used || 0) < MAX_COPIES); return ms.length ? pick(ms) : null; };
+const dropDancer = d => { scene.remove(d.root); if (d.M) d.M.used--; };
 function makeModelDancer(M, calm) {
+  M.used = (M.used || 0) + 1;
   const root = new THREE.Group(), body = THREE.SkeletonUtils.clone(M.scene);
   body.scale.setScalar((M.type === 'alien' ? rnd(2.05, 2.35) : rnd(1.6, 1.85)) / M.h);
   body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop'); });
+  if (Math.random() < 0.4) body.scale.x *= -1;
   root.add(body);
   scene.add(root);
-  return { type: 'model', root, body, mixer: new THREE.AnimationMixer(body), calm, cur: null, prev: null, fade: 1, off: Math.floor(rnd(0, 8)),
+  return { type: 'model', M, root, body, mixer: new THREE.AnimationMixer(body), calm, cur: null, prev: null, fade: 1, off: Math.floor(rnd(0, 8)),
            nextChange: 0, home: new THREE.Vector3(), face: 0, tq: 0 };
 }
 // elke 8 of 16 tellen een andere dans (soms gespiegeld); de vorige vloeit er in een tel uit
@@ -743,14 +749,16 @@ function nextDance(d, t) {
   d.cur = d.mixer.clipAction(clip);
   d.cur.play();
   d.fade = d.prev ? 0 : 1;
-  d.off = Math.floor(rnd(0, clip.beats));
-  if (Math.random() < 0.3) d.body.scale.x *= -1;
+  d.cur.beatOff = Math.floor(rnd(0, clip.beats));
   d.nextChange = Math.floor(t) + pick([8, 16, 16]);
 }
 function makeDancer(type, calm) {
   // 3D-figuur als die er is: mensen en tovenaars altijd, aliens half (de gebouwde alien blijft ook meedoen)
-  const ms = MODELS[type];
-  if (ms && ms.length && (type !== 'alien' || Math.random() < 0.5)) return makeModelDancer(pick(ms), calm);
+  if (MODELS[type] && (type !== 'alien' || Math.random() < 0.5)) {
+    const M = freeModel(type);
+    if (M) return makeModelDancer(M, calm);
+    if (type !== 'alien') type = pick(['robot', 'alien']);  // alle kopieën op: een gebouwde robot of alien
+  }
   const T = TYPES[type];
   const root = new THREE.Group(), hips = new THREE.Group(), torso = new THREE.Group(), head = new THREE.Group();
   const hipY = T.leg * 2 + T.foot;
@@ -890,10 +898,10 @@ function pose(d, tb, A, dt) {
     // bij muziek op de beat (publiek op halve snelheid), in stilte langzaam doorwiegen
     const sp = d.calm ? 0.5 : 1;
     d.tq = A < 0.08 ? d.tq + dt * 0.3 : tb * sp;
-    d.fade = Math.min(1, d.fade + dt * 2);
+    d.fade = Math.min(1, d.fade + dt * 0.7);  // ~1,5 s overvloeien naar de nieuwe dans
     for (const [a, w] of [[d.cur, d.fade], [d.prev, 1 - d.fade]]) {
       if (!a) continue;
-      const c = a.getClip(), u = (d.tq + d.off) / c.beats;
+      const c = a.getClip(), u = (d.tq + a.beatOff) / c.beats;
       a.time = (u - Math.floor(u)) * c.duration;
       a.setEffectiveWeight(w);
     }
@@ -932,7 +940,7 @@ function pose(d, tb, A, dt) {
 
 let dancers = [], dj = null;
 function buildCast() {
-  for (const d of dancers) scene.remove(d.root);
+  for (const d of dancers) dropDancer(d);
   dancers = [];
   const free = [];
   for (let x = -4; x <= 4; x += 2) for (let z = -4; z <= 4; z += 2) free.push([x, z]);
@@ -1070,11 +1078,13 @@ function planRoute(w) {
   setClip(w, w.walkClip, 0.4);
 }
 function buildWalkers() {
-  for (const w of walkers) scene.remove(w.root);
+  for (const w of walkers) dropDancer(w);
   walkers.length = 0;
   if (!MODELS.pop.length) return;
   for (let i = 0; i < 6; i++) {
-    const w = makeModelDancer(pick(MODELS.pop), true);
+    const M = freeModel('pop');
+    if (!M) break;
+    const w = makeModelDancer(M, true);
     w.root.traverse(o => { o.castShadow = false; });
     const [x, z] = RING[Math.floor(Math.random() * RING.length)];
     w.root.position.set(x + rnd(-0.5, 0.5), 0, z + rnd(-0.5, 0.5));
@@ -1091,11 +1101,19 @@ function updateWalkers(dt, tb, A) {
     w.walkClip = w.drunk && ACTS.Unsteady_Walk ? ACTS.Unsteady_Walk : walkC;
     if (w.state === 'wait' || w.state === 'gone') {
       w.wait -= dt;
+      if (w.faceT !== undefined) {  // rustig naar de goede kant draaien
+        let dr = w.faceT - w.root.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr));
+        w.root.rotation.y += dr * Math.min(1, dt * 3);
+      }
       if (w.state === 'wait' && w.poi && w.poi.dance && CLIPS.length) {  // aan de rand meedansen
         if (!w.cur || tb >= w.nextChange) nextDance(w, tb);
-        const c = w.cur.getClip(), u = (tb + w.off) / c.beats;
-        w.cur.time = (u - Math.floor(u)) * c.duration;
-        w.fade = Math.min(1, w.fade + dt * 2); w.cur.setEffectiveWeight(w.fade); if (w.prev) w.prev.setEffectiveWeight(1 - w.fade);
+        w.fade = Math.min(1, w.fade + dt * 0.7);
+        for (const [a, wt] of [[w.cur, w.fade], [w.prev, 1 - w.fade]]) {
+          if (!a) continue;
+          if (a.beatOff === undefined) { a.setEffectiveWeight(wt); continue; }  // de loopclip vloeit stil uit
+          const c = a.getClip(), u = (tb + a.beatOff) / c.beats;
+          a.time = (u - Math.floor(u)) * c.duration; a.setEffectiveWeight(wt);
+        }
         w.mixer.update(0);
       } else if (w.state === 'wait') {
         if (w.acts) act(w, dt);
@@ -1114,8 +1132,8 @@ function updateWalkers(dt, tb, A) {
         if (poi.gone) { w.state = 'gone'; w.root.visible = false; w.wait = rnd(...poi.gone); }
         else {
           w.state = 'wait';
-          if (poi.dance) { w.wait = rnd(...poi.dance) * 0.5; if (w.cur) w.cur.stop(); if (w.prev) w.prev.stop(); w.cur = w.prev = null; w.nextChange = 0; w.root.rotation.y = Math.atan2(-p.x, -p.z); }
-          else { w.wait = rnd(...poi.stay); w.acts = poi.acts; w.actT = 0; w.root.rotation.y = poi.face; }
+          if (poi.dance) { w.wait = rnd(...poi.dance) * 0.5; w.nextChange = 0; w.faceT = Math.atan2(-p.x, -p.z); }
+          else { w.wait = rnd(...poi.stay); w.acts = poi.acts; w.actT = 0; w.faceT = poi.face; }
         }
       }
     } else {
@@ -1129,7 +1147,7 @@ function updateWalkers(dt, tb, A) {
   }
 }
 function buildCrowd() {
-  for (const d of crowd) scene.remove(d.root);
+  for (const d of crowd) dropDancer(d);
   crowd.length = 0;
   for (const [x, z, face] of CROWD_SPOTS) {
     // bij de bar, in de lounge en in de rij voor de wc staan mensen (geen dansers) met een drankje of telefoon
