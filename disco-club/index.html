@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SamSo Disco Club</title>
+<title>Deep SamSo Club</title>
 <style>
   :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 13px -apple-system, system-ui, sans-serif; color: #ddd; }
@@ -558,7 +558,7 @@ function updateFog(dt, beat, energy) {
     const f = fogPool.find(f => !f.sp.visible);
     if (f) {
       const m = q.m;
-      f.sp.visible = true; f.age = 0; f.life = rnd(6, 10); f.s0 = rnd(0.8, 1.2);
+      f.sp.visible = true; f.age = 0; f.life = rnd(6, 10); f.s0 = rnd(0.8, 1.2); f.green = false;
       f.sp.position.set(m.x + m.dir.x * 0.3, 0.35, m.z + m.dir.z * 0.3);
       f.v.copy(m.dir).multiplyScalar(rnd(3.5, 5)).add(new THREE.Vector3(rnd(-0.6, 0.6), rnd(0.1, 0.5), rnd(-0.6, 0.6)));
     }
@@ -576,6 +576,7 @@ function updateFog(dt, beat, energy) {
     f.lit.setRGB(0.05, 0.045, 0.06);
     for (const s of spots) { const d = distToBeam(p, s.beam.g.position, s.beam.target); addColor(f.lit, s.light.color, s.beam.mat.uniforms.strength.value * 0.6 * Math.exp(-d * d * 0.35)); }
     for (const h of heads) { const d = distToBeam(p, h.beam.g.position, h.beam.target); addColor(f.lit, h.beam.mat.uniforms.color.value, h.beam.mat.uniforms.strength.value * 0.45 * Math.exp(-d * d * 1.4)); }
+    if (f.green) f.lit.setRGB(0.12, 0.42, 0.05);  // boer van de slak
     const fade = Math.min(1, f.age * 3) * (1 - f.age / f.life);
     const peak = Math.max(f.lit.r, f.lit.g, f.lit.b);
     if (peak > 0.3) f.lit.multiplyScalar(0.3 / peak);  // nooit een witte muur onder een felle spot
@@ -749,7 +750,7 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
-const ACT_FILES = ['models/act-33.glb', 'models/act-32.glb', 'models/act-343.glb', 'models/act-30.glb', 'models/act-123.glb', 'models/act-342.glb', 'models/act-56.glb', 'models/act-312.glb',
+const ACT_FILES = ['models/act-14.glb', 'models/act-33.glb', 'models/act-32.glb', 'models/act-343.glb', 'models/act-30.glb', 'models/act-123.glb', 'models/act-342.glb', 'models/act-56.glb', 'models/act-312.glb',
   'models/act-298.glb', 'models/act-44.glb', 'models/act-596.glb'];  // + juichen, blije sprong, YMCA (voor de momenten)
 const ACTS = {};
 for (const f of ACT_FILES) gltf.load(f, g => g.animations.forEach(c => {
@@ -914,6 +915,120 @@ function buildPoleDancers() {
     poleDancers.push(d);
   });
 }
+// --- De slak-baas en zijn wormpjes ---
+// De slak heeft geen skelet: hij glijdt heen en weer langs de looproute, deint op de bas en laat een slijmspoor achter.
+// Af en toe een gigantische boer (groene wolk + flits); dansers in de buurt draaien naar hem toe en juichen.
+// De wormpjes (klein, met skelet) rennen als bende om hem heen en staan af en toe in een kringetje te roken.
+let slug = null, slugT = 0, slugIdx = 1, slugDir = 1, slugBurpAt = 0, slugBurp = 0;
+const slugLight = new THREE.PointLight(0x7dff3c, 0, 9, 1.5);
+const slimeGeo = new THREE.CircleGeometry(1, 20), slime = [];
+for (let i = 0; i < 70; i++) {
+  const m = new THREE.Mesh(slimeGeo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.visible = false; m.renderOrder = 3; scene.add(m); slime.push({ m, age: 0 });
+}
+let slimeNext = 0, lastSlime = new THREE.Vector3(999, 0, 999);
+gltf.load('models/slak-1.glb', g => {
+  const box = new THREE.Box3().setFromObject(g.scene), size = box.getSize(new THREE.Vector3());
+  const k = 2.6 / size.y;  // ruim 2,5 m hoog: een berg van een slak
+  g.scene.scale.setScalar(k);
+  g.scene.position.set(-(box.min.x + box.max.x) / 2 * k, -box.min.y * k, -(box.min.z + box.max.z) / 2 * k);
+  g.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  const root = new THREE.Group(), wob = new THREE.Group();
+  wob.add(g.scene); root.add(wob); scene.add(root, slugLight);
+  slug = { root, wob };
+  const [x, z] = RING[1]; root.position.set(x, 0, z);
+  slugBurpAt = performance.now() / 1000 + rnd(25, 45);
+}, undefined, () => {});
+function slugBurpNow(now) {
+  slugBurp = 1; slugBurpAt = now + rnd(40, 75);
+  const p = slug.root.position;
+  for (let i = 0; i < 18; i++) {  // groene wolk uit zijn bek
+    const f = fogPool.find(f => !f.sp.visible); if (!f) break;
+    f.sp.visible = true; f.age = 0; f.life = rnd(4, 7); f.s0 = rnd(0.8, 1.4); f.green = true;
+    f.sp.position.set(p.x, 2.0, p.z);
+    f.v.set(Math.sin(slug.root.rotation.y) * rnd(2, 4) + rnd(-1, 1), rnd(0.2, 0.9), Math.cos(slug.root.rotation.y) * rnd(2, 4) + rnd(-1, 1));
+  }
+  const tb = beatPos;  // dansers in de buurt kijken om en juichen
+  for (const d of dancers) if (d.home.distanceTo(p) < 6) {
+    d.faceT = Math.atan2(p.x - d.home.x, p.z - d.home.z);
+    if (d.type === 'model' && ACTS.Cheer_with_Both_Hands_Up) forceDance(d, ACTS.Cheer_with_Both_Hands_Up, tb, 8); else if (d.type !== 'model') builtMove(d, tb, 9, 8, null);
+  }
+  lastMoment = tb;
+}
+function updateSlug(dt, now, pulse) {
+  if (!slug) return;
+  const r = slug.root, p = r.position;
+  if (slugBurp <= 0) {  // glijden naar het volgende punt van de route (heen en weer)
+    const [tx, tz] = RING[slugIdx], dx = tx - p.x, dz = tz - p.z, dist = Math.hypot(dx, dz);
+    if (dist < 0.3) { if (slugIdx + slugDir < 0 || slugIdx + slugDir >= RING.length) slugDir *= -1; slugIdx += slugDir; }
+    else {
+      const sp = Math.min(dist, 0.32 * dt); p.x += dx / dist * sp; p.z += dz / dist * sp;
+      let dr = Math.atan2(dx, dz) - r.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); r.rotation.y += dr * Math.min(1, dt * 0.8);
+    }
+  }
+  slugT += dt;
+  if (now > slugBurpAt) slugBurpNow(now);
+  // deinen op de bas, golvend glijden, en opzwellen bij een boer
+  const b = slugBurp > 0 ? Math.sin((1 - slugBurp) * Math.PI) : 0;
+  slugBurp = Math.max(0, slugBurp - dt * 0.5);
+  const squash = 0.035 * Math.sin(slugT * 3.2) + 0.05 * pulse + 0.18 * b;
+  slug.wob.scale.set(1 + squash * 0.6, 1 + squash, 1 - squash * 0.3);
+  slugLight.position.set(p.x, 2.2, p.z); slugLight.intensity = 3.5 * b;
+  // slijmspoor: oplichtende groene plekken die langzaam vervagen
+  if (p.distanceTo(lastSlime) > 0.45) {
+    lastSlime.copy(p);
+    const s = slime[slimeNext++ % slime.length]; s.age = 0; s.m.visible = true;
+    s.m.position.set(p.x + rnd(-0.2, 0.2), 0.055, p.z + rnd(-0.2, 0.2)); s.m.scale.setScalar(rnd(0.5, 0.8));
+  }
+  for (const s of slime) {
+    if (!s.m.visible) continue;
+    s.age += dt;
+    if (s.age > 25) { s.m.visible = false; continue; }
+    s.m.material.color.setRGB(0.12, 0.45, 0.06).multiplyScalar((1 - s.age / 25) * (0.6 + 0.4 * pulse));
+  }
+}
+// wormpjes
+const worms = [];
+let wormModel = null;
+gltf.load('models/worm-1.glb', g => {
+  g.scene.updateMatrixWorld(true);
+  const box = new THREE.Box3(), v = new THREE.Vector3();
+  g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  wormModel = { scene: g.scene, h: box.max.y + 0.08, type: 'worm', file: 'models/worm-1.glb', used: 0 };
+  for (let i = 0; i < 4; i++) {
+    const w = makeModelDancer(wormModel, true);
+    w.body.scale.setScalar(rnd(0.62, 0.78) / wormModel.h * (w.body.scale.x < 0 ? -1 : 1));
+    w.body.scale.y = Math.abs(w.body.scale.x); w.body.scale.z = Math.abs(w.body.scale.x);
+    w.angle = i * Math.PI / 2; w.state = 'run'; w.until = rnd(10, 20);
+    if (i % 2 === 0) giveDrink(w, 'sigaret');
+    worms.push(w);
+  }
+}, undefined, () => {});
+function updateWorms(dt, now) {
+  if (!worms.length) return;
+  const c = slug ? slug.root.position : new THREE.Vector3(0, 0, 8);
+  for (const w of worms) {
+    w.until -= dt;
+    const p = w.root.position;
+    if (w.state === 'run') {  // rondjes om de slak, als een bendetje
+      w.angle += dt * 1.1;
+      const R = 2.8 + 0.3 * Math.sin(w.angle * 2), tx = c.x + Math.cos(w.angle) * R, tz = c.z + Math.sin(w.angle) * R;
+      const dx = tx - p.x, dz = tz - p.z, dist = Math.hypot(dx, dz);
+      if (dist > 0.01) { const sp = Math.min(dist, 3.2 * dt); p.x += dx / dist * sp; p.z += dz / dist * sp; w.root.rotation.y = Math.atan2(dx, dz); }
+      if (ACTS.Run_02) setClip(w, ACTS.Run_02, 0.3);
+      if (w.until <= 0) { w.state = 'chill'; w.until = rnd(12, 20); w.acts = ['Stand_and_Chat', 'Stand_and_Drink']; w.actT = 0; }
+    } else {  // stilstaan in een kringetje naast de slak: roken en kletsen
+      const tx = c.x + Math.cos(w.angle) * 2.4, tz = c.z + Math.sin(w.angle) * 2.4;
+      p.x += (tx - p.x) * Math.min(1, dt * 2); p.z += (tz - p.z) * Math.min(1, dt * 2);
+      let dr = Math.atan2(c.x - p.x, c.z - p.z) + Math.PI * 0.5 - w.root.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr));
+      w.root.rotation.y += dr * Math.min(1, dt * 3);
+      act(w, 0);
+      if (w.until <= 0) { w.state = 'run'; w.until = rnd(14, 24); w.acts = null; }
+    }
+    blend(w, dt);
+  }
+}
+
 // een glas met lichtgevend drankje in de rechterhand
 const glassGeo = new THREE.CylinderGeometry(0.035, 0.028, 0.12, 12), drinkGeo = new THREE.CylinderGeometry(0.03, 0.025, 0.07, 12);
 const glassMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, shininess: 120 });
@@ -1395,6 +1510,8 @@ const crowd = [], washMats = [], pillarLed = new THREE.MeshBasicMaterial({ color
 function neonSign(text, color, w, h) {
   const tex = canvasTexture(512, 128, (g, cw, ch) => {
     g.font = 'italic 800 84px "Helvetica Neue", Arial, sans-serif';
+    const fit = Math.min(1, (cw - 40) / g.measureText(text).width);  // lange namen passend maken
+    if (fit < 1) g.font = `italic 800 ${Math.floor(84 * fit)}px "Helvetica Neue", Arial, sans-serif`;
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.shadowColor = color; g.shadowBlur = 26; g.strokeStyle = color; g.lineWidth = 7;
     g.strokeText(text, cw / 2, ch / 2);
@@ -1462,10 +1579,15 @@ function buildClub() {
     add(scene, CYL, glossy, [-11.9, 0.3, z], [0.45, 0.6, 0.45]);
     add(scene, CYL, washMats[1], [-11.9, 0.62, z], [0.42, 0.03, 0.42]);
   }
-  const club1 = neonSign('SAMSO', '#ff2d95', 5.2, 1.3), club2 = neonSign('DISCO CLUB', '#00e5ff', 5.2, 1.3);
+  const club1 = neonSign('DEEP SAMSO', '#ff2d95', 5.6, 1.4), club2 = neonSign('CLUB', '#00e5ff', 5.2, 1.3);
   club1.position.set(-ROOM + 0.1, 5.2, -1.5); club2.position.set(-ROOM + 0.1, 4.0, 1);
   club1.rotation.y = club2.rotation.y = Math.PI / 2;
   scene.add(club1, club2);
+  // Bloodline Project (Sierk en zijn pa): rode neon die boven de dj hangt, naar de dansvloer gericht
+  const blood = neonSign('BLOODLINE PROJECT', '#ff1f3d', 7.2, 1.5);
+  blood.position.set(0, 5.3, -7.4);
+  scene.add(blood);
+  for (const sx of [-3.2, 3.2]) add(scene, CYL, std(0x222226, 0.5, 0.7), [sx, 6.2, -7.45], [0.008, 1.6, 0.008]);  // ophangkabels
   const loungeLight = new THREE.PointLight(0xff4d9a, 1.1, 9, 1.5);
   loungeLight.position.set(-11.5, 2.4, 0);
   // twee gigantische stacks tot vlak onder het plafond, schuin op de vloer gericht, met eigen licht zodat ze opvallen
@@ -2110,6 +2232,8 @@ function frame(nowMs) {
   for (const c of crowd) pose(c, beatPos, energy * 0.4, dt);
   updateWalkers(dt, beatPos, energy);
   updateCigs(dt, performance.now() / 1000);
+  updateSlug(dt, performance.now() / 1000, pulse);
+  updateWorms(dt, performance.now() / 1000);
   for (const d of poleDancers) d.mixer.update(dt);
   washMats.forEach((m, i) => m.color.copy(pal[i & 1]).multiplyScalar((0.25 + 0.45 * bands[i].v) * L.wash * dim));
   pillarLed.color.copy(pal[(beat >> 1) & 1]).multiplyScalar((0.2 + 0.8 * hit) * dim);
