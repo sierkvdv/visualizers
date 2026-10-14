@@ -86,6 +86,8 @@
 <script src="lib/RenderPass.js"></script>
 <script src="lib/ShaderPass.js"></script>
 <script src="lib/UnrealBloomPass.js"></script>
+<script src="lib/GLTFLoader.js"></script>
+<script src="lib/SkeletonUtils.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const status = $('status');
@@ -609,7 +611,32 @@ const BUILD = {
     return { arm: [0.058, 0.064, 0.105], leg: [0.05, 0.04, 0.035], mats: { sleeve: robe, fore: robe, hand: skin, thigh: dark, shin: dark, shoe: std(0x4a2f1b, 0.7) }, shoe: [0.055, 0.045, 0.14], staff: Math.random() < 0.55 };
   },
 };
+// Gegenereerde 3D-mensen (models/*.glb, met skelet en dansclip). Zolang ze laden of als ze ontbreken: de gebouwde poppetjes.
+const MODEL_FILES = ['models/pop-1.glb'];
+const MODELS = [];
+for (const f of MODEL_FILES) new THREE.GLTFLoader().load(f, g => {
+  g.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+  // lengte uit de botten: de bounding box van een skinned mesh klopt niet (armature staat op schaal 0.01)
+  g.scene.updateMatrixWorld(true);
+  const box = new THREE.Box3(), v = new THREE.Vector3();
+  g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); });
+  MODELS.push({ scene: g.scene, clip: g.animations[0], h: box.max.y + 0.08, y0: 0 });
+  if (MODELS.length === 1 && dancers.length) buildCast();
+}, undefined, () => {});
+function makeModelDancer(M) {
+  const root = new THREE.Group(), body = THREE.SkeletonUtils.clone(M.scene), s = rnd(1.6, 1.85) / M.h;
+  body.scale.setScalar(s);
+  body.position.y = -M.y0 * s;
+  root.add(body);
+  scene.add(root);
+  const mixer = new THREE.AnimationMixer(body), act = M.clip && mixer.clipAction(M.clip);
+  if (act) act.play();
+  // de clip op de beat leggen: aantal tellen ≈ duur bij 120 bpm
+  const n = M.clip ? Math.max(1, Math.round(M.clip.duration * 2)) : 1;
+  return { type: 'model', root, mixer, clip: M.clip, n, off: Math.floor(rnd(0, 4)), home: new THREE.Vector3(), face: 0 };
+}
 function makeDancer(type) {
+  if (type === 'pop' && MODELS.length && Math.random() < 0.85) return makeModelDancer(pick(MODELS));
   const T = TYPES[type];
   const root = new THREE.Group(), hips = new THREE.Group(), torso = new THREE.Group(), head = new THREE.Group();
   const hipY = T.leg * 2 + T.foot;
@@ -740,6 +767,15 @@ const MOVES = [
   },
 ];
 function pose(d, tb, A, dt) {
+  if (d.type === 'model') {
+    d.root.position.set(d.home.x, 0, d.home.z);
+    d.root.rotation.set(0, d.face, 0);
+    if (d.clip) {  // bij muziek op de beat, in stilte langzaam doorwiegen
+      d.tq = A < 0.08 ? (d.tq || 0) + dt * 0.35 : (tb + d.off) / d.n * d.clip.duration;
+      d.mixer.setTime(((d.tq % d.clip.duration) + d.clip.duration) % d.clip.duration);
+    }
+    return;
+  }
   const t = tb + d.off, phi = t - Math.floor(t), J = d.joints, P = d.prev;
   for (let i = 0; i < J.length; i++) { P[i * 3] = J[i].rotation.x; P[i * 3 + 1] = J[i].rotation.y; P[i * 3 + 2] = J[i].rotation.z; }
   P[J.length * 3] = d.hips.position.y;
