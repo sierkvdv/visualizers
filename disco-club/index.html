@@ -614,7 +614,8 @@ const BUILD = {
 };
 // Gegenereerde 3D-mensen (models/*.glb, met skelet en dansclip). Zolang ze laden of als ze ontbreken: de gebouwde poppetjes.
 // Alle Meshy-rigs hebben dezelfde botnamen, dus elke dansclip (ook de losse dans-*.glb) past op elk figuur.
-const MODEL_FILES = { pop: ['models/pop-1.glb'], wizard: ['models/wizard-1.glb'], alien: ['models/alien-1.glb'] };
+const MODEL_FILES = { pop: ['models/pop-1.glb', 'models/rick-1.glb'], wizard: ['models/wizard-1.glb', 'models/witch-1.glb'], alien: ['models/alien-1.glb'] };
+const KEEP_LOOK = /rick/;  // vaste figuren: niet herkleuren
 const DANCE_FILES = ['models/dans-65.glb', 'models/dans-66.glb', 'models/dans-594.glb', 'models/dans-84.glb'];
 const MODELS = { pop: [], wizard: [], alien: [] }, CLIPS = [], gltf = new THREE.GLTFLoader();
 const addClip = c => { if (c && !CLIPS.some(x => x.name === c.name)) { c.beats = Math.max(1, Math.round(c.duration * 2)); CLIPS.push(c); } };  // tellen ≈ duur bij 120 bpm
@@ -624,8 +625,8 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   g.scene.updateMatrixWorld(true);
   const box = new THREE.Box3(), v = new THREE.Vector3();
   g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); });
-  MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type });
-  addClip(g.animations[0]);
+  MODELS[type].push({ scene: g.scene, h: box.max.y + 0.08, type, keep: KEEP_LOOK.test(f) });
+  if (g.animations[0] && !/clip0/.test(g.animations[0].name)) addClip(g.animations[0]);  // clip0 = alleen rig, geen dans
   if (dancers.length) buildCast(); if (crowd.length) buildCrowd(); buildWalkers();  // opnieuw verdelen zodra er een figuur bij komt
 }, undefined, () => {});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
@@ -709,8 +710,8 @@ function makeModelDancer(M, calm) {
   M.used = (M.used || 0) + 1;
   const root = new THREE.Group(), body = THREE.SkeletonUtils.clone(M.scene);
   body.scale.setScalar((M.type === 'alien' ? rnd(2.05, 2.35) : rnd(1.6, 1.85)) / M.h);
-  body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop'); });
-  if (Math.random() < 0.4) body.scale.x *= -1;
+  if (!M.keep) body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop'); });
+  if (!M.keep && Math.random() < 0.4) body.scale.x *= -1;
   root.add(body);
   scene.add(root);
   return { type: 'model', M, root, body, mixer: new THREE.AnimationMixer(body), calm, cur: null, prev: null, fade: 1, off: Math.floor(rnd(0, 8)),
