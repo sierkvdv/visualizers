@@ -572,7 +572,7 @@ function updateFog(dt, beat, energy) {
 // Achterwand: equalizer, speakers, dj-tafel en ledbalken op de zijwanden
 const BARS = 28, bars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 1, 0.2), new THREE.MeshBasicMaterial(), BARS);
 scene.add(bars);
-const speakers = [], darkBox = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.85 });
+const speakers = [], darkBox = new THREE.MeshStandardMaterial({ color: 0x1c1c20, roughness: 0.7, metalness: 0.1 });
 // Stacks in de stijl van Function One: twee subkasten met elk twee grote conussen en een poortspleet, daarop twee tops
 // met een brede trechtervormige hoorn (conus in de keel) en een kleine hoog-hoorn erboven. Matzwart, getrapt.
 const coneMat = new THREE.MeshStandardMaterial({ color: 0x1f1f23, roughness: 0.6, metalness: 0.2 }), hornMat = new THREE.MeshStandardMaterial({ color: 0x0d0d0f, roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide });
@@ -584,12 +584,15 @@ function speakerCone(parent, r, pos) {
   speakers.push(c);
   return c;
 }
-function f1Stack(x, z, ry) {
-  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; scene.add(g);
+function f1Stack(x, z, ry, sc = 1) {
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; g.scale.setScalar(sc); scene.add(g);
   for (let i = 0; i < 2; i++) {  // subs
     const y = 0.62 + i * 1.24;
     add(g, BOX, darkBox, [0, y, 0], [1.7, 1.2, 1.1]).castShadow = true;
-    for (const sx of [-0.4, 0.4]) speakerCone(g, 0.34, [sx, y + 0.08, 0.53]);
+    for (const sx of [-0.4, 0.4]) {
+      speakerCone(g, 0.34, [sx, y + 0.08, 0.64]);
+      add(g, new THREE.TorusGeometry(0.36, 0.035, 10, 32), dustCap, [sx, y + 0.08, 0.56]);  // rand om de conus
+    }
     add(g, BOX, hornMat, [0, y - 0.45, 0.555], [1.4, 0.08, 0.02]);  // poortspleet
   }
   for (let i = 0; i < 2; i++) {  // tops
@@ -1290,7 +1293,13 @@ function buildClub() {
   scene.add(club1, club2);
   const loungeLight = new THREE.PointLight(0xff4d9a, 1.1, 9, 1.5);
   loungeLight.position.set(-11.5, 2.4, 0);
-  f1Stack(-8.6, -8.4, 0.25); f1Stack(8.6, -8.4, -0.25);
+  // twee gigantische stacks tot vlak onder het plafond, schuin op de vloer gericht, met eigen licht zodat ze opvallen
+  for (const sx of [-1, 1]) {
+    f1Stack(sx * 8.4, -7.7, -sx * 0.45, 1.5);
+    const wash = new THREE.SpotLight(0xbfc8ff, 1.6, 12, 0.5, 0.6, 1.2);
+    wash.position.set(sx * 5.0, 0.4, -3.0); wash.target.position.set(sx * 8.4, 3.4, -7.7);
+    scene.add(wash, wash.target);
+  }
   // rookmachines: zwarte kastjes met een mondstuk richting de vloer
   for (const m of FOGGERS) {
     const g = new THREE.Group(); g.position.set(m.x, 0, m.z); g.rotation.y = Math.atan2(m.dir.x, m.dir.z);
@@ -1320,7 +1329,7 @@ function buildClub() {
   scene.add(exit);
   // publiek aan de rand: staat mee te bewegen bij de bar, de lounge en de ingang
   const spots = [[11.0, -2.6, -1.6], [10.9, -0.8, -1.4], [11.0, 1.9, -1.9], [10.8, 3.4, -1.3], [13.0, 1.0, -1.57], [-11.6, -4, 1.6], [-11.2, -1.6, 1.3], [-11.5, 2.2, 1.8], [-11.0, 4.6, 1.4],
-                 [-3, 12, 3.14], [2.6, 12.3, 3.0], [7.5, 11.6, -2.6], [-7.4, 13.2, -1.57], [-6.6, 13.25, -1.5], [-10.7, -8.4, 1.0], [10.7, -8.4, -1.0]];
+                 [-3, 12, 3.14], [2.6, 12.3, 3.0], [7.5, 11.6, -2.6], [-7.4, 13.2, -1.57], [-6.6, 13.25, -1.5], [-11.5, -7.6, 1.0], [11.5, -7.6, -1.0]];
   // wc's in de voorwand, met een rij ervoor
   add(scene, BOX, wood, [-9, 1.15, ROOM - 0.08], [1.3, 2.3, 0.12]);
   const wcDoor = add(scene, BOX, std(0x1d1a24, 0.5, 0.3), [-9, 1.05, ROOM - 0.16], [1.0, 2.1, 0.05]);
@@ -1332,9 +1341,9 @@ function buildClub() {
   buildCrowd();
 }
 let CROWD_SPOTS = [];
-const POLES = [{ x: 9.6, z: 9.6, r: 1.35, h: 0.4 }, { x: -10.1, z: 9.2, r: 1.25, h: 0.4 }, { x: 6.1, z: -9.3, r: 1.0, h: 0.55 }, { x: -6.1, z: -9.3, r: 1.0, h: 0.55 }];  // paalpodia
+const POLES = [{ x: 9.6, z: 9.6, r: 1.35, h: 0.4 }, { x: -10.1, z: 9.2, r: 1.25, h: 0.4 }, { x: 5.7, z: -9.8, r: 0.95, h: 0.55 }, { x: -5.7, z: -9.8, r: 0.95, h: 0.55 }];  // paalpodia
 // Rondlopers. Route langs een pad om de dansvloer heen (achterkant zit dicht: dj en speakers)
-const RING = [[-7.6, -6.6], [-7.6, 0], [-7.6, 7.6], [0, 7.6], [7.6, 7.6], [7.6, 0], [7.6, -6.6]];
+const RING = [[-7.6, -4.4], [-7.6, 0], [-7.6, 7.6], [0, 7.6], [7.6, 7.6], [7.6, 0], [7.6, -4.4]];
 const POIS = [
   { at: () => [10.4, rnd(-3.8, 3.8)], node: 5, face: Math.PI / 2, acts: ['Stand_and_Drink', 'Stand_and_Chat'], stay: [8, 18] },
   { at: () => [-10.4, rnd(-5, 5)], node: 1, face: -Math.PI / 2, acts: ['Stand_and_Chat', 'Phone_Conversation'], stay: [8, 16] },
