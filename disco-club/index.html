@@ -256,7 +256,17 @@ const wallTex = canvasTexture(1024, 512, (g, w, h) => {
 });
 wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
 wallTex.repeat.set(3, 1);
-const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x8a8580, map: wallTex, roughness: 0.95, side: THREE.BackSide }), [0, CEIL / 2, 0]);
+// muren: gegenereerde graffiti-muren (tex/graffiti-N.jpg); vloer en plafond (en zolang ze laden) het eigen beton
+const concreteMat = new THREE.MeshStandardMaterial({ color: 0x8a8580, map: wallTex, roughness: 0.95, side: THREE.BackSide });
+const wallMats = [0, 1, 2, 3].map(() => concreteMat);
+const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), [wallMats[0], wallMats[1], concreteMat, concreteMat, wallMats[2], wallMats[3]], [0, CEIL / 2, 0]);
+['tex/graffiti-1.jpg', 'tex/graffiti-2.jpg', 'tex/graffiti-3.jpg', 'tex/graffiti-1.jpg'].forEach((f, i) => new THREE.TextureLoader().load(f, tex => {
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.repeat.set(-2, 1);  // van binnen bekeken staat een doos-wand gespiegeld: negatief = leesbaar
+  if (i === 3) tex.offset.x = 0.5;  // vierde wand: zelfde beeld, ander stuk
+  const m = new THREE.MeshStandardMaterial({ color: 0xa8a39c, map: tex, roughness: 0.92, side: THREE.BackSide });
+  room.material[[0, 1, 4, 5][i]] = m;
+}, undefined, () => {}));
 room.receiveShadow = true;
 room.position.y -= 0.03;  // bodem van de doos net onder de spiegelvloer (y=0), anders strepen ze door elkaar
 const ambient = new THREE.AmbientLight(0x554466, 1.1);
@@ -911,8 +921,10 @@ const bottleMat = [new THREE.MeshPhongMaterial({ color: 0x3f9b38, emissive: 0x14
 const cigGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.085, 6), tipGeo = new THREE.SphereGeometry(0.008, 6, 4);
 const smokers = [], held = [];
 function giveDrink(d, kind) {
+  // de hand die in de animatie naar de mond gaat: staand drinken = links, zittend drinken = rechts
+  const side = d.yOff !== undefined ? 'RightHand' : 'LeftHand';
   let hand = null;
-  d.body.traverse(o => { if (!hand && o.isBone && /RightHand$/.test(o.name)) hand = o; });
+  d.body.traverse(o => { if (!hand && o.isBone && o.name === side) hand = o; });
   if (!hand) return;
   d.body.updateMatrixWorld(true);
   const g = new THREE.Group(), ws = new THREE.Vector3();
@@ -1519,7 +1531,7 @@ const POIS = [
 const walkers = [];
 function nearestNode(x, z) { let b = 0, bd = 1e9; RING.forEach(([rx, rz], i) => { const dd = Math.hypot(rx - x, rz - z); if (dd < bd) { bd = dd; b = i; } }); return b; }
 function planRoute(w) {
-  let poi = pick(POIS);
+  let poi = w.drunk && Math.random() < 0.4 ? POIS[3] : pick(POIS);  // dronken: vaak naar buiten
   if (poi === w.poi) poi = pick(POIS);
   w.poi = poi;
   const [tx, tz] = poi.at(), a = nearestNode(w.root.position.x, w.root.position.z), b = poi.node, path = [];
@@ -1875,12 +1887,12 @@ const SHOTS = {
   ster:       { w: 4, beats: 8, make: () => ({ d: pick(stars()) || anyDancer(), a: rnd(0, TAU), dir: pick([-1, 1]), r: rnd(1.7, 2.4) }),
     at(s, u, t) { const p = starPos(s.d, tmpV2), a = s.a + s.dir * t * 0.22; camPos.set(p.x + s.r * Math.cos(a), p.y + 1.45, p.z + s.r * Math.sin(a)); camLook.set(p.x, p.y + 1.25, p.z); camFov = 42; } },
   // achter een loper aan (het liefst de dronken Rick)
-  volg:       { w: 2.5, beats: 16, make: () => ({ d: walkers.find(w => w.drunk && w.root.visible && Math.random() < 0.6) || pick(walkers.filter(w => w.root.visible)) || anyDancer(), look: null }),
+  volg:       { w: 3, beats: 16, make: () => ({ d: pick(walkers.filter(w => w.drunk && w.root.visible && w.state === 'walk')) || pick(walkers.filter(w => w.root.visible)) || anyDancer(), look: null, front: Math.random() < 0.6 }),
     at(s, u, t) {
-      const p = starPos(s.d, tmpV2), r = s.d.root.rotation.y;
-      wantLook.set(p.x - Math.sin(r) * 2.6 + Math.cos(r) * 0.8, 1.75, p.z - Math.cos(r) * 2.6 - Math.sin(r) * 0.8);
+      const p = starPos(s.d, tmpV2), r = s.d.root.rotation.y, f = s.front ? 2.4 : -2.6;  // van voren: achteruit voor de loper uit, met zijn kop in beeld
+      wantLook.set(p.x + Math.sin(r) * f + Math.cos(r) * 0.6, s.front ? 1.6 : 1.75, p.z + Math.cos(r) * f - Math.sin(r) * 0.6);
       if (!s.look) s.look = wantLook.clone(); else s.look.lerp(wantLook, 0.05);  // zacht achterna
-      camPos.copy(s.look); camLook.set(p.x, 1.2, p.z); camFov = 50;
+      camPos.copy(s.look); camLook.set(p.x, s.front ? 1.45 : 1.2, p.z); camFov = 50;
     } },
   // langs de bar rijden, met de drinkers in beeld
   bar:        { w: 1.5, beats: 16, make: () => ({ dir: pick([-1, 1]) }),
