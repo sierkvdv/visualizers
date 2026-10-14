@@ -111,7 +111,7 @@ const PR = Math.min(window.devicePixelRatio || 1, 1.5);
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05030a, 0.021);
-const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.2, 100);  // near niet lager: vloerlagen liggen millimeters uit elkaar
 
 let composer = null, bloom = null, grade = null, feedback = null;
 if (THREE.EffectComposer && THREE.UnrealBloomPass) {
@@ -251,7 +251,7 @@ tiles.renderOrder = 1;
 scene.add(tiles);
 const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), new THREE.ShadowMaterial({ opacity: 0.6 }));
 shadowCatcher.rotation.x = -Math.PI / 2;
-shadowCatcher.position.y = 0.035;
+shadowCatcher.position.y = 0.05;
 shadowCatcher.receiveShadow = true;
 shadowCatcher.renderOrder = 2;
 scene.add(shadowCatcher);
@@ -299,7 +299,7 @@ function fractalMaterial(gridX, gridY) {
 }
 const floorFx = new THREE.Mesh(new THREE.PlaneGeometry(N, N), fractalMaterial(N, N));
 floorFx.rotation.x = -Math.PI / 2;
-floorFx.position.y = 0.03;
+floorFx.position.y = 0.038;  // net boven de tegels (bovenkant 0.03), anders flikkeren ze door elkaar
 floorFx.renderOrder = 1;
 floorFx.visible = false;
 scene.add(floorFx);
@@ -672,7 +672,7 @@ function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders all
 }
 function makeModelDancer(M, calm) {
   const root = new THREE.Group(), body = THREE.SkeletonUtils.clone(M.scene);
-  body.scale.setScalar(rnd(1.6, 1.85) / M.h);
+  body.scale.setScalar((M.type === 'alien' ? rnd(2.05, 2.35) : rnd(1.6, 1.85)) / M.h);
   body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material, M.type === 'pop'); });
   root.add(body);
   scene.add(root);
@@ -883,7 +883,7 @@ function buildCast() {
   for (let x = -3; x <= 3; x += 2) for (let z = -3; z <= 3; z += 2) free.push([x, z]);
   free.sort(() => Math.random() - 0.5);
   for (let i = 0; i < S.count && free.length; i++) {
-    const d = makeDancer(S.cast === 'mix' ? pick(Object.keys(TYPES)) : S.cast);
+    const d = makeDancer(S.cast === 'mix' ? pick(['pop', 'pop', 'pop', 'robot', 'alien', 'wizard']) : S.cast);
     const [x, z] = free.pop();
     d.home.set(x + rnd(-0.3, 0.3), 0, z + rnd(-0.3, 0.3));
     d.face = Math.atan2(-d.home.x, -d.home.z) + rnd(-1.1, 1.1);  // ongeveer naar het midden van de vloer gekeerd
