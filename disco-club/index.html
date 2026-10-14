@@ -260,13 +260,24 @@ wallTex.repeat.set(3, 1);
 // muren: gegenereerde graffiti-muren (tex/graffiti-N.jpg); vloer en plafond (en zolang ze laden) het eigen beton
 const concreteMat = new THREE.MeshStandardMaterial({ color: 0x8a8580, map: wallTex, roughness: 0.95, side: THREE.BackSide });
 const wallMats = [0, 1, 2, 3].map(() => concreteMat);
-const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), [wallMats[0], wallMats[1], concreteMat, concreteMat, wallMats[2], wallMats[3]], [0, CEIL / 2, 0]);
+const hiddenMat = new THREE.MeshBasicMaterial({ visible: false });
+const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), [wallMats[0], wallMats[1], concreteMat, concreteMat, hiddenMat, wallMats[3]], [0, CEIL / 2, 0]);
+// voorwand los opgebouwd rond de deur naar de tweede zaal (x 8,15..9,85, tot 2,5 m hoog), met dezelfde uv als de doos-wand
+const frontWall = [];
+function frontWallPiece(x0, x1, y0, y1, mat) {
+  const g = new THREE.PlaneGeometry(x1 - x0, y1 - y0), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, pos = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < pos.count; i++) { const wx = cx - pos.getX(i), wy = cy + pos.getY(i); uv.setXY(i, (wx + ROOM) / (ROOM * 2), wy / CEIL); }
+  const m = new THREE.Mesh(g, mat); m.position.set(cx, cy - 0.03, ROOM); m.rotation.y = Math.PI; m.receiveShadow = true;
+  scene.add(m); frontWall.push(m);
+}
+const frontMat = m => { const f = m.clone(); f.side = THREE.FrontSide; return f; };
+frontWallPiece(-ROOM, 8.15, 0, CEIL, frontMat(concreteMat)); frontWallPiece(9.85, ROOM, 0, CEIL, frontMat(concreteMat)); frontWallPiece(8.15, 9.85, 2.5, CEIL, frontMat(concreteMat));
 ['tex/graffiti-1.jpg', 'tex/graffiti-2.jpg', 'tex/graffiti-3.jpg', 'tex/graffiti-1.jpg'].forEach((f, i) => new THREE.TextureLoader().load(f, tex => {
   tex.wrapS = THREE.RepeatWrapping;
   tex.repeat.set(-2, 1);  // van binnen bekeken staat een doos-wand gespiegeld: negatief = leesbaar
   if (i === 3) tex.offset.x = 0.5;  // vierde wand: zelfde beeld, ander stuk
   const m = new THREE.MeshStandardMaterial({ color: 0xa8a39c, map: tex, roughness: 0.92, side: THREE.BackSide });
-  room.material[[0, 1, 4, 5][i]] = m;
+  if (i === 2) { const f = frontMat(m); frontWall.forEach(w => w.material = f); } else room.material[[0, 1, 4, 5][i]] = m;
 }, undefined, () => {}));
 room.receiveShadow = true;
 room.position.y -= 0.03;  // bodem van de doos net onder de spiegelvloer (y=0), anders strepen ze door elkaar
@@ -1048,30 +1059,37 @@ const tripMat = new THREE.ShaderMaterial({
       float v = 0.0;
       for (int i = 0; i < 5; i++) { q = abs(q) / dot(q, q) - 0.82 - 0.08 * sin(time * 0.21 + float(i)); v += exp(-length(q) * 1.6); }
       vec3 col = pal(v * 0.35 + time * 0.04 + r * 0.25) * (0.25 + 0.8 * v);
-      col *= 0.6 + 0.9 * bass;
+      col *= 0.42 + 0.55 * bass;  // niet te fel: de sporen en de bloom tellen er nog bij op
       gl_FragColor = vec4(col, 1.0);
     }`
 });
 function buildZone2() {
   // deur: zwarte opening met kozijn en neon erboven (alleen vanuit de zaal te zien)
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.5), new THREE.MeshBasicMaterial({ color: 0x000000 }));
-  door.position.set(DOOR2.x, 1.25, DOOR2.z - 0.02); door.rotation.y = Math.PI; scene.add(door);
   for (const dx of [-0.9, 0.9]) add(scene, BOX, std(0x1a1a1e, 0.6, 0.5), [DOOR2.x + dx, 1.3, DOOR2.z - 0.05], [0.12, 2.6, 0.1]);
   add(scene, BOX, std(0x1a1a1e, 0.6, 0.5), [DOOR2.x, 2.6, DOOR2.z - 0.05], [1.9, 0.12, 0.1]);
   const sign = neonSign('DEEPER', '#b26bff', 1.8, 0.45); sign.position.set(DOOR2.x, 3.05, DOOR2.z - 0.1); sign.rotation.y = Math.PI; scene.add(sign);
   // gang: donker beton, rode peertjes
   const tun = new THREE.Mesh(new THREE.BoxGeometry(2.4, 3, TUN_END - DOOR2.z), new THREE.MeshBasicMaterial({ map: wallTex, color: 0x4a3434, side: THREE.BackSide }));
-  tun.position.set(DOOR2.x, 1.5, (DOOR2.z + TUN_END) / 2); zone2.add(tun);
-  for (let z = DOOR2.z + 1.5; z < TUN_END; z += 2.6) add(zone2, SPH, glowMat(0xff3020), [DOOR2.x, 2.85, z], [0.06, 0.06, 0.06]);
+  tun.position.set(DOOR2.x, 1.5, (DOOR2.z + TUN_END) / 2); scene.add(tun);
+  for (let z = DOOR2.z + 1.5; z < TUN_END; z += 2.6) add(scene, SPH, glowMat(0xff3020), [DOOR2.x, 2.85, z], [0.06, 0.06, 0.06]);
   // de zaal zelf: alle zes de wanden één kaleidoscoop
-  const room2 = new THREE.Mesh(new THREE.BoxGeometry(Z2.w, Z2.h, Z2.d), tripMat);
+  const room2 = new THREE.Mesh(new THREE.BoxGeometry(Z2.w, Z2.h, Z2.d), [tripMat, tripMat, tripMat, tripMat, tripMat, new THREE.MeshBasicMaterial({ visible: false })]);
   room2.position.set(Z2.x, Z2.h / 2, Z2.z); zone2.add(room2);
+  // ingangswand (z=24) los, met een gat waar de gang binnenkomt; uv zoals de doos-wand, zodat de kaleidoscoop doorloopt
+  const tripFront = tripMat.clone(); tripFront.side = THREE.FrontSide; tripFront.uniforms = tripMat.uniforms;
+  const x0 = Z2.x - Z2.w / 2, x1 = Z2.x + Z2.w / 2, zw = Z2.z - Z2.d / 2;
+  for (const [a, b, c, d] of [[x0, 7.8, 0, Z2.h], [10.2, x1, 0, Z2.h], [7.8, 10.2, 3, Z2.h]]) {
+    const g = new THREE.PlaneGeometry(b - a, d - c), pos = g.attributes.position, uv = g.attributes.uv, cx = (a + b) / 2, cy = (c + d) / 2;
+    for (let i = 0; i < pos.count; i++) uv.setXY(i, 1 - (cx + pos.getX(i) - x0) / Z2.w, (cy + pos.getY(i)) / Z2.h);
+    const m = new THREE.Mesh(g, tripFront); m.position.set(cx, cy, zw); zone2.add(m);  // vlak kijkt naar +z, de zaal in
+  }
   // zwevende gloeiende vormen die meedeinen
   zone2.userData.shapes = [];
   for (let i = 0; i < 14; i++) {
     const geo = pick([new THREE.IcosahedronGeometry(0.5, 0), new THREE.TorusKnotGeometry(0.35, 0.1, 64, 8), new THREE.OctahedronGeometry(0.5, 0)]);
     const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL(Math.random(), 1, 0.6), wireframe: Math.random() < 0.6 }));
-    m.position.set(Z2.x + rnd(-6.5, 6.5), rnd(3.2, 4.6), Z2.z + rnd(-6.5, 6.5));  // boven hoofdhoogte m.userData.spin = rnd(-1, 1); m.userData.s = rnd(0.4, 0.9);
+    m.position.set(Z2.x + rnd(-6.5, 6.5), rnd(3.2, 4.6), Z2.z + rnd(-6.5, 6.5));  // boven hoofdhoogte
+    m.userData.spin = rnd(-1, 1); m.userData.s = rnd(0.4, 0.9);
     zone2.add(m); zone2.userData.shapes.push(m);
   }
   const l1 = new THREE.PointLight(0xb040ff, 2.2, 14, 1.2), l2 = new THREE.PointLight(0x30ffd0, 1.6, 14, 1.2);
@@ -1082,16 +1100,22 @@ function fillZone2() {  // vier dansers in de tweede zaal (alleen zichtbaar en b
   for (const d of zone2Dancers) dropDancer(d);
   zone2Dancers.length = 0;
   const ms = allModels().filter(M => !M.keep); if (!ms.length) return;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 11; i++) {
     const d = makeModelDancer(pick(ms), false);
-    const a = i * Math.PI / 2 + 0.4;
-    d.home.set(Z2.x + Math.cos(a) * 2.6, 0, Z2.z + Math.sin(a) * 2.6); d.face = Math.atan2(Z2.x - d.home.x, Z2.z - d.home.z);
+    const ring = i < 4 ? 2.6 : 5.2, a = i < 4 ? i * Math.PI / 2 + 0.4 : (i - 4) * TAU / 7 + 0.2;
+    d.home.set(Z2.x + Math.cos(a) * ring, 0, Z2.z + Math.sin(a) * ring); d.face = Math.atan2(Z2.x - d.home.x, Z2.z - d.home.z) + rnd(-0.6, 0.6);
     zone2.attach(d.root); zone2Dancers.push(d);
   }
 }
+// Losse onderdelen van de tweede zaal (z2/*.js) haken hier in: z2Hooks.push((dt, now) => ...).
+// Ze voegen hun objecten toe aan `zone2` (alleen getekend als de camera bij de deur of verder is).
+const z2Hooks = [];
+// Losse verbeteringen van de hoofdzaal (club/*.js) haken hier in: clubHooks.push((dt, now) => ...), elke frame.
+const clubHooks = [];
 function updateZone2(dt, now) {
-  zone2.visible = camera.position.z > DOOR2.z - 2.2;  // alleen tekenen als de camera bij de deur of erachter is
+  zone2.visible = camera.position.z > DOOR2.z - 4.5 && camera.position.x > 3;
   if (!zone2.visible) return;
+  for (const h of z2Hooks) { try { h(dt, now); } catch (e) { console.error('z2-hook', e); } }
   tripMat.uniforms.time.value = now; tripMat.uniforms.bass.value = pulse * 0.7 + energy * 0.3;
   for (const m of zone2.userData.shapes || []) { m.rotation.x += dt * m.userData.spin; m.rotation.y += dt * 0.6 * m.userData.spin; m.scale.setScalar(m.userData.s * (1 + 0.35 * pulse)); }
   for (const d of zone2Dancers) pose(d, beatPos, energy, dt);
@@ -1113,19 +1137,20 @@ function giveDrink(d, kind) {
   const g = new THREE.Group(), ws = new THREE.Vector3();
   hand.getWorldScale(ws);
   const k = Math.abs(ws.x);  // gespiegelde figuren hebben een negatieve schaal: anders staat het glas op z'n kop
+  const sz = d.M ? THREE.MathUtils.clamp(Math.abs(d.body.scale.y) * d.M.h / 1.75, 0.35, 1.3) : 1;  // kleine figuren (wormpjes) krijgen kleine spulletjes
   kind = kind || pick(['glas', 'glas', 'bier']);
   if (kind === 'glas') {  // cocktail met een lichtgevend drankje: valt op in het donker
     g.add(new THREE.Mesh(glassGeo, glassMat), new THREE.Mesh(drinkGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL(pick([0.95, 0.08, 0.55, 0.3, 0.8, 0.15]), 1, 0.6) })));
     g.children[1].position.y = -0.02;
-    g.scale.setScalar(1.7);
+    g.scale.setScalar(1.7 * sz);
   } else if (kind === 'bier') {
     const b = new THREE.Mesh(CYL, pick(bottleMat)); b.scale.set(0.03, 0.16, 0.03); g.add(b);
     const neck = new THREE.Mesh(CYL, b.material); neck.scale.set(0.013, 0.07, 0.013); neck.position.y = 0.11; g.add(neck);
-    g.scale.setScalar(1.4);
+    g.scale.setScalar(1.4 * sz);
   } else {  // sigaret: wit staafje met gloeiend puntje; rook komt van het puntje
     const c = new THREE.Mesh(cigGeo, new THREE.MeshBasicMaterial({ color: 0xeeeeee })); c.rotation.z = Math.PI / 2; g.add(c);
     const tip = new THREE.Mesh(tipGeo, new THREE.MeshBasicMaterial({ color: 0xff5a1a })); tip.position.x = 0.045; g.add(tip);
-    g.scale.setScalar(1.6 / k);
+    g.scale.setScalar(1.6 * sz / k);
     smokers.push({ d, tip, next: 0 });
   }
   // het handbot wijst naar de vingers (omlaag bij een hangende arm): glas omdraaien, in de handpalm achter de vingers
@@ -2120,11 +2145,11 @@ const SHOTS = {
     } },
   dj:         { w: 1, beats: 8, make: () => ({ side: pick([-1, 1]) }), at(s, u, t) { camPos.set(s.side * 1.1, 2.35, -9.9); camLook.set(-s.side * 1.5 + Math.sin(t * 0.3), 0.9, 0); camFov = 60 - 8 * ease(u); } },
 };
-const SHOT_KINDS = Object.keys(SHOTS);
+const shotKinds = () => Object.keys(SHOTS);  // dynamisch: club/*.js kunnen shots toevoegen (SHOTS.naam = {...})
 let shot = null;
 function startShot(kind, now) {
   if (kind === 'auto') {  // gewogen loting, nooit twee keer hetzelfde soort shot achter elkaar
-    const pool = SHOT_KINDS.filter(k => !shot || k !== shot.kind);
+    const pool = shotKinds().filter(k => !shot || k !== shot.kind);
     let r = Math.random() * pool.reduce((sum, k) => sum + SHOTS[k].w, 0);
     kind = pool.find(k => (r -= SHOTS[k].w) < 0) || pool[0];
   }
@@ -2173,7 +2198,7 @@ function randomizeAll() {
   const r = Math.random;
   S.count = 4 + Math.floor(r() * 15);
   S.cast = pick(['mix', 'mix', 'mix', 'pop', 'robot', 'alien', 'wizard']);
-  S.cam = r() < 0.7 ? 'auto' : pick(SHOT_KINDS);
+  S.cam = r() < 0.7 ? 'auto' : pick(shotKinds());
   S.strobe = pick(['uit', 'soms', 'soms', 'vaak']);
   S.smoke = Math.round(rnd(0.2, 1) * 20) / 20;
   S.mono = r() < 0.2;
@@ -2299,13 +2324,14 @@ function frame(nowMs) {
   }
   strobeLight.intensity = flash * 6;
   strobeMat.color.setScalar(flash);
-  if (bloom) bloom.strength = 0.5 + 0.35 * hit * dim + 0.35 * flash;
+  if (bloom) bloom.strength = (0.5 + 0.35 * hit * dim + 0.35 * flash) * (camera.position.z > TUN_END - 0.5 ? 0.55 : 1);  // zaal 2 is al fel
   if (feedback) {
-    feedback.enabled = S.fb > 0.01 || S.mirror;
+    const tripping = camera.position.z > TUN_END - 0.5;  // in de tweede zaal: alles laat sporen na en draait langzaam
+    feedback.enabled = S.fb > 0.01 || S.mirror || tripping;
     const u = feedback.material.uniforms;
-    u.amount.value = S.fb;
-    u.zoom.value = 1.02 + 0.012 * Math.sin(now * 0.21);
-    u.rotA.value = 0.006 * Math.sin(now * 0.13);
+    u.amount.value = tripping ? Math.max(S.fb, 0.4 + 0.1 * pulse) : S.fb;
+    u.zoom.value = (tripping ? 1.035 : 1.02) + 0.012 * Math.sin(now * 0.21);
+    u.rotA.value = (tripping ? 0.018 : 0.006) * Math.sin(now * 0.13);
     u.mirror.value = S.mirror ? 1 : 0;
   }
   if (grade) { grade.uniforms.time.value = now; grade.uniforms.mono.value = S.mono ? 1 : 0; }
@@ -2332,6 +2358,7 @@ function frame(nowMs) {
   updateSlug(dt, performance.now() / 1000, pulse);
   updateWorms(dt, performance.now() / 1000);
   updateZone2(dt, performance.now() / 1000);
+  for (const h of clubHooks) { try { h(dt, performance.now() / 1000); } catch (e) { console.error('club-hook', e); } }
   for (const d of poleDancers) d.mixer.update(dt);
   washMats.forEach((m, i) => m.color.copy(pal[i & 1]).multiplyScalar((0.25 + 0.45 * bands[i].v) * L.wash * dim));
   pillarLed.color.copy(pal[(beat >> 1) & 1]).multiplyScalar((0.2 + 0.8 * hit) * dim);
@@ -2388,7 +2415,7 @@ addEventListener('keydown', e => {
   if (k === 'x') $('btnAll').click();
   if (k === 'v') { const o = ['auto', 'tegels', 'fractal']; S.floor = o[(o.indexOf(S.floor) + 1) % 3]; syncUI(); save(); }
   if (k === 's') { const o = ['uit', 'soms', 'vaak']; S.strobe = o[(o.indexOf(S.strobe) + 1) % 3]; syncUI(); save(); }
-  if (k === 'c') { const o = ['auto', ...SHOT_KINDS]; S.cam = o[(o.indexOf(S.cam) + 1) % o.length]; syncUI(); save(); }
+  if (k === 'c') { const o = ['auto', ...shotKinds()]; S.cam = o[(o.indexOf(S.cam) + 1) % o.length]; syncUI(); save(); }
   if (k === ' ') shot = null;  // spatie: direct een ander shot
 });
 // Paneel en muiswijzer verdwijnen na 10 s zonder muisbeweging
@@ -2407,5 +2434,9 @@ buildClub();
 buildCast();
 requestAnimationFrame(frame);
 </script>
+<script src="z2/gang.js"></script>
+<script src="z2/dj.js"></script>
+<script src="z2/beeld.js"></script>
+<script src="z2/lasers.js"></script>
 </body>
 </html>
