@@ -657,8 +657,10 @@ let poleBVH = null, POLE_CLIP = null;
 new THREE.BVHLoader().load(POLE_BVH, r => { poleBVH = r; tryBakePole(); }, undefined, () => {});
 // Elke bron-botrichting wordt eerst op de rustrichting van het doelbot gelegd (T-pose vs A-pose),
 // daarna krijgt het doelbot dezelfde draaiing in wereldruimte als het bronbot. Gebakken naar een gewone clip.
+// de danseres: de heks (zodra die geladen is); de grepen worden op haar eigen skelet uitgerekend
+const poleModel = () => MODELS.wizard.find(M => /witch/.test(M.file));
 function tryBakePole() {
-  const M = MODELS.pop[0] || MODELS.wizard[0];
+  const M = poleModel();
   if (POLE_CLIP || !poleBVH || !M) return;
   const sb = poleBVH.skeleton.bones, sRoot = new THREE.Group();
   sRoot.add(sb[0]);
@@ -703,22 +705,85 @@ function tryBakePole() {
       p.t.quaternion.toArray(quats[j], i * 4);
     });
   }
-  // heup: rond het midden van haar baan (= de paal), hoogte boven de grond, geschaald naar het doelfiguur
+  // heup: hoogte boven de grond, geschaald naar het doelfiguur; eerst rond het midden van haar baan
   const cx = hipW.reduce((a, p) => a + p.x, 0) / n, cz = hipW.reduce((a, p) => a + p.z, 0) / n, ground = Math.min(...footMin);
-  const arm = tb.Hips.parent, pos = new Float32Array(n * 3);
-  hipW.forEach((p, i) => { const w = new THREE.Vector3((p.x - cx) * k, (p.y - ground) * k, (p.z - cz) * k); arm.worldToLocal(w); w.toArray(pos, i * 3); });
-  const tracks = pairs.map((p, j) => new THREE.QuaternionKeyframeTrack(p.t.name + '.quaternion', times, quats[j]));
-  tracks.push(new THREE.VectorKeyframeTrack('Hips.position', times, pos));
-  POLE_CLIP = new THREE.AnimationClip('Paaldans', clip.duration, tracks);
+  const arm = tb.Hips.parent, hipT = hipW.map(p => new THREE.Vector3((p.x - cx) * k, (p.y - ground) * k, (p.z - cz) * k));
+  const J = name => pairs.findIndex(p => p.t.name === name);
+  const setPose = i => {
+    pairs.forEach((p, j) => p.t.quaternion.fromArray(quats[j], i * 4));
+    tb.Hips.position.copy(arm.worldToLocal(hipT[i].clone()));
+    tgt.updateMatrixWorld(true);
+  };
+  // waar staat de paal? Waar haar hoog geheven handen het vaakst zijn (ze grijpt de paal boven haar hoofd)
+  const grips = [];
+  for (let i = 0; i < n; i++) {
+    setPose(i);
+    const head = tb.Head.getWorldPosition(v());
+    for (const h of [tb.LeftHand, tb.RightHand]) { const w = h.getWorldPosition(v()); if (w.y > head.y - 0.05) grips.push(w); }
+  }
+  const med = a => a.sort((x, y) => x - y)[Math.floor(a.length / 2)] || 0;
+  const px = med(grips.map(g => g.x)), pz = med(grips.map(g => g.z));
+  hipT.forEach(h => { h.x -= px; h.z -= pz; });  // paal = (0, 0) in clipruimte
+  // handen naar de paal trekken (twee-botten-IK) als ze er dichtbij zijn: dan grijpt ze hem echt vast
+  const ik = (upper, lower, hand, target) => {
+    const S = upper.getWorldPosition(v()), E = lower.getWorldPosition(v()), H = hand.getWorldPosition(v());
+    const a = S.distanceTo(E), b = E.distanceTo(H), d = Math.min(S.distanceTo(target), a + b - 1e-3);
+    const u = target.clone().sub(S).normalize(), side = E.clone().sub(S); side.sub(u.clone().multiplyScalar(side.dot(u)));
+    if (side.lengthSq() < 1e-8) return; side.normalize();
+    const al = Math.acos(THREE.MathUtils.clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1));
+    const E2 = S.clone().add(u.clone().multiplyScalar(a * Math.cos(al))).add(side.multiplyScalar(a * Math.sin(al)));
+    const turn = (bone, from, to) => {
+      const qd = q().setFromUnitVectors(from.normalize(), to.normalize()), w = bone.getWorldQuaternion(q()), pw = bone.parent.getWorldQuaternion(q());
+      bone.quaternion.copy(pw.invert().multiply(qd.multiply(w))); bone.updateMatrixWorld(true);
+    };
+    turn(upper, E.clone().sub(S), E2.clone().sub(S));
+    const E3 = lower.getWorldPosition(v()), H3 = hand.getWorldPosition(v());
+    turn(lower, H3.clone().sub(E3), target.clone().sub(E3));
+  };
+  const arms = [['LeftArm', 'LeftForeArm', 'LeftHand'], ['RightArm', 'RightForeArm', 'RightHand']].map(n3 => n3.map(nm => tb[nm]));
+  for (let i = 0; i < n; i++) {
+    setPose(i);
+    for (const [up, lo, ha] of arms) {
+      const H = ha.getWorldPosition(v()), r = Math.hypot(H.x, H.z);
+      if (r < 1e-4) continue;
+      const onPole = new THREE.Vector3(H.x / r * 0.05, H.y, H.z / r * 0.05);  // handpalm tegen de paal
+      // kan de arm daar bij? Anders het grijppunt langs de paal schuiven; lukt ook dat niet: loslaten
+      const S = up.getWorldPosition(v()), reach = 0.97 * (S.distanceTo(lo.getWorldPosition(v())) + lo.getWorldPosition(v()).distanceTo(H));
+      const hor = Math.hypot(S.x - onPole.x, S.z - onPole.z);
+      const w = (1 - THREE.MathUtils.smoothstep(r, 0.45, 0.7)) * (1 - THREE.MathUtils.smoothstep(hor, reach * 0.85, reach));
+      if (w <= 0) continue;
+      const dy = Math.sqrt(Math.max(0, reach * reach - hor * hor));
+      onPole.y = THREE.MathUtils.clamp(onPole.y, S.y - dy, S.y + dy);
+      ik(up, lo, ha, H.clone().lerp(onPole, w));
+    }
+    pairs.forEach((p, j) => p.t.quaternion.toArray(quats[j], i * 4));
+  }
+  // naadloos herhalen: zoek een begin en eind die op elkaar lijken en laat het laatste stuk in het begin overvloeien
+  const K = 24, poseDist = (a, b) => { let s = hipT[a].distanceTo(hipT[b]) * 4; pairs.forEach((p, j) => { const d = Math.abs(quats[j][a * 4] * quats[j][b * 4] + quats[j][a * 4 + 1] * quats[j][b * 4 + 1] + quats[j][a * 4 + 2] * quats[j][b * 4 + 2] + quats[j][a * 4 + 3] * quats[j][b * 4 + 3]); s += 1 - Math.min(1, d); }); return s; };
+  let best = [K, n - 1, 1e9];
+  for (let a = K; a < n * 0.15; a += 2) for (let b = Math.floor(n * 0.85); b < n; b += 2) { const d = poseDist(a, b); if (d < best[2]) best = [a, b, d]; }
+  const [s0, e0] = best, L = e0 - s0, outT = new Float32Array(L), outQ = pairs.map(() => new Float32Array(L * 4)), outP = new Float32Array(L * 3);
+  const qa = q(), qb = q(), va = v();
+  for (let f = 0; f < L; f++) {
+    const src = s0 + f, w = f >= L - K ? (f - (L - K) + 1) / (K + 1) : 0, alt = src - L;  // alt = hetzelfde moment één lus eerder
+    outT[f] = f / fps;
+    pairs.forEach((p, j) => { qa.fromArray(quats[j], src * 4); if (w > 0) qa.slerp(qb.fromArray(quats[j], alt * 4), w); qa.toArray(outQ[j], f * 4); });
+    va.copy(hipT[src]); if (w > 0) va.lerp(hipT[alt], w);
+    arm.worldToLocal(va.clone()).toArray(outP, f * 3);
+  }
+  const tracks = pairs.map((p, j) => new THREE.QuaternionKeyframeTrack(p.t.name + '.quaternion', outT, outQ[j]));
+  tracks.push(new THREE.VectorKeyframeTrack('Hips.position', outT, outP));
+  POLE_CLIP = new THREE.AnimationClip('Paaldans', L / fps, tracks);
   buildPoleDancer();
 }
 let poleDancer = null;
 function buildPoleDancer() {
   if (poleDancer) { dropDancer(poleDancer); poleDancer = null; }
   if (!POLE_CLIP) return;
-  const M = MODELS.wizard.find(M => /witch/.test(M.file)) || MODELS.pop[0];
+  const M = poleModel();
   if (!M) return;
   poleDancer = makeModelDancer(M, false);
+  poleDancer.body.scale.setScalar(1);  // de grepen om de paal zijn op ware grootte berekend
   poleDancer.root.position.set(POLE.x, 0.4, POLE.z);
   poleDancer.cur = poleDancer.mixer.clipAction(POLE_CLIP); poleDancer.cur.play();
 }
