@@ -106,6 +106,7 @@ const TAU = Math.PI * 2;
 // --- Instellingen ---
 const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'soms', smoke: 0.6, mono: false, auto: 0, fb: 0, mirror: false, floor: 'auto' };
 try { Object.assign(S, JSON.parse(localStorage.getItem('discoclub') || '{}')); } catch (e) {}
+if (!S.sporenUitWillekeur) { S.fb = 0; S.sporenUitWillekeur = 1; }  // eenmalig: sporen die de willekeur ooit bewaarde weer uit (horen bij zaal 2)
 if (!['uit', 'soms', 'vaak'].includes(S.strobe)) S.strobe = S.strobe === 'vol' ? 'vaak' : 'soms';
 function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } catch (e) {} }
 
@@ -2297,7 +2298,7 @@ function randomizeAll() {
   S.strobe = pick(['uit', 'soms', 'soms', 'vaak']);
   S.smoke = Math.round(rnd(0.2, 1) * 20) / 20;
   S.mono = r() < 0.2;
-  S.fb = r() < 0.35 ? Math.round(rnd(0.6, 0.9) * 100) / 100 : 0;
+  S.fb = 0;  // sporen (dubbele mensen) horen bij de tweede zaal; in de hoofdzaal alleen via de schuif
   S.mirror = r() < 0.12;
   S.floor = pick(['auto', 'auto', 'tegels', 'fractal']);
   nextCue();
