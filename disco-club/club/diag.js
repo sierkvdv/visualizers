@@ -65,56 +65,50 @@
   setTimeout(tick, 500);
 })();
 
-// Testronde (?diag=bench): zet om de paar seconden één zwaar onderdeel uit en meet de beelden per seconde,
-// zodat de lichtste stand op echte cijfers van dat apparaat gebouwd wordt. Stuurt per stap en aan het eind een regel.
+// Testronde (?diag=bench, en op een tv gewoon ?diag): vaste camera en vaste vloer, zodat elke stap hetzelfde beeld meet.
+// Meet een paar combinaties van de tv-stand, kiest de lichtste die vloeiend loopt (>= 28 fps) en bewaart die op dit apparaat (S.tv).
 (() => {
   const TVB = /Android TV|GoogleTV|SmartTV|SMART-TV|Tizen|Web0S|webOS|AFT[A-Z]|BRAVIA|CrKey/i.test(navigator.userAgent);
   if (!/[?&]diag=bench\b/.test(location.search) && !(TVB && /[?&]diag\b/.test(location.search))) return;
+  const K = window.clubKwaliteit;
+  if (!K || !K.tvZet) return;
   const box = document.createElement('div');
   box.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;font:14px monospace;color:#0f0;background:rgba(0,0,0,.75);padding:6px 8px;pointer-events:none';
   document.body.appendChild(box);
-  const stuur = d => { new Image().src = 'diag?d=' + encodeURIComponent(JSON.stringify(d)); };
-  const kern = { composer: composer.render.bind(composer), PR };
-  // tweede ronde (na de lampen): figuren weg = bovengrens van wat lichtere figuren kunnen opleveren; lambert = goedkoper materiaal
-  const T = { bundels: false, fractal: false, res: false, figurenWeg: false };
-  const weg = [];
-  clubHooks.push(() => {  // elk beeld opnieuw, want de kern zet deze dingen zelf weer aan
-    if (T.bundels) { for (const s of spots) s.beam.g.visible = false; for (const h of heads) h.beam.g.visible = false; }
-    if (T.fractal) { wallFx.visible = false; floorFx.visible = false; tiles.visible = true; }
-    if (T.figurenWeg) scene.traverse(o => { if (o.isSkinnedMesh && o.visible) { o.visible = false; weg.push(o); } });
-  });
-  const K = window.clubKwaliteit;
-  function zet(t) {
-    Object.assign(T, { bundels: false, fractal: false, res: false, figurenWeg: false }, t);
-    for (const o of weg.splice(0)) o.visible = true;
-    if (!T.bundels) { for (const s of spots) s.beam.g.visible = true; for (const h of heads) h.beam.g.visible = true; }
-    if (K && K.goedkoop) { K.goedkoop('figuren', !!t.lamFig); K.goedkoop('kamer', !!t.lamKamer); }
-    PR = T.res ? Math.min(kern.PR, Math.sqrt(3e5 / (innerWidth * innerHeight))) : kern.PR; resize();
-  }
-  const STAPPEN = [['basis', {}], ['figuren weg', { figurenWeg: true }], ['figuren lambert', { lamFig: true }], ['kamer lambert', { lamKamer: true }],
-    ['alles lambert', { lamFig: true, lamKamer: true }], ['zonder bundels', { bundels: true }], ['zonder fractal', { fractal: true }],
-    ['0,3 MP', { res: true }], ['basis', {}]];
-  const uit = {}, t0 = performance.now();
+  const stuur = x => { new Image().src = 'diag?d=' + encodeURIComponent(JSON.stringify(x)); };
+  SHOTS.testronde = { w: 0, beats: 1e9, make: () => ({}), at() { camPos.set(8.6, 3.3, 8.6); camLook.set(0, 1.0, -1.2); camFov = 60; } };  // overzicht: vloer, dj, palen, publiek
+  const STAPPEN = [
+    ['basis', { lambert: false, minder: false, bundels: true }],
+    ['lambert', { lambert: true, minder: false, bundels: true }],
+    ['lambert + minder figuren', { lambert: true, minder: true, bundels: true }],
+    ['lambert + zonder bundels', { lambert: true, minder: false, bundels: false }],
+    ['lambert + minder + zonder bundels', { lambert: true, minder: true, bundels: false }],
+    ['basis', { lambert: false, minder: false, bundels: true }]];
+  const VOORKEUR = [1, 2, 3, 4];  // eerst wat het meest op het origineel lijkt
   const fps = ms => new Promise(r => { let n = 0; const a = performance.now(); const f = () => { n++; if (performance.now() - a < ms) requestAnimationFrame(f); else r(Math.round(n / (performance.now() - a) * 10000) / 10); }; requestAnimationFrame(f); });
   const wacht = ms => new Promise(r => setTimeout(r, ms));
+  const uit = [], t0 = performance.now(), oud = { cam: S.cam, floor: S.floor };
   (async () => {
     while (typeof LAAD !== 'undefined' && LAAD.klaar < LAAD.totaal && performance.now() - t0 < 60000) { box.textContent = 'testronde: laden ' + LAAD.klaar + '/' + LAAD.totaal; await wacht(500); }
-    if (window.clubKwaliteit) clubKwaliteit.zet('minimaal');  // vaste stand (tv), geen bewaker die meeschakelt
+    K.zet('minimaal');  // vaste stand, geen bewaker die meeschakelt
+    S.cam = 'testronde'; S.floor = 'tegels';
     await wacht(3000);
-    kern.PR = PR;
     for (let i = 0; i < STAPPEN.length; i++) {
-      const [naam, t] = STAPPEN[i];
+      const [naam, cfg] = STAPPEN[i];
       box.textContent = `testronde ${i + 1}/${STAPPEN.length}: ${naam}…`;
-      zet(t);
-      await wacht(t.lamFig || t.lamKamer || i === 0 ? 5000 : 2500);  // ander materiaal = shaders opnieuw bouwen
-      const f = await fps(5000);
-      uit[naam + (uit[naam] !== undefined ? ' 2' : '')] = f;
-      stuur({ fase: 'bench', stap: naam, fps: f, cv: renderer.domElement.width + 'x' + renderer.domElement.height });
+      K.tvZet(cfg);
+      await wacht(5000);  // ander materiaal of andere bezetting: shaders en figuren opnieuw
+      const f = await fps(6000);
+      uit.push(f);
+      stuur({ fase: 'bench3', stap: naam, fps: f, cv: renderer.domElement.width + 'x' + renderer.domElement.height });
     }
-    zet({});
+    let keus = VOORKEUR.find(i => uit[i] >= 28);
+    if (keus === undefined) keus = VOORKEUR.reduce((a, b) => (uit[b] > uit[a] ? b : a));
+    K.tvZet(STAPPEN[keus][1]);
+    S.cam = oud.cam === 'testronde' ? 'auto' : oud.cam; S.floor = oud.floor; save();
+    K.zet('auto');
     const gl = renderer.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
-    stuur({ fase: 'bench-klaar', gpu: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '?', ua: navigator.userAgent.slice(0, 90), uit });
-    box.textContent = 'testronde klaar, verstuurd — dank je!';
-    if (window.clubKwaliteit) clubKwaliteit.zet('auto');
+    stuur({ fase: 'bench3-klaar', gpu: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '?', uit: Object.fromEntries(STAPPEN.map(([n], i) => [n + (i === 5 ? ' 2' : ''), uit[i]])), gekozen: STAPPEN[keus][0] });
+    box.textContent = `klaar: gekozen "${STAPPEN[keus][0]}" (${uit[keus]} fps), onthouden — dank je!`;
   })();
 })();

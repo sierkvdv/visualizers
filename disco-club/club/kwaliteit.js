@@ -14,6 +14,9 @@
   const KEUZES = ['auto', 'hoog', 'midden', 'laag', 'minimaal'];
   const TV = /Android TV|GoogleTV|SmartTV|SMART-TV|Tizen|Web0S|webOS|AFT[A-Z]|BRAVIA|CrKey/i.test(navigator.userAgent);
   const isLaag = () => KW.stand === 'laag' || KW.stand === 'minimaal';  // alles wat laag doet, doet minimaal ook
+  // minimaal-instellingen per apparaat (S.tv, gekozen door de testronde ?diag op de tv): goedkoper materiaal, minder figuren, bundels
+  const TVK = Object.assign({ lambert: true, minder: false, bundels: true }, S.tv || {});
+  const minder = () => KW.stand === 'minimaal' && TVK.minder;
   if (!KEUZES.includes(S.kwaliteit)) S.kwaliteit = 'auto';
   const PLAFOND = MOBIEL ? 'midden' : 'hoog';  // de bewaker gaat op mobiel nooit hoger
   const BODEM = MOBIEL ? 'minimaal' : 'midden';     // en op de pc nooit lager: de spiegelvloer blijft (laag kan nog met de hand)
@@ -115,23 +118,23 @@
   const kern = { buildCast, buildWalkers, buildCrowd, fillZone2 };
   buildCast = function () {
     const n = S.count;
-    if (isLaag()) S.count = Math.min(n, 8);
+    if (isLaag()) S.count = Math.min(n, minder() ? 5 : 8);
     try { kern.buildCast(); } finally { S.count = n; }
   };
   buildWalkers = function () {
     kern.buildWalkers();
-    if (isLaag()) for (const w of walkers.splice(2)) dropDancer(w);
+    if (isLaag()) for (const w of walkers.splice(minder() ? 1 : 2)) dropDancer(w);
   };
   buildCrowd = function () {
     const plekken = CROWD_SPOTS;
-    if (isLaag()) CROWD_SPOTS = plekken.filter((p, i) => i % 2 === 0);  // index 4 (achter de bar) = barman blijft
+    if (isLaag()) CROWD_SPOTS = plekken.filter((p, i) => i % (minder() ? 4 : 2) === 0);  // index 4 (achter de bar) = barman blijft
     try { kern.buildCrowd(); } finally { CROWD_SPOTS = plekken; }
     if (!isLaag()) return;
-    crowd.filter(d => d.yOff !== undefined).forEach((d, i) => { if (i % 2) { dropDancer(d); crowd.splice(crowd.indexOf(d), 1); } });  // lounge
+    crowd.filter(d => d.yOff !== undefined).forEach((d, i) => { if (minder() ? i % 3 : i % 2) { dropDancer(d); crowd.splice(crowd.indexOf(d), 1); } });  // lounge
   };
   fillZone2 = function () {
     kern.fillZone2();
-    if (isLaag()) for (const d of zone2Dancers.splice(6)) dropDancer(d);
+    if (isLaag()) for (const d of zone2Dancers.splice(minder() ? 4 : 6)) dropDancer(d);
   };
 
   // --- kleinere texturen: telefoon of zelf gekozen midden/laag (auto op de pc nooit, dan kan hij terug naar hoog) ---
@@ -181,6 +184,18 @@
   const kernCamera = updateCamera;
   updateCamera = function (now) { kernCamera(now); knip(); };
 
+  // --- lichtbundels (spots + moving heads); in minimaal eventueel uit (per beeld, de kern zet ze zelf weer aan) ---
+  function bundels(aan) { for (const p of spots) p.beam.g.visible = aan; for (const h of heads) h.beam.g.visible = aan; }
+  clubHooks.push(() => { if (KW.stand === 'minimaal' && !TVK.bundels) bundels(false); });
+  function tvZet(cfg) {  // minimaal-instellingen wijzigen en op dit apparaat bewaren
+    const was = TVK.minder;
+    Object.assign(TVK, cfg); S.tv = Object.assign({}, TVK); save();
+    if (KW.stand !== 'minimaal') return;
+    goedkoop('figuren', TVK.lambert); goedkoop('kamer', TVK.lambert);
+    if (TVK.bundels) bundels(true);
+    if (was !== TVK.minder && allModels().length) { rebuildAll(); fillZone2(); goedkoop(); }
+  }
+
   // --- stand toepassen ---
   let bolNu = false;  // laag: één losse bol-opname (bij de start en als alles geladen is), anders blijft de bol zwart
   function zetStand(s) {
@@ -206,7 +221,9 @@
     resize();
     if (laag) bolNu = true;
     if (mini) lampen(true);
-    if ((was === 'laag' || was === 'minimaal') !== laag && allModels().length) { rebuildAll(); fillZone2(); }  // bezetting opnieuw verdelen
+    goedkoop('figuren', mini && TVK.lambert); goedkoop('kamer', mini && TVK.lambert);
+    if (!(mini && !TVK.bundels)) bundels(true);
+    if (((was === 'laag' || was === 'minimaal') !== laag || ((was === 'minimaal') !== mini && TVK.minder)) && allModels().length) { rebuildAll(); fillZone2(); goedkoop(); }  // bezetting opnieuw verdelen
     toonKeuze();
   }
   addEventListener('resize', () => { if (KW.stand !== 'hoog') { PR = prVoor(KW.stand); resize(); } });  // laag/midden hangen van de schermmaat af
@@ -341,6 +358,7 @@
     get keuze() { return S.kwaliteit; },  // auto / hoog / midden / laag
     get bewaker() { return bewaker; },
     goedkoop,                             // clubKwaliteit.goedkoop('figuren' | 'kamer', true/false)
+    get tv() { return Object.assign({}, TVK); }, tvZet,  // minimaal-instellingen van dit apparaat
     zet: kies,                            // clubKwaliteit.zet('minimaal'); 'auto' zet de bewaker weer aan
   };
 })();
