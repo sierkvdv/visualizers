@@ -304,7 +304,7 @@
   ];
   const rokers = [];
   let rokersMade = false;
-  const plain = () => allModels().filter(M => !M.keep && !SEXY.test(M.file));  // geen Rick, liefst geen danseressen
+  const plain = () => allModels().filter(M => !M.keep && !SEXY.test(M.file) && M.type !== 'alien');  // geen Rick, liefst geen danseressen; aliens zijn te breed voor de gang
   function makeRokers() {  // één keer, zodra de figuren en handelingen geladen zijn
     rokersMade = true;
     let ms = plain();
@@ -319,6 +319,23 @@
       giveDrink(d, 'sigaret');  // linkerhand: bij Stand_and_Drink gaat die naar de mond = trekje
       rokers.push(d);
     });
+  }
+
+  // niet in de muur: na de houding de botten meten en de roker zo nodig van de wand af schuiven (alleen weg van de muur,
+  // nooit terug, dus na een paar tellen staat hij stil op een plek waar ook zijn verste beweging vrij blijft)
+  // straal van het vlees rond elk bot (m, bij 1,75 m lengte): de romp is breder dan een hand
+  const BOTTEN = { Hips: 0.2, Spine02: 0.2, Head: 0.14, LeftShoulder: 0.12, RightShoulder: 0.12, LeftForeArm: 0.07, RightForeArm: 0.07,
+                   LeftHand: 0.06, RightHand: 0.06, LeftLeg: 0.08, RightLeg: 0.08, LeftFoot: 0.08, RightFoot: 0.08 };
+  const wv = new THREE.Vector3();
+  function wandvrij(d) {
+    if (!d.wb) { d.wb = []; d.body.traverse(o => { if (BOTTEN[o.name]) d.wb.push(o); }); }
+    if (!d.wb.length) return;
+    d.root.updateMatrixWorld(true);
+    const k = Math.abs(d.body.scale.y) * (d.M ? d.M.h : 1.75) / 1.75;
+    let lo = Infinity, hi = -Infinity;
+    for (const b of d.wb) { b.getWorldPosition(wv); const r = BOTTEN[b.name] * k + 0.03; lo = Math.min(lo, wv.x - r); hi = Math.max(hi, wv.x + r); }
+    const dx = Math.max(0, X0 - lo) - Math.max(0, hi - X1);
+    if (Math.abs(dx) > 0.002) { d.px = (d.px || 0) + dx; d.root.position.x += dx; }
   }
 
   // --- per frame: alles op de muziek ---
@@ -380,7 +397,7 @@
   (typeof clubHooks !== 'undefined' ? clubHooks : z2Hooks).push((dt, now) => {
     if (!rokersMade && ACTS.Stand_and_Chat && (plain().length >= 2 || (now > 20 && allModels().some(M => !M.keep)))) makeRokers();
     const near = camera.position.z > 0;  // achter in de zaal zie je de gang niet: rokers niet tekenen en niet animeren
-    for (const d of rokers) { d.root.visible = near; if (near) pose(d, beatPos, energy, dt); }
+    for (const d of rokers) { d.root.visible = near; if (near) { pose(d, beatPos, energy, dt); wandvrij(d); } }
     animate(dt, now);
   });
   animate(0, 0);  // beginstand vóór de eerste frame
