@@ -114,7 +114,18 @@ const MOBIEL = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|i
 const KW = { stand: 'hoog', schaduw: 1, bol: 3, spiegel: true, imag: 3 };  // schaduw/bol/imag: om de hoeveel beelden (0 = nooit)
 
 // --- Scène ---
-const renderer = new THREE.WebGLRenderer({ antialias: !MOBIEL });  // kan alleen hier; telefoons houden de FXAA van 'grade'
+// Telefoons: botstanden als uniforms i.p.v. een float-textuur per figuur. Die textuur gaat elke render opnieuw naar de GPU
+// (43 figuren x spiegel/bol = ~100 uploads per beeld); op iPhone-Safari is dat traag. three r128 kiest dit alleen bij het
+// aanmaken (vertexTextures), dus de context meldt dan even 0 vertex-textuureenheden. Antialias kan ook alleen hier.
+const renderer = (() => {
+  if (!MOBIEL) return new THREE.WebGLRenderer({ antialias: true });
+  const cv = document.createElement('canvas'), attrs = { alpha: false, depth: true, stencil: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' };
+  const ctx = cv.getContext('webgl2', attrs) || cv.getContext('webgl', attrs);
+  if (!ctx) return new THREE.WebGLRenderer({ antialias: false });
+  const gp = ctx.getParameter;
+  ctx.getParameter = function (p) { return p === 35660 ? 0 : gp.call(this, p); };  // MAX_VERTEX_TEXTURE_IMAGE_UNITS
+  try { return new THREE.WebGLRenderer({ canvas: cv, context: ctx }); } finally { ctx.getParameter = gp; }
+})();
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = false;  // één keer per frame, niet bij elke spiegel- en bol-opname opnieuw
