@@ -576,18 +576,19 @@ function updateSmoke(dt) {
 // Rookmachines: kastjes op de vloer die bij een climax (en om de 32 tellen) een straal rook de zaal in blazen
 const FOGGERS = [[-2.6, -6.25, 0], [2.6, -6.25, 0], [-4, 6.8, Math.PI], [4, 6.8, Math.PI]].map(([x, z, ry]) => ({ x, z, dir: new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry)) }));
 const fogPool = [];
-for (let i = 0; i < 90; i++) {
+for (let i = 0; i < 180; i++) {  // laag (club/kwaliteit.js) houdt de helft over
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex[i % 3], color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, rotation: rnd(0, TAU) }));
   sp.visible = false; scene.add(sp);
   fogPool.push({ sp, v: new THREE.Vector3(), age: 0, life: 0, s0: 0, lit: new THREE.Color() });
 }
 let fogQueue = [], lastFogBeat = -99;
-function fireFog(m, dur = 1.6) {  // een stoot van ~1,6 s: elke ~0,12 s een wolkje
-  for (let t = 0; t < dur; t += 0.12) fogQueue.push({ m, at: performance.now() / 1000 + t });
+function fireFog(m, dur = 2.6) {  // een stoot van ~2,6 s: elke ~0,09 s een wolkje
+  for (let t = 0; t < dur; t += 0.09) fogQueue.push({ m, at: performance.now() / 1000 + t });
 }
 function updateFog(dt, beat, energy) {
-  if (beat !== lastFogBeat && beat % 32 === 16) { const k = 1 + Math.floor(Math.random() * 2); for (let i = 0; i < k; i++) fireFog(pick(FOGGERS)); }
-  if (beat !== lastFogBeat && energy > 0.75 && Math.random() < 0.04) fireFog(pick(FOGGERS), 1.0);
+  // elke 16 tellen 2-3 machines tegelijk, en op hoge energie vaker een extra stoot
+  if (beat !== lastFogBeat && beat % 16 === 8) { const k = 2 + Math.floor(Math.random() * 2); for (const m of FOGGERS.slice().sort(() => Math.random() - 0.5).slice(0, k)) fireFog(m); }
+  if (beat !== lastFogBeat && energy > 0.65 && Math.random() < 0.08) fireFog(pick(FOGGERS), 1.6);
   lastFogBeat = beat;
   const now = performance.now() / 1000;
   fogQueue = fogQueue.filter(q => {
@@ -595,9 +596,9 @@ function updateFog(dt, beat, energy) {
     const f = fogPool.find(f => !f.sp.visible);
     if (f) {
       const m = q.m;
-      f.sp.visible = true; f.age = 0; f.life = rnd(6, 10); f.s0 = rnd(0.8, 1.2); f.green = false;
+      f.sp.visible = true; f.age = 0; f.life = rnd(8, 13); f.s0 = rnd(0.9, 1.3); f.green = false;
       f.sp.position.set(m.x + m.dir.x * 0.3, 0.35, m.z + m.dir.z * 0.3);
-      f.v.copy(m.dir).multiplyScalar(rnd(3.5, 5)).add(new THREE.Vector3(rnd(-0.6, 0.6), rnd(0.1, 0.5), rnd(-0.6, 0.6)));
+      f.v.copy(m.dir).multiplyScalar(rnd(4, 6)).add(new THREE.Vector3(rnd(-0.6, 0.6), rnd(0.1, 0.5), rnd(-0.6, 0.6)));
     }
     return false;
   });
@@ -607,7 +608,7 @@ function updateFog(dt, beat, energy) {
     if (f.age > f.life) { f.sp.visible = false; continue; }
     f.v.multiplyScalar(Math.exp(-dt * 1.4));  // remt af en blijft laag hangen
     f.sp.position.addScaledVector(f.v, dt);
-    const sc = f.s0 + f.age * 1.4;
+    const sc = f.s0 + f.age * 1.55;
     f.sp.scale.set(sc * 1.4, sc, 1);
     const p = f.sp.position;
     f.lit.setRGB(0.05, 0.045, 0.06);
@@ -616,8 +617,8 @@ function updateFog(dt, beat, energy) {
     if (f.green) f.lit.setRGB(0.12, 0.42, 0.05);  // boer van de slak
     const fade = Math.min(1, f.age * 3) * (1 - f.age / f.life);
     const peak = Math.max(f.lit.r, f.lit.g, f.lit.b);
-    if (peak > 0.3) f.lit.multiplyScalar(0.3 / peak);  // nooit een witte muur onder een felle spot
-    f.sp.material.color.copy(f.lit).multiplyScalar(fade * 0.3 * (0.4 + S.smoke));
+    if (peak > 0.3) f.lit.multiplyScalar(0.3 / peak);  // nooit een witte muur onder een felle spot (meer wolkjes = al voller)
+    f.sp.material.color.copy(f.lit).multiplyScalar(fade * 0.27 * (0.4 + S.smoke));
   }
 }
 

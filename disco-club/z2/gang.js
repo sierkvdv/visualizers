@@ -304,11 +304,11 @@
   ];
   const rokers = [];
   let rokersMade = false;
-  const plain = () => allModels().filter(M => !M.keep && !SEXY.test(M.file) && M.type !== 'alien');  // geen Rick, liefst geen danseressen; aliens zijn te breed voor de gang
+  // alleen gewone mensen: aliens zijn te breed voor de gang en de hoedrand van tovenaar/heks steekt door de muur (geen terugval naar andere figuren)
+  const plain = () => allModels().filter(M => !M.keep && /pop-1|man-1/.test(M.file));
   function makeRokers() {  // één keer, zodra de figuren en handelingen geladen zijn
     rokersMade = true;
     let ms = plain();
-    if (!ms.length) ms = allModels().filter(M => !M.keep);
     ms = ms.slice().sort(() => Math.random() - 0.5);
     SPOTS.forEach((s, i) => {
       const d = makeModelDancer(ms[i % ms.length], true);
@@ -395,7 +395,7 @@
   // de gang is door de deur ook vanuit de zaal te zien: elke frame bijwerken (clubHooks), niet alleen als zone2 aan staat
   // rokers wachten tot er twee gewone figuren zijn (of 20 s), anders zou het eerst geladen figuur (soms Rick) het worden
   (typeof clubHooks !== 'undefined' ? clubHooks : z2Hooks).push((dt, now) => {
-    if (!rokersMade && ACTS.Stand_and_Chat && (plain().length >= 2 || (now > 20 && allModels().some(M => !M.keep)))) makeRokers();
+    if (!rokersMade && ACTS.Stand_and_Chat && plain().length && (plain().length >= 2 || now > 30)) makeRokers();  // één soort mens mag ook: herkleurd zijn het twee anderen
     const near = camera.position.z > 0;  // achter in de zaal zie je de gang niet: rokers niet tekenen en niet animeren
     for (const d of rokers) { d.root.visible = near; if (near) { pose(d, beatPos, energy, dt); wandvrij(d); } }
     animate(dt, now);
