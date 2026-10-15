@@ -286,7 +286,15 @@ scene.add(ambient);
 
 // Dansvloer: spiegelende ondergrond, daarboven lichtgevende tegels en een laag die de schaduwen opvangt
 let mirror;
-if (THREE.Reflector) mirror = new THREE.Reflector(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), { textureWidth: 1024, textureHeight: 1024, color: 0x6a6a78, clipBias: 0.003 });
+if (THREE.Reflector) {
+  mirror = new THREE.Reflector(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), { textureWidth: 512, textureHeight: 512, color: 0x55555f, clipBias: 0.003 });
+  // geen perfecte spiegel: de reflectie wordt zacht vervaagd (5x5 monsters), zoals een glimmende maar niet gepoetste clubvloer
+  mirror.material.fragmentShader = mirror.material.fragmentShader.replace('vec4 base = texture2DProj( tDiffuse, vUv );',
+    `vec2 ruv = vUv.xy / vUv.w; vec4 base = vec4(0.0);
+     for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) base += texture2D(tDiffuse, ruv + vec2(float(i), float(j)) * 0.0045);
+     base /= 25.0;`);
+  mirror.material.needsUpdate = true;
+}
 else mirror = new THREE.Mesh(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x08080c, roughness: 0.6 }));
 mirror.rotation.x = -Math.PI / 2;
 scene.add(mirror);
@@ -987,6 +995,21 @@ function updateSlug(dt, now, pulse) {
   const squash = 0.035 * Math.sin(slugT * 3.2) + 0.05 * pulse + 0.18 * b;
   slug.wob.scale.set(1 + squash * 0.6, 1 + squash, 1 - squash * 0.3);
   slugLight.position.set(p.x, 2.2, p.z); slugLight.intensity = 3.5 * b;
+  // niemand loopt door de slak heen (voetafdruk ~1,8 x 1,6 m): wie binnen 2,1 m komt, wordt opzij geduwd
+  const SLUG_R = 2.1, nudge = d => {
+    if (!d || !d.root || !d.root.visible) return;
+    const q = d.root.position, dx = q.x - p.x, dz = q.z - p.z, dist = Math.hypot(dx, dz);
+    if (dist >= SLUG_R || dist < 1e-3) return;
+    const push = SLUG_R - dist, nx = dx / dist, nz = dz / dist;
+    if (d.walking || walkers.includes(d) || worms.includes(d)) { q.x += nx * push; q.z += nz * push; }  // lopers zelf verplaatsen
+    else if (d.type === 'model') { d.px = (d.px || 0) + nx * push; d.pz = (d.pz || 0) + nz * push; }  // dansers/publiek: via hun duw-offset
+    else { d.home.x += nx * push; d.home.z += nz * push; }  // gebouwde figuren
+  };
+  for (const d of walkers) nudge(d);
+  for (const d of worms) nudge(d);
+  for (const d of dancers) nudge(d);
+  for (const d of crowd) nudge(d);
+  if (shot && shot.kind === 'trip' && shot.d) { shot.d.walking = true; nudge(shot.d); }  // de loper van het trip-shot
   // slijmspoor: oplichtende groene plekken die langzaam vervagen
   if (p.distanceTo(lastSlime) > 0.45) {
     lastSlime.copy(p);
