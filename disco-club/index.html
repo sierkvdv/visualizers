@@ -2235,12 +2235,18 @@ const SHOTS = {
 };
 const shotKinds = () => Object.keys(SHOTS);  // dynamisch: club/*.js kunnen shots toevoegen (SHOTS.naam = {...})
 let shot = null;
+// de trip naar zaal 2 is het pronkstuk: niet alleen bij loting (3% per wissel), maar vast na ~45 s en daarna minstens elke 2 minuten
+const TRIP_ELKE = 120;
+let lastTrip = performance.now() / 1000 - TRIP_ELKE + 45;
 function startShot(kind, now) {
+  const nu = performance.now() / 1000;
+  if (kind === 'auto' && SHOTS.trip && (!shot || shot.kind !== 'trip') && nu - lastTrip > TRIP_ELKE) kind = 'trip';
   if (kind === 'auto') {  // gewogen loting, nooit twee keer hetzelfde soort shot achter elkaar
     const pool = shotKinds().filter(k => !shot || k !== shot.kind);
     let r = Math.random() * pool.reduce((sum, k) => sum + SHOTS[k].w, 0);
     kind = pool.find(k => (r -= SHOTS[k].w) < 0) || pool[0];
   }
+  if (kind === 'trip') lastTrip = nu;
   if (shot && shot.cleanup) shot.cleanup();
   const def = SHOTS[kind];
   shot = { kind, def, b0: beatPos, t0: now, beats: def.beats, ...def.make() };
