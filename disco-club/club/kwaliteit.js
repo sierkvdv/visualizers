@@ -68,6 +68,41 @@
     else { for (const [o, v] of lampUit) o.visible = v; lampUit.clear(); }
   }
 
+  // --- goedkoper materiaal (tv-proef): PBR (MeshStandard) -> Lambert (licht per hoekpunt i.p.v. per pixel).
+  // Kleur-, emissive- en textuurobjecten worden gedeeld (animaties lopen door), de herkleuring (onBeforeCompile) gaat mee.
+  const lambertVan = new Map(), goedkoopOp = new Map(), goedkoopAan = { figuren: false, kamer: false };
+  const isFiguur = o => o.isSkinnedMesh || (slug && (() => { for (let p = o; p; p = p.parent) if (p === slug.root) return true; return false; })());
+  function naarLambert(m) {
+    if (!m || !m.isMeshStandardMaterial) return m;
+    let l = lambertVan.get(m);
+    if (!l) {
+      l = new THREE.MeshLambertMaterial({ map: m.map, emissiveMap: m.emissiveMap, alphaMap: m.alphaMap, transparent: m.transparent, opacity: m.opacity,
+        alphaTest: m.alphaTest, side: m.side, skinning: m.skinning, vertexColors: m.vertexColors, depthWrite: m.depthWrite, emissiveIntensity: m.emissiveIntensity });
+      l.color = m.color; l.emissive = m.emissive; l.userData = m.userData;
+      if (m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile) { l.onBeforeCompile = m.onBeforeCompile; l.customProgramCacheKey = m.customProgramCacheKey; }
+      lambertVan.set(m, l);
+    }
+    l.opacity = m.opacity; l.emissiveIntensity = m.emissiveIntensity; l.visible = m.visible;
+    return l;
+  }
+  function goedkoop(welke, aan) {
+    if (welke) goedkoopAan[welke] = aan;
+    scene.traverse(o => {
+      if (!o.isMesh) return;
+      const fig = isFiguur(o), wil = fig ? goedkoopAan.figuren : goedkoopAan.kamer;
+      if (wil && !goedkoopOp.has(o)) {
+        const org = o.material, nieuw = Array.isArray(org) ? org.map(naarLambert) : naarLambert(org);
+        if (nieuw !== org && !(Array.isArray(org) && nieuw.every((m, i) => m === org[i]))) { goedkoopOp.set(o, org); o.material = nieuw; }
+      } else if (!wil && goedkoopOp.has(o)) { o.material = goedkoopOp.get(o); goedkoopOp.delete(o); }
+    });
+  }
+  let goedTel = 0;
+  clubHooks.push(() => {  // nieuwe figuren (herbouwde bezetting) ook omzetten en ondoorzichtigheid bijhouden
+    if (!goedkoopAan.figuren && !goedkoopAan.kamer) return;
+    if (++goedTel % 60 === 0) goedkoop();
+    for (const [m, l] of lambertVan) { l.opacity = m.opacity; l.emissiveIntensity = m.emissiveIntensity; l.visible = m.visible; }
+  });
+
   const fogReserve = [];
   function rook(laag, geen) {  // laag: de helft van de rookwolken, rookmachines en lichtvlekjes; geen (minimaal/tv): geen rook
     if (fogReserve.length) fogPool.push(...fogReserve.splice(0));
@@ -305,6 +340,7 @@
     get stand() { return KW.stand; },     // wat er nu draait: hoog / midden / laag
     get keuze() { return S.kwaliteit; },  // auto / hoog / midden / laag
     get bewaker() { return bewaker; },
+    goedkoop,                             // clubKwaliteit.goedkoop('figuren' | 'kamer', true/false)
     zet: kies,                            // clubKwaliteit.zet('minimaal'); 'auto' zet de bewaker weer aan
   };
 })();
