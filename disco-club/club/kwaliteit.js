@@ -3,19 +3,22 @@
 //  midden - bol-opname 1 op 6, spiegelvloer 256 px, schaduwen 1 op 10, bloom op halve resolutie, max ~2 megapixel
 //  laag   - glimmende donkere vloer (lampen + bol-opname als envMap) i.p.v. de echte spiegel, geen bol-opname/schaduwen/feedback/bloom, ~1 megapixel, minder figuren,
 //           minder rook, kleinere texturen (telefoon), figuren buiten beeld niet tekenen
+//  minimaal - laag + alleen de twee hoofdspots aan (tv: elke lamp kost per pixel op elk figuur; testronde Mali-G52 6 -> 25 fps)
 // Een bewaker schakelt op de beeldtijd omlaag/omhoog (alleen bij 'auto'). Ook: 'laden… x/y', inklapbare balk op smal scherm.
-// Publiceert window.clubKwaliteit: { stand, keuze, bewaker, zet('auto'|'hoog'|'midden'|'laag') }.
+// Publiceert window.clubKwaliteit: { stand, keuze, bewaker, zet('auto'|'hoog'|'midden'|'laag'|'minimaal') }.
 (function () {
   'use strict';
   if (typeof KW === 'undefined' || typeof clubHooks === 'undefined' || typeof LAAD === 'undefined') return;
 
-  const STANDEN = ['laag', 'midden', 'hoog'];
-  const KEUZES = ['auto', 'hoog', 'midden', 'laag'];
+  const STANDEN = ['minimaal', 'laag', 'midden', 'hoog'];
+  const KEUZES = ['auto', 'hoog', 'midden', 'laag', 'minimaal'];
+  const TV = /Android TV|GoogleTV|SmartTV|SMART-TV|Tizen|Web0S|webOS|AFT[A-Z]|BRAVIA|CrKey/i.test(navigator.userAgent);
+  const isLaag = () => KW.stand === 'laag' || KW.stand === 'minimaal';  // alles wat laag doet, doet minimaal ook
   if (!KEUZES.includes(S.kwaliteit)) S.kwaliteit = 'auto';
   const PLAFOND = MOBIEL ? 'midden' : 'hoog';  // de bewaker gaat op mobiel nooit hoger
-  const BODEM = MOBIEL ? 'laag' : 'midden';     // en op de pc nooit lager: de spiegelvloer blijft (laag kan nog met de hand)
+  const BODEM = MOBIEL ? 'minimaal' : 'midden';     // en op de pc nooit lager: de spiegelvloer blijft (laag kan nog met de hand)
   const PR_HOOG = PR;  // zoals de kern hem bij de start uitrekende
-  const BUDGET = [1e6, 7e5, 5e5];  // laag: pixels; de bewaker kan nog twee stapjes zakken
+  const BUDGET = [1e6, 7e5, 5e5, 3e5];  // laag/minimaal: pixels; de bewaker kan nog drie stapjes zakken (tv: 0,5 MP = scherm, 0,3 MP = 730x410)
   let budget = 0;
 
   function prVoor(s) {
@@ -54,6 +57,17 @@
   const extraLicht = [slugLight];
   scene.traverse(o => { if (o.isSpotLight && !spots.some(s => s.light === o)) extraLicht.push(o); });
 
+  // --- minimaal: alleen de twee hoofdspots, de rest van de lampen uit en de basisverlichting wat feller ---
+  const lampUit = new Map();  // lamp -> zichtbaarheid van vóór minimaal
+  function lampen(uit) {
+    if (uit) scene.traverse(o => {
+      if (!(o.isPointLight || o.isSpotLight) || o === spots[0].light || o === spots[1].light) return;
+      if (!lampUit.has(o)) lampUit.set(o, o.visible);
+      o.visible = false;
+    });
+    else { for (const [o, v] of lampUit) o.visible = v; lampUit.clear(); }
+  }
+
   const fogReserve = [];
   function rook(laag) {  // laag: de helft van de rookwolken, rookmachines en lichtvlekjes
     puffs.forEach((f, i) => { if (i % 2) f.sp.visible = !laag; });
@@ -66,27 +80,27 @@
   const kern = { buildCast, buildWalkers, buildCrowd, fillZone2 };
   buildCast = function () {
     const n = S.count;
-    if (KW.stand === 'laag') S.count = Math.min(n, 8);
+    if (isLaag()) S.count = Math.min(n, 8);
     try { kern.buildCast(); } finally { S.count = n; }
   };
   buildWalkers = function () {
     kern.buildWalkers();
-    if (KW.stand === 'laag') for (const w of walkers.splice(2)) dropDancer(w);
+    if (isLaag()) for (const w of walkers.splice(2)) dropDancer(w);
   };
   buildCrowd = function () {
     const plekken = CROWD_SPOTS;
-    if (KW.stand === 'laag') CROWD_SPOTS = plekken.filter((p, i) => i % 2 === 0);  // index 4 (achter de bar) = barman blijft
+    if (isLaag()) CROWD_SPOTS = plekken.filter((p, i) => i % 2 === 0);  // index 4 (achter de bar) = barman blijft
     try { kern.buildCrowd(); } finally { CROWD_SPOTS = plekken; }
-    if (KW.stand !== 'laag') return;
+    if (!isLaag()) return;
     crowd.filter(d => d.yOff !== undefined).forEach((d, i) => { if (i % 2) { dropDancer(d); crowd.splice(crowd.indexOf(d), 1); } });  // lounge
   };
   fillZone2 = function () {
     kern.fillZone2();
-    if (KW.stand === 'laag') for (const d of zone2Dancers.splice(6)) dropDancer(d);
+    if (isLaag()) for (const d of zone2Dancers.splice(6)) dropDancer(d);
   };
 
   // --- kleinere texturen: telefoon of zelf gekozen midden/laag (auto op de pc nooit, dan kan hij terug naar hoog) ---
-  const TEX_MAX = { laag: 512, midden: 1024 };
+  const TEX_MAX = { minimaal: 512, laag: 512, midden: 1024 };
   const klein = new Map();  // origineel beeld -> verkleind canvas (texturen delen soms een beeld)
   function verklein(root) {
     const max = TEX_MAX[KW.stand];
@@ -115,7 +129,7 @@
   // --- laag: figuren buiten beeld niet tekenen (hun meshes staan op frustumCulled = false) ---
   const frus = new THREE.Frustum(), pm = new THREE.Matrix4(), bol = new THREE.Sphere(new THREE.Vector3(), 2), verborgen = [];
   function knip() {
-    if (KW.stand !== 'laag') return;
+    if (!isLaag()) return;
     camera.updateMatrixWorld();
     frus.setFromProjectionMatrix(pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     for (const lijst of [dancers, crowd, walkers, poleDancers, worms]) for (const d of lijst) {
@@ -135,7 +149,8 @@
   // --- stand toepassen ---
   let bolNu = false;  // laag: één losse bol-opname (bij de start en als alles geladen is), anders blijft de bol zwart
   function zetStand(s) {
-    const was = KW.stand, laag = s === 'laag', midden = s === 'midden';
+    lampen(false);  // eerst terug zoals het was, daarna zetten de standen hun eigen lampen
+    const was = KW.stand, mini = s === 'minimaal', laag = s === 'laag' || mini, midden = s === 'midden';
     KW.stand = s;
     KW.schaduw = laag ? 0 : midden ? 10 : 1;
     KW.bol = laag ? 0 : midden ? 6 : 3;
@@ -155,7 +170,8 @@
     PR = prVoor(s);
     resize();
     if (laag) bolNu = true;
-    if ((was === 'laag') !== laag && allModels().length) { rebuildAll(); fillZone2(); }  // bezetting opnieuw verdelen
+    if (mini) lampen(true);
+    if ((was === 'laag' || was === 'minimaal') !== laag && allModels().length) { rebuildAll(); fillZone2(); }  // bezetting opnieuw verdelen
     toonKeuze();
   }
   addEventListener('resize', () => { if (KW.stand !== 'hoog') { PR = prVoor(KW.stand); resize(); } });  // laag/midden hangen van de schermmaat af
@@ -187,14 +203,14 @@
   function omlaag() {
     const i = STANDEN.indexOf(KW.stand);
     if (i > STANDEN.indexOf(BODEM)) zetStand(STANDEN[i - 1]);
-    else if (KW.stand === 'laag' && budget < BUDGET.length - 1) { budget++; PR = prVoor('laag'); resize(); }
+    else if (isLaag() && budget < BUDGET.length - 1) { budget++; PR = prVoor('laag'); resize(); }
     else return;
     wachtOp = Math.min(wachtOp * 2, 120000);  // niet heen en weer blijven springen
     rustTot = performance.now() + 2000;
   }
   function omhoog() {
     const i = STANDEN.indexOf(KW.stand);
-    if (KW.stand === 'laag' && budget > 0) { budget--; PR = prVoor('laag'); resize(); }
+    if (isLaag() && budget > 0) { budget--; PR = prVoor('laag'); resize(); }
     else if (i < STANDEN.indexOf(PLAFOND)) zetStand(STANDEN[i + 1]);
     else return;
     rustTot = performance.now() + 2000;
@@ -261,20 +277,25 @@
   }
   laadLabel();
 
+  let lampTel = 0;
   clubHooks.push(() => {
-    if (KW.stand === 'laag') {
+    if (KW.stand === 'minimaal') {
+      if (++lampTel % 120 === 0) lampen(true);
+      ambient.intensity *= 1.7;  // de kern en de lichtregie zetten hem elk beeld opnieuw; zonder de andere lampen anders een grot
+    }
+    if (isLaag()) {
       if (feedback) feedback.enabled = false;  // de kern zet hem elk beeld aan bij sporen/spiegel/zaal 2
       if (bolNu) { bolNu = false; ball.visible = false; mirror.visible = false; vloer.visible = false; cubeCam.update(renderer, scene); vloer.visible = true; ball.visible = true; }
     }
     if (!geladen && laadLabel()) {
       geladen = true;
       rustTot = Math.max(rustTot, performance.now() + 5000);  // na het laden eerst even uitrazen
-      if (KW.stand === 'laag') bolNu = true;  // de bol ziet nu ook het publiek
+      if (isLaag()) bolNu = true;  // de bol ziet nu ook het publiek
     }
   });
 
   // --- start ---
-  const start = S.kwaliteit === 'auto' ? (MOBIEL ? 'laag' : 'hoog') : S.kwaliteit;
+  const start = S.kwaliteit === 'auto' ? (TV ? 'minimaal' : MOBIEL ? 'laag' : 'hoog') : S.kwaliteit;
   zetStand(start);
   for (const M of allModels()) verklein(M.scene);  // al binnen vóór dit script (zelden)
   if (slug) verklein(slug.root);
@@ -284,6 +305,6 @@
     get stand() { return KW.stand; },     // wat er nu draait: hoog / midden / laag
     get keuze() { return S.kwaliteit; },  // auto / hoog / midden / laag
     get bewaker() { return bewaker; },
-    zet: kies,                            // clubKwaliteit.zet('laag'); 'auto' zet de bewaker weer aan
+    zet: kies,                            // clubKwaliteit.zet('minimaal'); 'auto' zet de bewaker weer aan
   };
 })();
