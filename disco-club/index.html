@@ -80,6 +80,7 @@
   <label>Rook <input type="range" id="smoke" min="0" max="1" step="0.05"><span id="smokeV"></span></label>
   <label>Gevoeligheid <input type="range" id="sens" min="0" max="2" step="0.05"><span id="sensV"></span></label>
   <button id="btnFull">Volledig scherm</button>
+  <button id="btnDl" hidden title="Zip met de club in volle kwaliteit voor je eigen computer: uitpakken, dan START-WINDOWS.bat of START-MAC.command">Download (high performance)</button>
   <div id="meters"><i></i><i></i><i></i></div>
   <span id="status">demo-beat (nog geen audio)</span>
 </div>
@@ -108,13 +109,17 @@ try { Object.assign(S, JSON.parse(localStorage.getItem('discoclub') || '{}')); }
 if (!['uit', 'soms', 'vaak'].includes(S.strobe)) S.strobe = S.strobe === 'vol' ? 'vaak' : 'soms';
 function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } catch (e) {} }
 
+// Kwaliteit: club/kwaliteit.js kiest hoog/midden/laag en zet KW; deze beginwaarden zijn 'hoog' (zoals altijd)
+const MOBIEL = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
+const KW = { stand: 'hoog', schaduw: 1, bol: 3, spiegel: true, imag: 3 };  // schaduw/bol/imag: om de hoeveel beelden (0 = nooit)
+
 // --- Scène ---
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: !MOBIEL });  // kan alleen hier; telefoons houden de FXAA van 'grade'
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = false;  // één keer per frame, niet bij elke spiegel- en bol-opname opnieuw
 // De resolutie regelen we zelf (PR), zodat renderer en bloom-keten exact dezelfde pixelmaten gebruiken
-const PR = Math.min(window.devicePixelRatio || 1, 1.5);
+let PR = Math.min(window.devicePixelRatio || 1, 1.5);  // midden/laag: lager (club/kwaliteit.js)
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05030a, 0.021);
@@ -758,7 +763,19 @@ const KEEP_LOOK = /rick/;  // vaste figuren: niet herkleuren
 const DANCE_FILES = ['models/dans-65.glb', 'models/dans-66.glb', 'models/dans-594.glb', 'models/dans-84.glb', 'models/dans-63.glb'];
 const MODELS = { pop: [], wizard: [], alien: [] }, CLIPS = [], gltf = new THREE.GLTFLoader();
 const addClip = c => { if (c && !CLIPS.some(x => x.name === c.name)) { c.beats = Math.max(1, Math.round(c.duration * 2)); CLIPS.push(c); } };  // tellen ≈ duur bij 120 bpm
-for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) gltf.load(f, g => {
+// figuren laden met teller (labeltje 'laden… x/y' in club/kwaliteit.js); LAAD.voor mag een figuur eerst bewerken (kleinere texturen)
+const LAAD = { klaar: 0, totaal: 0, voor: null };
+function laadFiguur(url, onLoad) {
+  let af = false;
+  const tel = () => { if (!af) { af = true; LAAD.klaar++; } };  // ontbrekend bestand telt ook als klaar
+  LAAD.totaal++;
+  gltf.load(url, g => {
+    tel();
+    try { if (LAAD.voor) LAAD.voor(g); } catch (e) { console.error('laad-voor', e); }
+    onLoad(g);
+  }, undefined, tel);
+}
+for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) laadFiguur(f, g => {
   g.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
   // lengte uit de botten: de bounding box van een skinned mesh klopt niet (armature staat op schaal 0.01)
   g.scene.updateMatrixWorld(true);
@@ -769,7 +786,7 @@ for (const [type, files] of Object.entries(MODEL_FILES)) for (const f of files) 
   rebuildAll();  // opnieuw verdelen zodra er een figuur bij komt
   fillZone2();
   buildPoleDancers();
-}, undefined, () => {});
+});
 for (const f of DANCE_FILES) gltf.load(f, g => g.animations.forEach(addClip), undefined, () => {});
 // Handelingen buiten de dansvloer, op naam: Casual_Walk, Unsteady_Walk, Stand_and_Drink, Stand_and_Chat, Phone_Conversation
 const ACT_FILES = ['models/act-14.glb', 'models/act-33.glb', 'models/act-32.glb', 'models/act-343.glb', 'models/act-30.glb', 'models/act-123.glb', 'models/act-342.glb', 'models/act-56.glb', 'models/act-312.glb',
@@ -941,7 +958,18 @@ function buildPoleDancers() {
 // De slak heeft geen skelet: hij glijdt heen en weer langs de looproute, deint op de bas en laat een slijmspoor achter.
 // Af en toe een gigantische boer (groene wolk + flits); dansers in de buurt draaien naar hem toe en juichen.
 // De wormpjes (klein, met skelet) rennen als bende om hem heen en staan af en toe in een kringetje te roken.
-let slug = null, slugT = 0, slugIdx = 1, slugDir = 1, slugBurpAt = 0, slugBurp = 0;
+let slug = null, slugT = 0, slugIdx = 1, slugDir = 1, slugBurpAt = 0, slugBurp = 0, slugPulse = 0, slugWait = 0;
+const SLUG_R = 2.1;
+// wie stilstaat (publiek, dansers, wachtende lopers) wordt niet weggeschoven: de slak wacht of keert om
+function slugBlocked(p, ux, uz) {
+  const nx = p.x + ux * 0.6, nz = p.z + uz * 0.6;
+  for (const list of [crowd, dancers, walkers]) for (const d of list) {
+    if (!d || !d.root || !d.root.visible || d.walking || (walkers.includes(d) && d.state === 'walk')) continue;
+    const q = d.root.position, dn = Math.hypot(q.x - nx, q.z - nz);
+    if (dn < SLUG_R && dn < Math.hypot(q.x - p.x, q.z - p.z)) return true;
+  }
+  return false;
+}
 const slugLight = new THREE.PointLight(0x7dff3c, 0, 9, 1.5);
 const slimeGeo = new THREE.CircleGeometry(1, 20), slime = [];
 for (let i = 0; i < 70; i++) {
@@ -949,7 +977,7 @@ for (let i = 0; i < 70; i++) {
   m.rotation.x = -Math.PI / 2; m.visible = false; m.renderOrder = 3; scene.add(m); slime.push({ m, age: 0 });
 }
 let slimeNext = 0, lastSlime = new THREE.Vector3(999, 0, 999);
-gltf.load('models/slak-1.glb', g => {
+laadFiguur('models/slak-1.glb', g => {
   const box = new THREE.Box3().setFromObject(g.scene), size = box.getSize(new THREE.Vector3());
   const k = 2.6 / size.y;  // ruim 2,5 m hoog: een berg van een slak
   g.scene.scale.setScalar(k);
@@ -960,7 +988,7 @@ gltf.load('models/slak-1.glb', g => {
   slug = { root, wob };
   const [x, z] = RING[1]; root.position.set(x, 0, z);
   slugBurpAt = performance.now() / 1000 + rnd(25, 45);
-}, undefined, () => {});
+});
 function slugBurpNow(now) {
   slugBurp = 1; slugBurpAt = now + rnd(40, 75);
   const p = slug.root.position;
@@ -983,21 +1011,25 @@ function updateSlug(dt, now, pulse) {
   if (slugBurp <= 0) {  // glijden naar het volgende punt van de route (heen en weer)
     const [tx, tz] = RING[slugIdx], dx = tx - p.x, dz = tz - p.z, dist = Math.hypot(dx, dz);
     if (dist < 0.3) { if (slugIdx + slugDir < 0 || slugIdx + slugDir >= RING.length) slugDir *= -1; slugIdx += slugDir; }
-    else {
+    else if (slugBlocked(p, dx / dist, dz / dist)) {  // staat er iemand stil in de weg: wachten, na 4 s omkeren
+      if ((slugWait += dt) > 4) { slugWait = 0; slugDir *= -1; slugIdx = Math.max(0, Math.min(RING.length - 1, slugIdx + slugDir)); }
+    } else {
+      slugWait = 0;
       const sp = Math.min(dist, 0.32 * dt); p.x += dx / dist * sp; p.z += dz / dist * sp;
       let dr = Math.atan2(dx, dz) - r.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); r.rotation.y += dr * Math.min(1, dt * 0.8);
     }
   }
   slugT += dt;
   if (now > slugBurpAt) slugBurpNow(now);
-  // deinen op de bas, golvend glijden, en opzwellen bij een boer
+  // deinen op de bas (afgevlakt: de kick zelf is een sprong), golvend glijden, en opzwellen bij een boer
   const b = slugBurp > 0 ? Math.sin((1 - slugBurp) * Math.PI) : 0;
   slugBurp = Math.max(0, slugBurp - dt * 0.5);
-  const squash = 0.035 * Math.sin(slugT * 3.2) + 0.05 * pulse + 0.18 * b;
+  slugPulse += (pulse - slugPulse) * Math.min(1, dt * 4);
+  const squash = 0.03 * Math.sin(slugT * 2.4) + 0.035 * slugPulse + 0.18 * b;
   slug.wob.scale.set(1 + squash * 0.6, 1 + squash, 1 - squash * 0.3);
   slugLight.position.set(p.x, 2.2, p.z); slugLight.intensity = 3.5 * b;
   // niemand loopt door de slak heen (voetafdruk ~1,8 x 1,6 m): wie binnen 2,1 m komt, wordt opzij geduwd
-  const SLUG_R = 2.1, nudge = d => {
+  const nudge = d => {
     if (!d || !d.root || !d.root.visible) return;
     const q = d.root.position, dx = q.x - p.x, dz = q.z - p.z, dist = Math.hypot(dx, dz);
     if (dist >= SLUG_R || dist < 1e-3) return;
@@ -1027,7 +1059,7 @@ function updateSlug(dt, now, pulse) {
 // wormpjes
 const worms = [];
 let wormModel = null;
-gltf.load('models/worm-1.glb', g => {
+laadFiguur('models/worm-1.glb', g => {
   g.scene.updateMatrixWorld(true);
   const box = new THREE.Box3(), v = new THREE.Vector3();
   g.scene.traverse(o => { if (o.isBone) box.expandByPoint(o.getWorldPosition(v)); if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
@@ -1040,7 +1072,7 @@ gltf.load('models/worm-1.glb', g => {
     if (i % 2 === 0) giveDrink(w, 'sigaret');
     worms.push(w);
   }
-}, undefined, () => {});
+});
 function updateWorms(dt, now) {
   if (!worms.length) return;
   const c = slug ? slug.root.position : new THREE.Vector3(0, 0, 8);
@@ -1053,14 +1085,14 @@ function updateWorms(dt, now) {
       const dx = tx - p.x, dz = tz - p.z, dist = Math.hypot(dx, dz);
       if (dist > 0.01) { const sp = Math.min(dist, 3.2 * dt); p.x += dx / dist * sp; p.z += dz / dist * sp; w.root.rotation.y = Math.atan2(dx, dz); }
       if (ACTS.Run_02) setClip(w, ACTS.Run_02, 0.3);
-      if (w.until <= 0) { w.state = 'chill'; w.until = rnd(12, 20); w.acts = ['Stand_and_Chat', 'Stand_and_Drink']; w.actT = 0; }
-    } else {  // stilstaan in een kringetje naast de slak: roken en kletsen
-      const tx = c.x + Math.cos(w.angle) * 2.4, tz = c.z + Math.sin(w.angle) * 2.4;
-      p.x += (tx - p.x) * Math.min(1, dt * 2); p.z += (tz - p.z) * Math.min(1, dt * 2);
-      let dr = Math.atan2(c.x - p.x, c.z - p.z) + Math.PI * 0.5 - w.root.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr));
+      if (w.until <= 0) { w.state = 'chill'; w.until = rnd(12, 20); w.acts = ['Stand_and_Chat', 'Stand_and_Drink']; w.actT = 0; w.fx = c.x; w.fz = c.z; }
+    } else {  // stilstaan waar hij is, naar de slak toe: roken en kletsen (niet meeschuiven met de slak)
+      if (w.fx === undefined) { w.fx = c.x; w.fz = c.z; }
+      let dr = Math.atan2(w.fx - p.x, w.fz - p.z) - w.root.rotation.y; dr = Math.atan2(Math.sin(dr), Math.cos(dr));
       w.root.rotation.y += dr * Math.min(1, dt * 3);
       act(w, 0);
-      if (w.until <= 0) { w.state = 'run'; w.until = rnd(14, 24); w.acts = null; }
+      const vlucht = w.state === 'chill' && Math.hypot(c.x - p.x, c.z - p.z) < SLUG_R + 0.2;  // komt de slak eraan: wegrennen
+      if (w.state === 'chill' && (w.until <= 0 || vlucht)) { w.state = 'run'; w.until = rnd(14, 24); w.acts = null; w.fx = undefined; }
     }
     blend(w, dt);
   }
@@ -1469,7 +1501,6 @@ const MOVES = [
 function pose(d, tb, A, dt) {
   if (d.type === 'model') {
     if (d.faceT !== undefined) { let dr = d.faceT - d.face; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); d.face += dr * Math.min(1, dt * 1.6); }
-    if (d.base) d.home.set(d.base.x + Math.sin(tb * 0.05 + d.base.y) * 0.3, 0, d.base.z + Math.cos(tb * 0.04 + d.base.y * 2) * 0.3);  // zachtjes rondschuifelen
     d.root.position.set(d.home.x + (d.px || 0), d.yOff || 0, d.home.z + (d.pz || 0));
     d.root.rotation.set(0, d.face, 0);
     if (d.acts) { act(d, dt); return; }
@@ -2398,13 +2429,14 @@ function frame(nowMs) {
 
   updateCamera(now);
 
-  renderer.shadowMap.needsUpdate = true;
-  // de bol weerspiegelt de zaal: elke derde frame de rondom-opname verversen (zonder bol en spiegelvloer in beeld)
-  if (frameNo++ % 3 === 0) {
+  if (KW.schaduw && frameNo % KW.schaduw === 0) renderer.shadowMap.needsUpdate = true;  // hoog: elk beeld
+  // de bol weerspiegelt de zaal: elke derde frame (KW.bol) de rondom-opname verversen (zonder bol en spiegelvloer in beeld)
+  if (KW.bol && frameNo % KW.bol === 0) {
     ball.visible = false; mirror.visible = false;
     cubeCam.update(renderer, scene);
-    ball.visible = true; mirror.visible = true;
+    ball.visible = true; mirror.visible = KW.spiegel;
   }
+  frameNo++;
   if (composer) composer.render(); else renderer.render(scene, camera);
   meters.forEach((el, i) => el.style.height = (2 + bands[i].v * 22) + 'px');
   requestAnimationFrame(frame);
@@ -2431,6 +2463,8 @@ $('btnAll').onclick = () => { randomizeAll(); autoNext = performance.now() / 100
 $('auto').onchange = e => { S.auto = +e.target.value; autoNext = performance.now() / 1000 + S.auto; save(); };
 $('smoke').oninput = e => { S.smoke = +e.target.value; syncUI(); save(); };
 $('sens').oninput = e => { S.sens = +e.target.value; syncUI(); save(); };
+// alleen online: de downloadversie staat naast de club (deel/maak-download.sh)
+if (location.hostname === 'club.sierk.dev') { $('btnDl').hidden = false; $('btnDl').onclick = () => { location.href = 'deep-samso-club.zip'; }; }
 $('btnFull').onclick = () => {
   if (inApp) window.webkit.messageHandlers.app.postMessage('fullscreen');
   else document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
@@ -2465,7 +2499,8 @@ wake();
 syncUI();
 buildClub();
 buildCast();
-requestAnimationFrame(frame);
+// eerste beeld pas als ook z2/ en club/ geladen zijn: kwaliteit.js zet zijn stand vóór er iets getekend wordt
+addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 </script>
 <script src="z2/gang.js"></script>
 <script src="z2/dj.js"></script>
@@ -2477,5 +2512,6 @@ requestAnimationFrame(frame);
 <script src="club/regie-momenten.js"></script>
 <script src="club/barman.js"></script>
 <script src="club/rommel.js"></script>
+<script src="club/kwaliteit.js"></script>
 </body>
 </html>

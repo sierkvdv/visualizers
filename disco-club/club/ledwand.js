@@ -322,7 +322,7 @@
 
     if (eff === 'imag') {  // de kern ververst de bol op %3 === 0; meteen bij de start, anders staat er een oud beeld
       if (!overlayOk) drawOverlay(b);  // na de trip staat de golf nog op het canvas
-      if (frameNo % 3 === 1 || !imagFresh) renderImag(now);
+      if (frameNo % ((typeof KW !== 'undefined' && KW.imag) || 3) === 1 || !imagFresh) renderImag(now);  // midden/laag: minder vaak (kwaliteit.js)
       return;
     }
     clear(); overlayOk = false;
