@@ -2,7 +2,8 @@
 // Meet 15 s lang waar de tijd per beeld heen gaat (updates, hooks, tekenen, WebGL-aanroepen zoals shaders compileren
 // en texturen uploaden) en stuurt één regel naar ./diag?d=... (komt in de nginx-accesslog van club.sierk.dev).
 (() => {
-  if (!/[?&]diag\b/.test(location.search) || /[?&]diag=bench\b/.test(location.search)) return;
+  const TVB = /Android TV|GoogleTV|SmartTV|SMART-TV|Tizen|Web0S|webOS|AFT[A-Z]|BRAVIA|CrKey/i.test(navigator.userAgent);
+  if (!/[?&]diag\b/.test(location.search) || /[?&]diag=bench\b/.test(location.search) || TVB) return;  // op een tv is ?diag de testronde
   const T = {}, N = {}, errs = [];
   const tel = (k, ms) => { T[k] = (T[k] || 0) + ms; N[k] = (N[k] || 0) + 1; };
   const timed = (k, f) => function () { const t0 = performance.now(); try { return f.apply(this, arguments); } finally { tel(k, performance.now() - t0); } };
@@ -67,7 +68,8 @@
 // Testronde (?diag=bench): zet om de paar seconden één zwaar onderdeel uit en meet de beelden per seconde,
 // zodat de lichtste stand op echte cijfers van dat apparaat gebouwd wordt. Stuurt per stap en aan het eind een regel.
 (() => {
-  if (!/[?&]diag=bench\b/.test(location.search)) return;
+  const TVB = /Android TV|GoogleTV|SmartTV|SMART-TV|Tizen|Web0S|webOS|AFT[A-Z]|BRAVIA|CrKey/i.test(navigator.userAgent);
+  if (!/[?&]diag=bench\b/.test(location.search) && !(TVB && /[?&]diag\b/.test(location.search))) return;
   const box = document.createElement('div');
   box.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;font:14px monospace;color:#0f0;background:rgba(0,0,0,.75);padding:6px 8px;pointer-events:none';
   document.body.appendChild(box);
