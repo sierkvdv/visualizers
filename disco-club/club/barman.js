@@ -8,7 +8,7 @@
 (() => {
   if (window.clubBarman) return;  // maar één keer laden (anders twee barmannen en een dubbele wrapper)
   const V3 = THREE.Vector3, UP = new V3(0, 1, 0);
-  const BX = 13.0, LX = 12.8, TOP = 1.16, ROW_X = 12.15;  // looplijn, aansteeklijn, bovenkant toog, rij shots
+  const BX = 13.0, LX = 12.8, TOP = 1.01, ROW_X = 12.15;  // looplijn, aansteeklijn, bovenkant toog, rij shots
   const ROW_Z = [0, 1, 2, 3, 4, 5, 6, 7].map(i => -1.75 + i * 0.5);
   const SS = 0.7, SH = TOP + 0.12 * SS;                     // schaal en bovenrand van een shotglaasje
   const PGS = 1.5, PG_TOP = TOP + 0.12 * PGS, PG_X = 12.55;  // schaal, bovenrand en startplek van het ingeschonken glas
@@ -462,8 +462,8 @@
         if (hv.x < 11.6 && Math.abs(dz) < 0.6 && x - hv.x < Math.sqrt(0.36 - dz * dz)) x = Math.min(12.0, hv.x + Math.sqrt(0.36 - dz * dz));
       }
       s.cx = s.cx === undefined ? x : s.cx + (x - s.cx) * (1 - Math.exp(-dt * 6));
-      camPos.set(s.cx, 1.32, z);
-      s.look.set(12.25, 1.3, 1.9 * s.sg);
+      camPos.set(s.cx, TOP + 0.16, z);
+      s.look.set(12.25, TOP + 0.14, 1.9 * s.sg);
       if (B && B.d.root.parent) s.look.lerp(tv.set(B.d.home.x, 1.45, B.d.home.z), 0.4);
       // hard: ≥ 0,45 m van elk hoofd
       for (const list of PEOPLE) for (const d of list) {

@@ -816,7 +816,8 @@ new THREE.BVHLoader().load(POLE_BVH, r => { poleBVH = r; buildPoleDancers(); }, 
 // Elke bron-botrichting wordt eerst op de rustrichting van het doelbot gelegd (T-pose vs A-pose),
 // daarna krijgt het doelbot dezelfde draaiing in wereldruimte als het bronbot. Gebakken naar een gewone clip.
 // paaldanseressen: de heks en de vrouw met de krullen, elk op haar eigen skelet uitgerekend
-const poleModels = () => ['burlesque', 'showgirl'].map(n => allModels().find(M => M.file.includes(n))).filter(Boolean);
+// alleen strakke kleding aan de paal: de kimono van showgirl-1 rekt bij de acrobatiek (benen omhoog, ondersteboven) helemaal uit
+const poleModels = () => ['burlesque'].map(n => allModels().find(M => M.file.includes(n))).filter(Boolean);
 function poleClipFor(M) {
   if (POLE_CLIPS.has(M)) return POLE_CLIPS.get(M);
   const sb = poleBVH.skeleton.bones, sRoot = new THREE.Group();
@@ -1503,7 +1504,7 @@ function pose(d, tb, A, dt) {
     if (d.faceT !== undefined) { let dr = d.faceT - d.face; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); d.face += dr * Math.min(1, dt * 1.6); }
     d.root.position.set(d.home.x + (d.px || 0), d.yOff || 0, d.home.z + (d.pz || 0));
     d.root.rotation.set(0, d.face, 0);
-    if (d.acts) { act(d, dt); return; }
+    if (d.acts) { act(d, dt); if (d.seat) zitten(d, dt); return; }
     if (!CLIPS.length) return;
     if (!d.cur || (A >= 0.08 && tb >= d.nextChange)) nextDance(d, tb);
     // bij muziek op de beat (publiek op halve snelheid), in stilte langzaam doorwiegen
@@ -1590,6 +1591,15 @@ function startMoment(kind, tb) {
 }
 // niemand door elkaar heen: dansers op de vloer duwen elkaar zacht weg als hun heupen dichter dan 0,9 m komen
 const sepA = new THREE.Vector3(), sepB = new THREE.Vector3();
+// zittende gasten: heupen op de zitting houden (grote en kleine figuren en de twee zitclips hebben elk een andere heuphoogte)
+const zitV = new THREE.Vector3();
+function zitten(d, dt) {
+  const h = hipsOf(d); if (!h) return;
+  d.root.updateMatrixWorld(true); h.getWorldPosition(zitV);
+  const k = d.zitKlaar ? Math.min(1, dt * 4) : 1, ex = (d.seat.x - zitV.x) * k, ey = (d.seat.y - zitV.y) * k;
+  d.zitKlaar = true;
+  d.px = (d.px || 0) + ex; d.yOff += ey; d.root.position.x += ex; d.root.position.y += ey;
+}
 function hipsOf(d) { if (!d.hips3) d.body && d.body.traverse(o => { if (o.name === 'Hips') d.hips3 = o; }); return d.hips3; }
 function separate(dt) {
   const list = dancers.filter(d => d.type === 'model');
@@ -1699,9 +1709,9 @@ function buildClub() {
     scene.add(wash);
   }
   // bar langs de rechterwand
-  add(scene, BOX, wood, [12.2, 0.55, 0], [0.9, 1.1, 9]).castShadow = true;
-  add(scene, BOX, glossy, [12.15, 1.13, 0], [1.1, 0.06, 9.2]);
-  add(scene, BOX, washMats[0], [11.74, 0.55, 0], [0.02, 0.9, 8.8]);  // verlicht barfront
+  add(scene, BOX, wood, [12.2, 0.475, 0], [0.9, 0.95, 9]).castShadow = true;  // toog op 1,01 m: gasten en barman steken er met hun bovenlijf boven uit
+  add(scene, BOX, glossy, [12.15, 0.98, 0], [1.1, 0.06, 9.2]);
+  add(scene, BOX, washMats[0], [11.74, 0.48, 0], [0.02, 0.78, 8.8]);  // verlicht barfront
   add(scene, BOX, wood, [13.75, 1.6, 0], [0.4, 3.2, 8.6]);
   add(scene, BOX, additive(0xffb060, 0.5), [13.53, 1.9, 0], [0.02, 1.9, 8.2]);  // warm licht achter de flessen
   const bottles = new THREE.InstancedMesh(CYL, new THREE.MeshBasicMaterial(), 84);
@@ -1713,7 +1723,7 @@ function buildClub() {
   }
   scene.add(bottles);
   for (let i = 0; i < 3; i++) add(scene, BOX, wood, [13.5, 1.27 + i * 0.55, 0], [0.34, 0.04, 8.4]);
-  for (let i = -3; i <= 3; i += 1.5) { add(scene, CYL, glossy, [11.35, 0.4, i], [0.035, 0.8, 0.035]); add(scene, CYL, velvet, [11.35, 0.82, i], [0.19, 0.07, 0.19]); }
+  for (let i = -3; i <= 3; i += 1.5) { add(scene, CYL, glossy, [11.35, 0.34, i], [0.035, 0.68, 0.035]); add(scene, CYL, velvet, [11.35, 0.7, i], [0.19, 0.07, 0.19]); }
   const barSign = neonSign('BAR', '#ffb347', 2.6, 0.65);
   barSign.position.set(ROOM - 0.1, 4.6, 0); barSign.rotation.y = -Math.PI / 2;
   scene.add(barSign);
@@ -1722,7 +1732,8 @@ function buildClub() {
   scene.add(barLight);
   // lounge langs de linkerwand
   for (const z of [-5.5, 0, 5.5]) {
-    add(scene, BOX, velvet, [-13.1, 0.3, z], [1.1, 0.6, 3.4]).castShadow = true;
+    add(scene, BOX, velvet, [-13.285, 0.525, z], [0.73, 0.15, 3.4]).castShadow = true;  // kussen 0,52 m vóór de leuning: knieën net over de rand
+    add(scene, BOX, velvet, [-13.385, 0.225, z], [0.53, 0.45, 3.4]);  // onderbak ligt terug: ruimte voor ondergetrokken voeten
     add(scene, BOX, velvet, [-13.55, 0.85, z], [0.3, 1.1, 3.4]);
     add(scene, CYL, glossy, [-11.9, 0.3, z], [0.45, 0.6, 0.45]);
     add(scene, CYL, washMats[1], [-11.9, 0.62, z], [0.42, 0.03, 0.42]);
@@ -1904,8 +1915,10 @@ function buildCrowd() {
   for (const z0 of [-5.5, 0, 5.5]) for (const dz of [-0.75, 0.75]) {
     const M = anyModel(); if (!M) break;
     const d = makeModelDancer(M, true);
-    d.home.set(-12.75, 0, z0 + dz); d.yOff = 0.001;  // heupen op de zitting (0,6 m) d.face = Math.PI / 2 + rnd(-0.2, 0.2);
-    const woman = /pop-1|witch|burlesque|showgirl|alien/.test(M.file);
+    d.home.set(-13.18, 0, z0 + dz); d.yOff = 0.001;  // heupen op de zitting (0,6 m)
+    d.seat = { x: -13.18, y: 0.69 };  // waar de heupen horen; zitten() houdt ze daar (elk figuur en elke clip is anders)
+    d.face = Math.PI / 2 + rnd(-0.2, 0.2);  // met de rug naar de leuning, gezicht naar de zaal
+    const woman = /pop-1|witch|burlesque|showgirl/.test(M.file);  // aliens zijn te lang voor de vrouwenzit (voeten onder de bank, tenen door de vloer)
     d.acts = [woman ? 'Chair_Sit_Idle_F' : 'Chair_Sit_Idle_M', 'Sit_and_Drink'];
     giveDrink(d, Math.random() < 0.5 ? 'sigaret' : null);
     d.root.traverse(o => { o.castShadow = false; });
@@ -2513,5 +2526,6 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="club/barman.js"></script>
 <script src="club/rommel.js"></script>
 <script src="club/kwaliteit.js"></script>
+<script src="club/diag.js"></script>
 </body>
 </html>

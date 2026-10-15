@@ -1,7 +1,7 @@
 // Kwaliteitsstanden zodat de club ook op telefoons en trage computers loopt; 'hoog' is precies de kern zoals hij was.
 //  hoog   - alles elk beeld (spiegelvloer, bol-opname elke 3e, schaduwen, feedback, bloom)
 //  midden - bol-opname 1 op 6, spiegelvloer 256 px, schaduwen 1 op 10, bloom op halve resolutie, max ~2 megapixel
-//  laag   - matte betonvloer i.p.v. spiegel, geen bol-opname/schaduwen/feedback/bloom, ~1 megapixel, minder figuren,
+//  laag   - glimmende donkere vloer (lampen + bol-opname als envMap) i.p.v. de echte spiegel, geen bol-opname/schaduwen/feedback/bloom, ~1 megapixel, minder figuren,
 //           minder rook, kleinere texturen (telefoon), figuren buiten beeld niet tekenen
 // Een bewaker schakelt op de beeldtijd omlaag/omhoog (alleen bij 'auto'). Ook: 'laden… x/y', inklapbare balk op smal scherm.
 // Publiceert window.clubKwaliteit: { stand, keuze, bewaker, zet('auto'|'hoog'|'midden'|'laag') }.
@@ -13,6 +13,7 @@
   const KEUZES = ['auto', 'hoog', 'midden', 'laag'];
   if (!KEUZES.includes(S.kwaliteit)) S.kwaliteit = 'auto';
   const PLAFOND = MOBIEL ? 'midden' : 'hoog';  // de bewaker gaat op mobiel nooit hoger
+  const BODEM = MOBIEL ? 'laag' : 'midden';     // en op de pc nooit lager: de spiegelvloer blijft (laag kan nog met de hand)
   const PR_HOOG = PR;  // zoals de kern hem bij de start uitrekende
   const BUDGET = [1e6, 7e5, 5e5];  // laag: pixels; de bewaker kan nog twee stapjes zakken
   let budget = 0;
@@ -30,7 +31,7 @@
     bloom.setSize = (w, h) => kernSize(Math.max(1, Math.round(w * bloomK)), Math.max(1, Math.round(h * bloomK)));
   }
 
-  // --- laag: matte betonvloer onder de tegels (de spiegel gaat uit) ---
+  // --- laag: glimmende donkere vloer onder de tegels (de echte spiegel gaat uit, de bol-opname geeft de weerschijn) ---
   const vloerTex = canvasTexture(256, 256, (g, w, h) => {
     g.fillStyle = '#3e3c3a'; g.fillRect(0, 0, w, h);
     const img = g.getImageData(0, 0, w, h), d = img.data;
@@ -44,7 +45,7 @@
   });
   vloerTex.wrapS = vloerTex.wrapT = THREE.RepeatWrapping;
   vloerTex.repeat.set(7, 7);
-  const vloer = new THREE.Mesh(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), new THREE.MeshPhongMaterial({ color: 0x8a8580, map: vloerTex, specular: 0x111111, shininess: 10 }));
+  const vloer = new THREE.Mesh(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), new THREE.MeshPhongMaterial({ color: 0x5a5a66, map: vloerTex, specular: 0x8888a0, shininess: 90, envMap: envRT.texture, combine: THREE.MixOperation, reflectivity: 0.32 }));
   vloer.rotation.x = -Math.PI / 2;
   vloer.visible = false;
   scene.add(vloer);
@@ -185,8 +186,8 @@
   }
   function omlaag() {
     const i = STANDEN.indexOf(KW.stand);
-    if (i > 0) zetStand(STANDEN[i - 1]);
-    else if (budget < BUDGET.length - 1) { budget++; PR = prVoor('laag'); resize(); }
+    if (i > STANDEN.indexOf(BODEM)) zetStand(STANDEN[i - 1]);
+    else if (KW.stand === 'laag' && budget < BUDGET.length - 1) { budget++; PR = prVoor('laag'); resize(); }
     else return;
     wachtOp = Math.min(wachtOp * 2, 120000);  // niet heen en weer blijven springen
     rustTot = performance.now() + 2000;
@@ -263,7 +264,7 @@
   clubHooks.push(() => {
     if (KW.stand === 'laag') {
       if (feedback) feedback.enabled = false;  // de kern zet hem elk beeld aan bij sporen/spiegel/zaal 2
-      if (bolNu) { bolNu = false; ball.visible = false; mirror.visible = false; cubeCam.update(renderer, scene); ball.visible = true; }
+      if (bolNu) { bolNu = false; ball.visible = false; mirror.visible = false; vloer.visible = false; cubeCam.update(renderer, scene); vloer.visible = true; ball.visible = true; }
     }
     if (!geladen && laadLabel()) {
       geladen = true;
