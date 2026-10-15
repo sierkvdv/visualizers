@@ -2,7 +2,7 @@
 // Meet 15 s lang waar de tijd per beeld heen gaat (updates, hooks, tekenen, WebGL-aanroepen zoals shaders compileren
 // en texturen uploaden) en stuurt één regel naar ./diag?d=... (komt in de nginx-accesslog van club.sierk.dev).
 (() => {
-  if (!/[?&]diag\b/.test(location.search)) return;
+  if (!/[?&]diag\b/.test(location.search) || /[?&]diag=bench\b/.test(location.search)) return;
   const T = {}, N = {}, errs = [];
   const tel = (k, ms) => { T[k] = (T[k] || 0) + ms; N[k] = (N[k] || 0) + 1; };
   const timed = (k, f) => function () { const t0 = performance.now(); try { return f.apply(this, arguments); } finally { tel(k, performance.now() - t0); } };
@@ -62,4 +62,55 @@
     setTimeout(tick, 500);
   };
   setTimeout(tick, 500);
+})();
+
+// Testronde (?diag=bench): zet om de paar seconden één zwaar onderdeel uit en meet de beelden per seconde,
+// zodat de lichtste stand op echte cijfers van dat apparaat gebouwd wordt. Stuurt per stap en aan het eind een regel.
+(() => {
+  if (!/[?&]diag=bench\b/.test(location.search)) return;
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;font:14px monospace;color:#0f0;background:rgba(0,0,0,.75);padding:6px 8px;pointer-events:none';
+  document.body.appendChild(box);
+  const stuur = d => { new Image().src = 'diag?d=' + encodeURIComponent(JSON.stringify(d)); };
+  const kern = { composer: composer.render.bind(composer), PR };
+  const lampen = []; scene.traverse(o => { if ((o.isPointLight || o.isSpotLight) && !spots.slice(0, 2).some(s => s.light === o)) lampen.push(o); });
+  const T = { rook: false, bundels: false, fractal: false, nabewerking: false, lampen: false, res: false };
+  clubHooks.push(() => {  // elk beeld opnieuw, want de kern zet deze dingen zelf weer aan
+    if (T.rook) { for (const f of fogPool) f.sp.visible = false; for (const f of puffs) f.sp.visible = false; }
+    if (T.bundels) { for (const s of spots) s.beam.g.visible = false; for (const h of heads) h.beam.g.visible = false; }
+    if (T.fractal) { wallFx.visible = false; floorFx.visible = false; tiles.visible = true; }
+  });
+  function zet(t) {
+    Object.assign(T, { rook: false, bundels: false, fractal: false, nabewerking: false, lampen: false, res: false }, t);
+    composer.render = T.nabewerking ? () => renderer.render(scene, camera) : kern.composer;
+    for (const l of lampen) l.visible = !T.lampen;
+    if (!T.bundels) { for (const s of spots) s.beam.g.visible = true; for (const h of heads) h.beam.g.visible = true; }
+    PR = T.res ? Math.min(kern.PR, Math.sqrt(3e5 / (innerWidth * innerHeight))) : kern.PR; resize();
+  }
+  const STAPPEN = [['basis', {}], ['zonder rook', { rook: true }], ['zonder bundels', { bundels: true }], ['zonder fractal', { fractal: true }],
+    ['zonder nabewerking', { nabewerking: true }], ['minder lampen', { lampen: true }], ['0,3 MP', { res: true }],
+    ['alles uit', { rook: true, bundels: true, fractal: true, nabewerking: true, lampen: true, res: true }], ['basis', {}]];
+  const uit = {}, t0 = performance.now();
+  const fps = ms => new Promise(r => { let n = 0; const a = performance.now(); const f = () => { n++; if (performance.now() - a < ms) requestAnimationFrame(f); else r(Math.round(n / (performance.now() - a) * 10000) / 10); }; requestAnimationFrame(f); });
+  const wacht = ms => new Promise(r => setTimeout(r, ms));
+  (async () => {
+    while (typeof LAAD !== 'undefined' && LAAD.klaar < LAAD.totaal && performance.now() - t0 < 60000) { box.textContent = 'testronde: laden ' + LAAD.klaar + '/' + LAAD.totaal; await wacht(500); }
+    if (window.clubKwaliteit) clubKwaliteit.zet('laag');  // vaste stand, geen bewaker die meeschakelt
+    await wacht(3000);
+    kern.PR = PR;
+    for (let i = 0; i < STAPPEN.length; i++) {
+      const [naam, t] = STAPPEN[i];
+      box.textContent = `testronde ${i + 1}/${STAPPEN.length}: ${naam}…`;
+      zet(t);
+      await wacht(t.lampen || i === 0 ? 5000 : 2500);  // lampen uit = shaders opnieuw bouwen
+      const f = await fps(5000);
+      uit[naam + (uit[naam] !== undefined ? ' 2' : '')] = f;
+      stuur({ fase: 'bench', stap: naam, fps: f, cv: renderer.domElement.width + 'x' + renderer.domElement.height });
+    }
+    zet({});
+    const gl = renderer.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    stuur({ fase: 'bench-klaar', gpu: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '?', ua: navigator.userAgent.slice(0, 90), uit });
+    box.textContent = 'testronde klaar, verstuurd — dank je!';
+    if (window.clubKwaliteit) clubKwaliteit.zet('auto');
+  })();
 })();
