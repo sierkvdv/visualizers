@@ -126,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func applicationDidFinishLaunching(_ note: Notification) {
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "app")
+        // 3D-figuren en texturen worden via XHR vanaf file:// geladen; zonder deze vlag blokkeert WebKit dat
+        cfg.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         webView = WKWebView(frame: .zero, configuration: cfg)
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),

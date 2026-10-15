@@ -55,6 +55,7 @@
     <option value="bar">Camera: langs de bar</option>
     <option value="paal">Camera: paaldanseres</option>
     <option value="trip">Camera: naar de tweede zaal</option>
+    <option value="wormpjes">Camera: tussen de wormpjes</option>
   </select>
   <select id="strobe">
     <option value="uit">Stroboscoop: uit</option>
@@ -2165,6 +2166,15 @@ const SHOTS = {
         const a = (t - s.arrived) * 0.25;
         camPos.set(p.x + Math.sin(a) * 3.4, 2.0 + 0.5 * Math.sin(a * 0.7), p.z + Math.cos(a) * 3.4); camLook.set(p.x, 1.4, p.z); camFov = 62;
       }
+    } },
+  // laag bij de grond tussen de wormpjes: ze rennen langs de lens of staan te roken, de slak torent erachter
+  wormpjes:   { w: 2.2, beats: 12, make: () => ({ w: worms.length ? pick(worms) : null, look: null, side: pick([-1, 1]) }),
+    at(s, u, t) {
+      if (!s.w) { const h = anyDancer().home; camPos.set(h.x + 2, 1.5, h.z + 2); camLook.set(h.x, 1.1, h.z); return; }
+      const p = s.w.root.position, r = s.w.root.rotation.y, c = slug ? slug.root.position : p;
+      wantLook.set(p.x + Math.sin(r) * 1.3 + Math.cos(r) * 0.7 * s.side, 0.38, p.z + Math.cos(r) * 1.3 - Math.sin(r) * 0.7 * s.side);  // voor het wormpje uit, op wormhoogte
+      if (!s.look) s.look = wantLook.clone(); else s.look.lerp(wantLook, 0.12);
+      camPos.copy(s.look); camLook.set(p.x * 0.7 + c.x * 0.3, 0.55 + 0.5 * u, p.z * 0.7 + c.z * 0.3); camFov = 62;
     } },
   dj:         { w: 1, beats: 8, make: () => ({ side: pick([-1, 1]) }), at(s, u, t) { camPos.set(s.side * 1.1, 2.35, -9.9); camLook.set(-s.side * 1.5 + Math.sin(t * 0.3), 0.9, 0); camFov = 60 - 8 * ease(u); } },
 };

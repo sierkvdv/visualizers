@@ -27,6 +27,8 @@ swiftc -O -target x86_64-apple-macos13.0 ../../app/main.swift -o "$T/x86_64"
 lipo -create "$T/arm64" "$T/x86_64" -output "$APP/Contents/MacOS/$NAME"
 cp ../index.html AppIcon.icns "$APP/Contents/Resources/"
 cp -R ../lib "$APP/Contents/Resources/lib"
+# 3D-figuren, muurtexturen en de losse uitbreidingen (zaal 2, lichtregie, enz.)
+for d in models tex z2 club; do [ -d "../$d" ] && rsync -a --exclude bron "../$d" "$APP/Contents/Resources/"; done
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
