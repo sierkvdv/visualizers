@@ -69,10 +69,10 @@
   }
 
   const fogReserve = [];
-  function rook(laag) {  // laag: de helft van de rookwolken, rookmachines en lichtvlekjes
-    puffs.forEach((f, i) => { if (i % 2) f.sp.visible = !laag; });
-    if (laag && !fogReserve.length) { fogReserve.push(...fogPool.splice(fogPool.length >> 1)); fogReserve.forEach(f => f.sp.visible = false); }
-    else if (!laag && fogReserve.length) fogPool.push(...fogReserve.splice(0));
+  function rook(laag, geen) {  // laag: de helft van de rookwolken, rookmachines en lichtvlekjes; geen (minimaal/tv): geen rook
+    if (fogReserve.length) fogPool.push(...fogReserve.splice(0));
+    puffs.forEach((f, i) => { f.sp.visible = geen ? false : !(laag && i % 2); });
+    if (laag) { fogReserve.push(...fogPool.splice(geen ? 0 : fogPool.length >> 1)); fogReserve.forEach(f => f.sp.visible = false); }
     flecks.count = laag ? FLECKS >> 1 : FLECKS;
   }
 
@@ -163,7 +163,7 @@
     shadowCatcher.visible = !laag;
     if (!laag) renderer.shadowMap.needsUpdate = true;  // meteen een schaduwkaart, anders is de vloer even zwart onder die spots
     for (const l of extraLicht) l.visible = !laag;
-    rook(laag);
+    rook(laag, mini);
     if (bloom) bloom.enabled = !laag;
     if (feedback && laag) feedback.enabled = false;
     bloomK = laag ? 0.25 : midden ? 0.5 : 1;
