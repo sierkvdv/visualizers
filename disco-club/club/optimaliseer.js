@@ -9,9 +9,12 @@
 //     onzichtbaar (bv. klein decor buiten de bol-opname), dan tekenen voor die render de originelen.
 //  4. vaste objecten: matrixAutoUpdate uit (ook op de scène zelf), zodat scene.updateMatrixWorld ze niet steeds opnieuw uitrekent;
 //     dezelfde controle zet een object dat toch bewoog weer gewoon aan.
+//  5. animaties: AnimationMixer.update alleen voor figuren die iemand ziet; klein in beeld om het andere beeld (tijd loopt door)
+//  6. figuren: alleen de botten doorrekenen die veranderden (en Skeleton.update/bottextuur alleen als er iets veranderde)
+//  7. onzichtbare rookwolkjes en figuren: in teken() geen matrices
 // Het zoek- en bouwwerk loopt in stukjes van samen hooguit 0,5 ms per beeld (geen haperingen).
 // Vergelijken: ?opt=0 achter de link = alles uit. In de console: clubOpt.staat(), clubOpt.schakel(false/true) (A/B in dezelfde toestand),
-// clubOpt.uit() (alles terug zoals het was).
+// clubOpt.uit() (alles terug zoals het was); 5-7 apart: clubOpt.anim.aan = false (tellers in clubOpt.anim).
 (function () {
   'use strict';
   if (typeof scene === 'undefined' || typeof renderer === 'undefined' || typeof clubHooks === 'undefined') return;
@@ -672,6 +675,310 @@
     tel.groepen++; tel.leden += leden.length;
   }
 
+  // ---------- 5. animaties: alleen bijwerken wat iemand kan zien ----------
+  // AnimationMixer.update kost ~25 µs per figuur per beeld (35-56 figuren). Per beeld per mixer een interval uit waar het figuur staat
+  // (ruime bol om het lichaam): 1 = elk beeld, 2 = om het andere, 3/4 = om de 3-4 beelden, 0 = niet.
+  //  - in het hoofdbeeld of in de spiegelvloer: 1; klein in beeld (< KLEIN van de beeldhoogte): 2
+  //  - alleen de schaduw in beeld (schaduw op de vloer vanuit de spots): 2
+  //  - alleen in de bol-opname (hoog, camera in zaal 1) of op de ledwand (IMAG filmt de zaal): 3-4
+  //  - nergens te zien (andere zaal, verborgen, buiten beeld zonder bol): 0
+  // De tijd loopt door: wie overgeslagen wordt spaart dt op en krijgt die bij de volgende update (act/blend/paal: update(dt)).
+  // pose/dansgevoel/meeleven zetten de cliptijd zelf (a.time = ... vanuit de tel, dan update(0)): die missen dus niets.
+  // Intervallen per figuur verspreid (fase), zodat niet alle figuren in hetzelfde beeld bijwerken.
+  // Beslist met de camera van het vorige beeld (de hooks lopen vóór updateCamera); vlak vóór teken() nog eens met de echte camera als
+  // die versprong: wie dan eerder aan de beurt is (camerawissel, terug uit het doolhof), wordt meteen bijgewerkt.
+  // De lichaamsmatrix volgt elk beeld de plek (lopen, deinen): ook klein in beeld beweegt een figuur vloeiend, alleen de pose om het andere.
+  const MX = THREE.AnimationMixer.prototype, orgMix = MX.update;
+  const KLEIN = 0.09, MARGE = 0.3;
+  const AN = { aan: true, mixers: 0, beelden: 0, gedaan: 0, over: 0, inhaal: 0, klas: [0, 0, 0, 0, 0] };
+  window.clubOpt.anim = AN;
+  AN.rec = m => AREC.get(m);  // testen: clubOpt.anim.rec(d.mixer)
+  AN.bij = m => { const R = AREC.get(m); if (R) { const t = R.acc; R.acc = 0; orgMix.call(m, t); } };  // testen: nu bijwerken (met de opgespaarde tijd)
+  const AREC = new WeakMap(), overSlag = [];
+  const frusA = new THREE.Frustum(), mF2 = new THREE.Matrix4(), bolA = new THREE.Sphere(), boxA = new THREE.Box3(), boxB = new THREE.Box3(), vA3 = new THREE.Vector3();
+  const ZAAL = typeof ROOM === 'number' ? ROOM : 14;
+  const AG = { fn: -1, tan: 1, cx: 0, cy: 0, cz: 0, bol: false, spiegel: false, led: false, ledK: 3, lampen: [] };
+  function anGlob() {  // per beeld: frustum, bol/spiegel/schaduw/ledwand aan of uit
+    frusA.setFromProjectionMatrix(mF2.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const e = camera.matrixWorld.elements, x = e[12], z = e[14];
+    for (let i = 0; i < 16; i++) camW[i] = e[i];
+    camW[16] = camera.fov;
+    AG.cx = x; AG.cy = e[13]; AG.cz = z;
+    AG.tan = 2 * Math.tan(camera.fov * Math.PI / 360) / (camera.zoom || 1);
+    const in1 = Math.abs(x) < ZAAL + 0.5 && Math.abs(z) < ZAAL + 0.5;
+    AG.bol = !!(typeof KW !== 'undefined' && KW.bol && KW.bolFiguren !== false && in1);
+    AG.spiegel = !!(typeof mirror !== 'undefined' && mirror && mirror.isReflector && mirror.visible);
+    AG.lampen.length = 0;
+    if (typeof spots !== 'undefined' && (typeof KW === 'undefined' || KW.schaduw)) for (const s of spots) if (s.light.castShadow && s.light.visible) AG.lampen.push(s.light.position);
+    const L = window.clubLedwand;
+    AG.led = !!(L && L.imag && in1);
+    AG.ledK = Math.max(2, Math.min(4, (typeof KW !== 'undefined' && KW.imag) || 3));
+  }
+  function nieuweMixer(m) {  // maat van het figuur uit de botten (stand van nu), in eenheden van het lichaam (schaal kan later veranderen)
+    const b = m.getRoot && m.getRoot();
+    if (!b || !b.isObject3D) return null;
+    b.updateWorldMatrix(true, true);
+    boxA.makeEmpty();
+    b.traverse(o => { if (o.isBone) boxA.expandByPoint(vA3.setFromMatrixPosition(o.matrixWorld)); });
+    if (boxA.isEmpty()) b.traverse(o => {  // zonder skelet: de geometrie zelf
+      const g = o.isMesh && o.geometry;
+      if (!g || !g.attributes || !g.attributes.position) return;
+      if (!g.boundingBox) g.computeBoundingBox();
+      boxA.union(boxB.copy(g.boundingBox).applyMatrix4(o.matrixWorld));
+    });
+    if (boxA.isEmpty()) return null;
+    const e = b.matrixWorld.elements, sy = Math.hypot(e[4], e[5], e[6]) || 1;
+    boxA.getSize(vA3);
+    vA3.y *= 1.12;  // botten: het hoofdbot zit onder de kruin
+    AN.mixers++;
+    const R = { m, body: b, dy: ((boxA.min.y + boxA.max.y) / 2 - e[13]) / sy, r: 0.6 * vA3.length() / sy, h: vA3.y / sy,
+                fase: Math.floor(Math.random() * 12), acc: 0, fn: -1, k: 1, doe: true, start: 3, lijst: -1, laatst: -1e9,
+                ver: 0, struct: true, knopen: null, eind: null, eigen: false, snap: null, mw: new Float64Array(16), meshes: null, fnS: -1, cs: false };
+    rustKoppel(R);
+    return R;
+  }
+  // interval voor dit figuur (zie boven); AG moet van dit beeld zijn
+  function grootte(x, y, z, h) {  // hoogte als deel van de beeldhoogte
+    const dx = x - AG.cx, dy = y - AG.cy, dz = z - AG.cz, d = Math.sqrt(dx * dx + dy * dy + dz * dz);  // geen Math.hypot: die maakt afval
+    return d < 0.5 || h / (d * AG.tan) >= KLEIN ? 1 : 2;
+  }
+  function werptSchaduw(R) {  // lounge en doolhof-figuren werpen geen schaduw
+    if (R.fnS !== frameNo) {
+      R.fnS = frameNo; R.cs = false;
+      if (!R.meshes) { R.meshes = []; R.body.traverse(o => { if (o.isMesh) R.meshes.push(o); }); }
+      for (let i = 0; i < R.meshes.length; i++) if (R.meshes[i].castShadow) { R.cs = true; break; }
+    }
+    return R.cs;
+  }
+  function klasse(R) {
+    const b = R.body;
+    for (let o = b; ; o = o.parent) {
+      if (!o.visible) return 0;
+      if (!o.parent) { if (o !== scene) return 0; break; }
+    }
+    const e = b.matrixWorld.elements, sy = Math.sqrt(e[4] * e[4] + e[5] * e[5] + e[6] * e[6]);
+    const x = e[12], y = e[13] + R.dy * sy, z = e[14], r = R.r * sy + MARGE, h = R.h * sy;
+    let k = 0;
+    bolA.center.set(x, y, z); bolA.radius = r;
+    if (frusA.intersectsSphere(bolA)) { k = grootte(x, y, z, h); if (k === 1) return 1; }
+    const zaal1 = Math.abs(x) < ZAAL + 1 && Math.abs(z) < ZAAL + 1;
+    if (AG.spiegel && zaal1) {  // spiegelvloer (y = 0): het spiegelbeeld van de bol in het hoofdbeeld
+      bolA.center.y = -y;
+      if (frusA.intersectsSphere(bolA)) { const k2 = grootte(x, -y, z, h); if (k2 === 1) return 1; k = 2; }
+      bolA.center.y = y;
+    }
+    if (k) return k;
+    if (zaal1) {
+      // schaduw in beeld? het hele stuk van het figuur tot zijn schaduw op de vloer (vanuit de lamp), dus ook een muur of de bar ertussen
+      if (AG.lampen.length && werptSchaduw(R)) for (let i = 0; i < AG.lampen.length; i++) {
+        const L = AG.lampen[i];
+        if (y + r >= L.y - 0.05) return 2;
+        const t = L.y / (L.y - y), px = L.x + (x - L.x) * t, pz = L.z + (z - L.z) * t, rs = r * L.y / (L.y - y - r);
+        bolA.center.set((x + px) / 2, y / 2, (z + pz) / 2);
+        bolA.radius = 0.5 * Math.sqrt((px - x) * (px - x) + y * y + (pz - z) * (pz - z)) + rs;
+        if (frusA.intersectsSphere(bolA)) return 2;
+      }
+      if (AG.bol) return 3;
+      if (AG.led) return AG.ledK;
+    }
+    return 0;
+  }
+  // aan de beurt: elk beeld, op de eigen fase, of te lang geleden (net weer te zien na overslaan: meteen)
+  const beurt = R => R.k === 1 || (R.k > 1 && ((frameNo + R.fase) % R.k === 0 || frameNo - R.laatst >= R.k));
+  MX.update = function (dt) {
+    if (!AN.aan) return orgMix.call(this, dt);
+    let R = AREC.get(this);
+    if (R === undefined) { try { R = nieuweMixer(this); } catch (e) { fout(e); R = null; } AREC.set(this, R); }
+    if (!R) return orgMix.call(this, dt);
+    if (R.fn !== frameNo) {  // één beslissing per beeld (sommige figuren krijgen meer updates per beeld: meeleven, golf)
+      R.fn = frameNo;
+      if (AG.fn !== frameNo) { AG.fn = frameNo; try { anGlob(); } catch (e) { fout(e); } }
+      if (R.start > 0) { R.start--; R.k = 1; } else { try { R.k = klasse(R); } catch (e) { fout(e); R.k = 1; } }
+      R.doe = beurt(R);
+      AN.klas[R.k]++;
+      if (R.doe) AN.gedaan++; else { AN.over++; if (R.lijst !== frameNo) { R.lijst = frameNo; overSlag.push(R); } }
+    }
+    if (R.doe) { const t = dt + R.acc; R.acc = 0; R.laatst = frameNo; return orgMix.call(this, t); }
+    R.acc += dt;
+    return this;
+  };
+  // vlak vóór het tekenen: wie met de echte camera van dit beeld eerder aan de beurt is dan besloten, nu bijwerken
+  const camW = new Float64Array(17);  // camerastand waarmee AG berekend is (matrixWorld + fov)
+  function camSprong() {  // verschilt de camera van nu genoeg van die van de beslissing? (marge MARGE dekt kleine stapjes)
+    const e = camera.matrixWorld.elements;
+    if (camera.fov !== camW[16]) return true;
+    const dx = e[12] - camW[12], dy = e[13] - camW[13], dz = e[14] - camW[14];
+    if (dx * dx + dy * dy + dz * dz > 0.01) return true;  // > 10 cm
+    return e[8] * camW[8] + e[9] * camW[9] + e[10] * camW[10] < 0.99996;  // kijkrichting > ~0,5 graad gedraaid
+  }
+  function inhalen() {
+    AN.beelden++;
+    if (!overSlag.length) return;
+    camera.updateMatrixWorld();
+    if (!camSprong()) { overSlag.length = 0; return; }
+    AN.sprong = (AN.sprong || 0) + 1;
+    anGlob();
+    for (let i = 0; i < overSlag.length; i++) {
+      const R = overSlag[i];
+      if (R.fn !== frameNo || R.doe) continue;
+      R.k = klasse(R);
+      if (R.k && beurt(R)) { R.doe = true; R.laatst = frameNo; const t = R.acc; R.acc = 0; orgMix.call(R.m, t); AN.inhaal++; }
+    }
+    overSlag.length = 0;
+  }
+
+  // ---------- 6. figuren: alleen doorrekenen wat veranderde ----------
+  // Per figuur een lijst van alle knopen onder het lichaam (botten, meshes, glas/sigaret/telefoon aan een hand) met hun laatste lokale
+  // stand. scene.updateMatrixWorld rekent (eigen updateMatrixWorld op het lichaam) alleen de knopen door waarvan de stand veranderde,
+  // met alles eronder; staat het lichaam anders in de wereld, dan alleen opnieuw vermenigvuldigen (lokale matrices zijn nog goed).
+  // Niets veranderd (geen mixer-update, niets bovenop): helemaal niets, en Skeleton.update ook niet (botmatrices + upload van de
+  // bottextuur). Uitkomst gelijk aan three: dezelfde matrices, alleen niet opnieuw uitgerekend. Plek in de wereld met een marge van
+  // 10 µm (dansers schuiven met steeds kleinere stapjes terug naar hun plek: die tellen pas als ze samen 10 µm zijn).
+  // Nergens te zien (interval 0, ook na de controle met de echte camera in inhalen): voor de renders van teken() verborgen (met het glas
+  // in de hand), dus ook niet doorgerekend (zie 7): zo tekent niets ze ooit op een oude plek (een loper die doorliep).
+  // Elk ander lichaam (geen bekende mixer) gaat gewoon zoals altijd. Uit: clubOpt.anim.rust = false.
+  AN.rust = true; AN.rustOver = 0; AN.rustVol = 0; AN.rustDeel = 0; AN.knoopBij = 0; AN.skelOver = 0; AN.slaapOver = 0; AN.onzOver = 0;
+  let inTeken = false;
+  const verstopt = [];
+  const slaapt = R => R.fn === frameNo && R.k === 0 && !R.doe;
+  // voor andere scripts (meeleven): sloeg de mixer van dit figuur dit beeld over? dan hoeft er ook niets bovenop
+  AN.stil = d => { const R = AN.aan && d && d.mixer ? AREC.get(d.mixer) : null; return !!R && R.fn === frameNo && !R.doe; };
+  const P3umw = P3.updateMatrixWorld, SKP = THREE.Skeleton.prototype, orgSkel = SKP.update, orgAdd = P3.add, orgRemove = P3.remove;
+  const SMumw = THREE.SkinnedMesh.prototype.updateMatrixWorld;
+  const ST = 11;  // per knoop: positie 3, draaiing 4, schaal 3, matrixAutoUpdate 1
+  function rustKoppel(R) {
+    const b = R.body;
+    b._optR = R;
+    b.updateMatrixWorld = lichaamUMW;
+    b.traverse(o => { if (o.isSkinnedMesh && o.skeleton) o.skeleton._optR = R; });
+  }
+  function knopenBouw(R) {  // knopen in volgorde ouder-voor-kind, met per knoop het einde van zijn tak
+    R.meshes = null;
+    const L = [], E = [];
+    let eigen = false;
+    (function af(o) {
+      const i = L.length;
+      L.push(o); E.push(0);
+      if (o !== R.body && o.updateMatrixWorld !== P3.updateMatrixWorld && !(o.isSkinnedMesh && o.updateMatrixWorld === SMumw)) eigen = true;
+      const ch = o.children;
+      for (let k = 0; k < ch.length; k++) af(ch[k]);
+      E[i] = L.length;
+    })(R.body);
+    L.shift(); E.shift();
+    for (let i = 0; i < E.length; i++) E[i]--;
+    R.knopen = L; R.eind = E; R.eigen = eigen;  // eigen: een knoop met een eigen updateMatrixWorld (niet bekend): dan altijd gewoon
+    if (!R.snap || R.snap.length !== L.length * ST) R.snap = new Float64Array(L.length * ST);
+    R.struct = false;
+  }
+  function snapNeem(R) {
+    const N = R.knopen, s = R.snap;
+    for (let i = 0, j = 0; i < N.length; i++, j += ST) {
+      const o = N[i], p = o.position, q = o.quaternion, c = o.scale;
+      s[j] = p.x; s[j + 1] = p.y; s[j + 2] = p.z; s[j + 3] = q._x; s[j + 4] = q._y; s[j + 5] = q._z; s[j + 6] = q._w; s[j + 7] = c.x; s[j + 8] = c.y; s[j + 9] = c.z;
+      s[j + 10] = o.matrixAutoUpdate ? 1 : 0;
+    }
+    const m = R.body.matrixWorld.elements, w = R.mw;
+    for (let i = 0; i < 16; i++) w[i] = m[i];
+  }
+  function lichaamUMW(force) {  // this = lichaam van een figuur; zelfde uitkomst als Object3D.updateMatrixWorld
+    const R = this._optR;
+    if (!R || !AN.aan || !AN.rust) return P3umw.call(this, force);
+    if (inTeken && slaapt(R) && this.visible) { this.visible = false; verstopt.push(this); AN.slaapOver++; }  // nergens te zien: weg voor deze renders
+    if (inTeken && (!this.visible || (this.parent && !this.parent.visible))) { this.matrixWorldNeedsUpdate = true; AN.onzOver++; return; }  // zie 7
+    if (this.matrixAutoUpdate) this.updateMatrix();
+    if (this.matrixWorldNeedsUpdate || force) {
+      if (this.parent === null) this.matrixWorld.copy(this.matrix);
+      else this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
+      this.matrixWorldNeedsUpdate = false;
+    }
+    if (R.struct) knopenBouw(R);
+    else if (!R.eigen) { bij(R); return; }
+    vol(R);
+  }
+  function vol(R) {  // alle kinderen gewoon doorrekenen en de stand onthouden
+    const ch = R.body.children;
+    for (let i = 0; i < ch.length; i++) ch[i].updateMatrixWorld(true);
+    R.ver++;
+    snapNeem(R);
+    AN.rustVol++;
+  }
+  // alleen wat veranderde: lokale matrix opnieuw (compose) voor een knoop met een andere stand, wereldmatrix voor die knoop en zijn tak;
+  // lichaam verschoven: alle wereldmatrices (zonder compose). Knopen met matrixAutoUpdate uit houden hun matrix, zoals in three.
+  const bindInv = o => { if (o.bindMode === 'attached') o.bindMatrixInverse.copy(o.matrixWorld).invert(); else if (o.bindMode === 'detached') o.bindMatrixInverse.copy(o.bindMatrix).invert(); };
+  function bij(R) {
+    const m = R.body.matrixWorld.elements, w = R.mw;
+    let plek = false;
+    for (let i = 0; i < 16; i++) { const d = m[i] - w[i]; if (d > 1e-5 || d < -1e-5) { plek = true; break; } }
+    if (plek) for (let i = 0; i < 16; i++) w[i] = m[i];
+    const N = R.knopen, E = R.eind, s = R.snap;
+    let tot = 0, n = 0;
+    for (let i = 0, j = 0; i < N.length; i++, j += ST) {
+      const o = N[i], p = o.position, q = o.quaternion, c = o.scale, auto = o.matrixAutoUpdate;
+      // anders, of iemand rekende deze knoop tussendoor zelf uit (getWorldPosition: updateMatrix zet matrixWorldNeedsUpdate): opnieuw
+      if (o.matrixWorldNeedsUpdate || p.x !== s[j] || p.y !== s[j + 1] || p.z !== s[j + 2] || q._x !== s[j + 3] || q._y !== s[j + 4] || q._z !== s[j + 5] ||
+          q._w !== s[j + 6] || c.x !== s[j + 7] || c.y !== s[j + 8] || c.z !== s[j + 9] || (auto ? 1 : 0) !== s[j + 10]) {
+        s[j] = p.x; s[j + 1] = p.y; s[j + 2] = p.z; s[j + 3] = q._x; s[j + 4] = q._y; s[j + 5] = q._z; s[j + 6] = q._w; s[j + 7] = c.x; s[j + 8] = c.y; s[j + 9] = c.z;
+        s[j + 10] = auto ? 1 : 0;
+        if (auto) o.updateMatrix();
+        if (E[i] > tot) tot = E[i];
+      } else if (!plek && i >= tot) continue;
+      o.matrixWorld.multiplyMatrices(o.parent.matrixWorld, o.matrix);
+      o.matrixWorldNeedsUpdate = false;
+      if (o.isSkinnedMesh) bindInv(o);
+      n++;
+    }
+    if (n) { R.ver++; AN.rustDeel++; AN.knoopBij += n; } else AN.rustOver++;
+  }
+  SKP.update = function () {  // botmatrices en bottextuur: alleen als het lichaam sinds de vorige keer opnieuw doorgerekend is
+    const R = this._optR;
+    if (R && AN.aan && AN.rust && this._optVer === R.ver) { AN.skelOver++; return; }
+    orgSkel.call(this);
+    if (R) this._optVer = R.ver;
+  };
+  // iets bijgehangen of weggehaald onder een lichaam (glas, sigaret, telefoon): knopenlijst opnieuw en zeker doorrekenen
+  function structVuil(o) { for (let n = 0; o && n < 64; o = o.parent, n++) if (o._optR) { o._optR.struct = true; return; } }
+  P3.add = function () { const r = orgAdd.apply(this, arguments); structVuil(this); return r; };
+  P3.remove = function () { const r = orgRemove.apply(this, arguments); structVuil(this); return r; };
+  // ---------- 7. onzichtbare rookwolkjes en figuren: in teken() niet doorrekenen ----------
+  // Een onzichtbare sprite zonder kinderen (rook-, mist- en sigarettenwolkjes die niet in gebruik zijn: ~300) en een onzichtbaar figuur
+  // (lichaam of de groep erboven: weggelopen loper, club tijdens het doolhof, verborgen figuren hierboven) tekent geen enkele render van
+  // teken(), en niemand leest hun wereldmatrix: scene.updateMatrixWorld slaat ze dan over. Ze krijgen matrixWorldNeedsUpdate, dus de
+  // eerstvolgende update rekent ze weer helemaal door. Renders buiten teken() (ledwand, losse bol-opname, voortekenen doolhof) werken de
+  // scène zelf bij (scene.autoUpdate staat daar aan). Andere onzichtbare dingen gaan gewoon door (bv. kleinIndelen in index.html meet
+  // ook onzichtbare meshes, het doolhof rekent met groepen die nog verborgen zijn).
+  // Verder precies Object3D.updateMatrixWorld van three r128 (Camera en SkinnedMesh roepen hem via super aan).
+  P3.updateMatrixWorld = function (force) {
+    if (inTeken && !this.visible && this.isSprite && this.children.length === 0 && AN.aan) { this.matrixWorldNeedsUpdate = true; AN.onzOver++; return; }
+    if (this.matrixAutoUpdate) this.updateMatrix();
+    if (this.matrixWorldNeedsUpdate || force) {
+      if (this.parent === null) this.matrixWorld.copy(this.matrix);
+      else this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
+      this.matrixWorldNeedsUpdate = false;
+      force = true;
+    }
+    const ch = this.children;
+    for (let i = 0, l = ch.length; i < l; i++) ch[i].updateMatrixWorld(force);
+  };
+
+  const kernTeken = typeof teken === 'function' ? teken : null;
+  if (kernTeken) teken = function () {
+    if (AN.aan) try {
+      inhalen();
+      // glas/fles in de hand van wie nergens te zien is: hangt aan een oude handplek, dus ook weg voor deze renders
+      if (AN.rust && typeof held !== 'undefined') for (let i = 0; i < held.length; i++) {
+        const h = held[i], R = h.d && h.d.body && h.d.body._optR;
+        if (R && slaapt(R) && h.g.visible) { h.g.visible = false; verstopt.push(h.g); }
+      }
+    } catch (e) { fout(e); }
+    inTeken = true;
+    try { return kernTeken.apply(this, arguments); }
+    finally {
+      inTeken = false;
+      for (let i = 0; i < verstopt.length; i++) verstopt[i].visible = true;
+      verstopt.length = 0;
+    }
+  };
+
   // ---------- onderhoud: één keer per beeld (clubHook) ----------
   scene.updateMatrix();
   scene.matrixAutoUpdate = false;  // de scène zelf staat stil; anders rekent elke update alle kinderen opnieuw uit (force)
@@ -716,6 +1023,7 @@
   window.clubOpt.uit = function () {
     if (!aan) return;
     aan = false;
+    AN.aan = false;
     for (const G of [...GROEPEN]) groepTerug(G);
     for (const r of REC.values()) if (r.st === 1 || r.st === 2) { ontdooi(r); r.st = 3; }
     VAST.length = 0;

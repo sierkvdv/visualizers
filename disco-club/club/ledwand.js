@@ -247,6 +247,7 @@
   const MODES = ['scroll', 'woord', 'golf', 'pixel', 'imag'];
   let mode = 'geen', lastPick = '', modeStart = 0, lastB = -1, dropEnd = -1, dropT0 = 0, lastDropB = -99, forcedUntil = -1;
   let hiS = 0.3, hiF = 0.3, loF = 0.3, imagFresh = false, overlayOk = false;
+  window.clubLedwand = { get imag() { return mode === 'imag'; } };  // club/optimaliseer.js: figuren in zaal 1 blijven dan bewegen (de wand filmt ze)
   function setMode(m, b) {
     if (m !== mode) bars.visible = true;  // bij elke wissel terug; de hook zet ze daarna weer uit als er iets loopt
     mode = m; modeStart = b;

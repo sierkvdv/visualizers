@@ -37,6 +37,128 @@
   const tA = new THREE.Vector3(), tB = new THREE.Vector3(), tP = new THREE.Vector3(), tL = new THREE.Vector3(), zv = new THREE.Vector3();
   const fout = (wat, e) => console.error('doolhof: ' + wat, e);
 
+  // --- werk op de achtergrond: bouwen, opwarmen en opruimen in stukjes (gemeten op de 3070: doolhof-start 170-500 ms in één beeld,
+  // kamerwissel 35-135 ms). Een klus is een generator; na elke yield kijkt de lus naar de klok (per beeld hooguit ~3 ms, in het doolhof
+  // zelf 6 ms: daar is een beeld ~4 ms). `yield RUST` = deze klus gaat pas het volgende beeld verder (na een zware stap).
+  const RUST = 'rust';
+  const werk = [];
+  const STAT = doolhof.stat = { klussen: 0, stappen: 0, langste: 0, langsteWat: '', zwaar: [], nu: '', hookMs: 0, shaders: 0, texturen: 0, afgevoerd: 0, voorraad: 0, gebruikt: 0, zonder: 0 };
+  function klus(naam, it, voor) { const k = { naam, it }; if (voor) werk.unshift(k); else werk.push(k); STAT.klussen++; return k; }
+  const voltooi = it => { for (;;) { const s = it.next(); if (s.done) return s.value; } };  // generator in één keer afmaken
+  clubHooks.push(() => {
+    STAT.hookMs = 0;
+    if (!werk.length) return;
+    const t0 = performance.now(), budget = actief && actief.fase === 'doolhof' ? 6 : 3;
+    while (werk.length) {
+      const k = werk[0], t1 = performance.now();
+      let r;
+      try { r = k.it.next(); } catch (e) { fout('klus ' + k.naam, e); r = { done: true }; }
+      const d = performance.now() - t1;
+      STAT.stappen++; if (d > STAT.langste) { STAT.langste = d; STAT.langsteWat = k.naam; }
+      if (d > 8) { STAT.zwaar.push(k.naam + ':' + STAT.nu + ' ' + Math.round(d) + ' ms'); if (STAT.zwaar.length > 20) STAT.zwaar.shift(); }
+      if (r.done) { const i = werk.indexOf(k); if (i >= 0) werk.splice(i, 1); }
+      if (r.value === RUST || performance.now() - t0 >= budget) break;
+    }
+    STAT.hookMs = performance.now() - t0;
+  });
+  // groepen die (nog) los van de scène bestaan maar leven: de klaarstaande kamer, de volgende kamer, een nieuwe ∞-gang
+  const losseGroepen = new Set();
+  const levend = o => { while (o.parent) o = o.parent; return o === scene || losseGroepen.has(o); };
+
+  // --- shaders vasthouden: three gooit een programma weg zodra geen materiaal het meer gebruikt. Bij het opruimen van een kamer
+  // verdwenen zo alle shaders, en elke volgende kamer compileerde ze opnieuw (6-16 per kamer, ~10-100 ms per shader). Programma's van het
+  // doolhof krijgen één vaste gebruiker extra; het aantal soorten is begrensd (vaste shaderbronnen met een handvol defines).
+  const vast = new WeakSet();
+  function vastzetten(van) {
+    const P = renderer.info.programs;
+    for (let i = van || 0; i < P.length; i++) { const p = P[i]; if (!vast.has(p)) { vast.add(p); p.usedTimes++; } }
+  }
+  // compileren met de lampen van een stand, zonder de scène te doorlopen. 'doolhof' = zaal 2 uit, de lampen van zaal 1 (de kamerlampen
+  // zijn daarvan geleend, zie lampenAan), 'zaal2' = zaal 2 aan (∞-gang, loper in zaal 2). Sleutel van three: soort materiaal, aantal
+  // lampen, mist, soort object.
+  const nep = { isScene: true, fog: null, environment: null, lampen: [], lijst: [],
+    traverseVisible(f) { for (const l of this.lampen) f(l); }, traverse(f) { for (const o of this.lijst) f(o); } };
+  function lampenVan(stand) {
+    const z2 = zone2.visible, uit = [];
+    zone2.visible = stand === 'zaal2';
+    try { scene.traverseVisible(o => { if (o.isLight && !poolLicht.includes(o)) uit.push(o); }); } finally { zone2.visible = z2; }
+    if (stand === 'doolhof') for (let i = 0; i < tekortLampen(); i++) uit.push(poolLicht[i]);  // de kamerlampen zijn geleende clublampen (zie lampenAan)
+    return uit;
+  }
+  // Compileren zonder te wachten (KHR_parallel_shader_compile): three r128 vraagt na het linken meteen de uniforms op (getUniforms ->
+  // getProgramParameter) en dan wacht de hoofdlus tot de driver klaar is (ANGLE/D3D 10-250 ms per shader). Tijdens ons compileerwerk krijgt
+  // een NIEUW programma daarom een lege uniformlijst (het linken loopt op de achtergrond door), en daarna vergeet het materiaal die stand
+  // (renderer.properties.remove): bij het eerste echte tekenen zoekt three het programma opnieuw op uit de cache, nu met de echte uniforms.
+  // Is het linken dan nog niet klaar, dan wacht three zoals vroeger. Zonder de extensie: gewoon compileren (blokkerend).
+  const gl = renderer.getContext(), PAR = gl.getExtension('KHR_parallel_shader_compile');
+  const LEEG = { seq: [], map: {}, setValue() {}, setOptional() {} }, lopend = new Set();
+  let losBezig = false;
+  if (PAR) {
+    const P = renderer.info.programs, oPush = P.push;
+    P.push = function (p) {
+      if (losBezig && p && typeof p.getUniforms === 'function' && p.program) {
+        const echt = p.getUniforms;
+        p.getUniforms = function () { return losBezig ? LEEG : echt.call(this); };
+        p.dhEcht = echt; lopend.add(p);
+      }
+      return oPush.apply(this, arguments);
+    };
+  }
+  function losKlaar() {  // lopende programma's nakijken (vraagt niets dat wacht); true als er niets meer linkt
+    for (const p of lopend) {
+      if (!gl.getProgramParameter(p.program, PAR.COMPLETION_STATUS_KHR)) continue;
+      lopend.delete(p); p.getUniforms = p.dhEcht; delete p.dhEcht;
+      if (!gl.getProgramParameter(p.program, gl.LINK_STATUS)) console.error('THREE.WebGLProgram: shader error (doolhof)', gl.getProgramInfoLog(p.program));
+    }
+    return lopend.size === 0;
+  }
+  // fn() roept renderer.compile aan voor `objecten`; aantal nieuwe programma's (die blijven bestaan, zie vastzetten)
+  function losCompileren(fn, objecten) {
+    const P = renderer.info.programs, n0 = P.length, dbg = renderer.debug.checkShaderErrors;
+    if (PAR) { losBezig = true; renderer.debug.checkShaderErrors = false; }
+    try { fn(); } finally { losBezig = false; renderer.debug.checkShaderErrors = dbg; }
+    const nieuw = P.length - n0;
+    if (nieuw > 0) { vastzetten(n0); STAT.shaders += nieuw; }
+    // lege stand vergeten: elk materiaal dat een programma kreeg dat nog linkt (nieuw, of al eerder gestart en nog niet klaar)
+    if (PAR && lopend.size) for (const o of objecten) for (const m of [].concat(o.material || [])) {
+      if (m && lopend.has(renderer.properties.get(m).currentProgram)) renderer.properties.remove(m);
+    }
+    return nieuw;
+  }
+  // hooguit 2 shaders tegelijk laten linken: te veel tegelijk houdt het gpu-proces bezig en dan staat de hoofdlus alsnog stil
+  // (gemeten: 0,2-0,6 s per beeld toen de voorwarmer per beeld ~10 shaders startte)
+  const MAXLOS = 2;
+  const losVol = () => !!PAR && !losKlaar() && lopend.size >= MAXLOS;
+  doolhof.losCompileren = losCompileren;  // ook voor club/voorwarm.js
+  doolhof.losKlaar = () => !PAR || losKlaar();
+  doolhof.losVol = losVol;
+  doolhof.parallel = !!PAR;
+  // echt: via de scène zelf (traverse/traverseVisible even vervangen door onze lijsten). three houdt per scène één lampstand bij; met
+  // dezelfde lampen als zaal 1 (de doolhof-stand met geleende lampen) blijft zijn versie gelijk, dus hoeft three bij het eerste beeld in
+  // het doolhof niet elk materiaal opnieuw op te zoeken (op een trage cpu ~30 ms in het eerste beeld)
+  function compileer(lijst, lampen, echt) {
+    if (echt) {
+      scene.traverse = f => { for (const o of lijst) f(o); };
+      scene.traverseVisible = f => { for (const l of lampen) f(l); };
+      try { return losCompileren(() => renderer.compile(scene, camera), lijst); } finally { delete scene.traverse; delete scene.traverseVisible; }
+    }
+    nep.fog = scene.fog; nep.environment = scene.environment; nep.lampen = lampen; nep.lijst = lijst;
+    try { return losCompileren(() => renderer.compile(nep, camera), lijst); } finally { nep.lijst = []; }
+  }
+  const gpuKlaar = t => renderer.properties.get(t).__version === t.version;
+  function texturenVan(groepen) {
+    const uit = new Set();
+    const zet = v => { if (v && v.isTexture && !v.isCubeTexture && !v.isVideoTexture && !v.isWebGLRenderTarget) uit.add(v); };
+    for (const g of groepen) g.traverse(o => {
+      for (const m of [].concat(o.material || [])) {
+        if (!m) continue;
+        for (const k in m) zet(m[k]);
+        if (m.uniforms) for (const k in m.uniforms) zet(m.uniforms[k] && m.uniforms[k].value);
+      }
+    });
+    return [...uit];
+  }
+
   // --- paden: afgeronde lijnen met booglengte ---
   function afronden(pts, r, n = 6) {  // hoeken vervangen door een boogje (kwadratische bezier) van hooguit r voor en na de hoek
     const uit = [pts[0].clone()];
@@ -227,19 +349,25 @@
   }
   function gangBeat() { const r = window.clubRegie || null; return { pos: beatPos, pulse, energy, bas: bands[0].v, mid: bands[1].v, hoog: bands[2].v, stand: (r && r.stand) || 'groove', regie: r }; }
   const gangLijst = new Set();  // levende gangen: elke frame update (ook verborgen: dan klopt ook het eerste beeld na de wissel)
-  // gang plaatsen: frame f = begin en richting (yaw) in de ruimte van parent, ov = de overgang (stijl, sx, zaad), kap = welk eind dicht
-  function gang(parent, f, ov, kap) {
+  // gang plaatsen: frame f = begin en richting (yaw) in de ruimte van parent, ov = de overgang (stijl, sx, zaad), kap = welk eind dicht.
+  // In stappen (generator): een stijl mag zelf een generator teruggeven (doolhof/gangen.js), dan per stuk; gang() = in één keer.
+  function gang(parent, f, ov, kap) { return voltooi(gangStappen(parent, f, ov, kap)); }
+  function* gangStappen(parent, f, ov, kap) {
     const g = new THREE.Group();
     g.position.set(f.x, 0, f.z); g.rotation.y = f.yaw; g.scale.x = ov.sx;  // spiegelen mag: three draait de voorkant dan zelf om
     parent.add(g);
     const def = ov.stijl && !ov.kapot ? doolhof.gangStijlen[ov.stijl] : null, maat = gangMaat(ov);
     let st = null;
     if (def) {
-      try { st = def.maak(g, maat, reeks(ov.zaad), ov.zwaar) || {}; }
-      catch (e) {  // dan beide helften kaal (ov.kapot)
+      try {
+        const r = def.maak(g, maat, reeks(ov.zaad), ov.zwaar);
+        if (r && typeof r.next === 'function' && typeof r.throw === 'function') {
+          for (;;) { const s = r.next(); if (s.done) { st = s.value || {}; break; } yield; }
+        } else st = r || {};
+      } catch (e) {  // dan beide helften kaal (ov.kapot)
         fout('gangstijl ' + ov.stijl, e); ov.kapot = true; st = null;
         const weg = new THREE.Group(); for (const c of [...g.children]) weg.add(c);
-        try { afvoeren(weg); } catch (e2) { /* niets */ }
+        afvoerLater([weg]);
       }
     }
     if (!st) st = kaleGang(g);
@@ -254,14 +382,14 @@
     if (++ov.n >= 2) ov.deel.clear();  // beide helften staan: het deel-lijstje is niet meer nodig
     return g;
   }
-  const inScene = o => { while (o) { if (o === scene) return true; o = o.parent; } return false; };
   clubHooks.push((dt, now) => {
     // de ∞-gang krijgt zijn eerste stijl zodra doolhof/gangen.js geladen is (bij het laden van de kern bestonden er nog geen)
-    if (zaal2Ov && !zaal2Ov.stijl && !actief && Object.keys(doolhof.gangStijlen).length) zaal2Gang();
+    if (zaal2Ov && !zaal2Ov.stijl && !actief && !voorraad && Object.keys(doolhof.gangStijlen).length) zaal2Gang();
     if (!gangLijst.size) return;
     const b = gangBeat();
     for (const x of gangLijst) {
-      if (!inScene(x.g)) { gangLijst.delete(x); continue; }
+      // ook de gangen van een kamer die nog los klaarstaat: dan klopt het eerste beeld na de wissel meteen (update = functie van de klok)
+      if (!levend(x.g)) { gangLijst.delete(x); continue; }
       if (x.update) try { x.update(dt, now, b, b.stand); } catch (e) { x.update = null; fout('gangstijl ' + x.stijl + ' (update)', e); }
     }
   });
@@ -274,7 +402,7 @@
     const oud = zaal2Groep;
     zaal2Ov = nieuweOvergang(zaal2Ov && zaal2Ov.stijl, ZAAL2_SX);
     zaal2Groep = gang(zone2, ZAAL2_UIT, zaal2Ov, 'eind');
-    if (oud) { zone2.remove(oud); afvoeren(oud); }
+    if (oud) { zone2.remove(oud); afvoerLater([oud]); }
   }
   (function bouwDeur() {
     const room2 = zone2.children.find(o => o.isMesh && Array.isArray(o.material) && o.material[0] === tripMat);
@@ -395,15 +523,32 @@
       }
     });
   }
-  function afvoeren(groep) {
-    const G = new Set(), Mt = new Set(), T = new Set(), g2 = new Set(), m2 = new Set(), t2 = new Set();
-    verzamel(groep, G, Mt, T);
-    verzamel(scene, g2, m2, t2);  // wat de rest van de scène (club, zaal 2, de andere kamer) nog gebruikt, blijft
+  // in stukjes (de hele scène doorlopen kostte ~7-10 ms in één beeld): eerst wat de groepen gebruiken, dan de rest van de scène per 32
+  // kinderen, aan het eind in één keer wat er intussen bij kwam (andere kamers, de ∞-gang, de voorraad), dan weggooien. De groepen zijn al
+  // uit de scène; wat de rest (club, zaal 2, de andere kamer) nog gebruikt, blijft.
+  function* afvoerStappen(groepen) {
+    const G = new Set(), Mt = new Set(), T = new Set(), g2 = new Set(), m2 = new Set(), t2 = new Set(), gezien = new Set();
+    STAT.nu = 'afvoer';
+    for (const g of groepen) verzamel(g, G, Mt, T);
+    yield;
+    const kids = scene.children.slice();
+    for (let i = 0; i < kids.length; i++) {
+      gezien.add(kids[i]);
+      if (!groepen.includes(kids[i])) verzamel(kids[i], g2, m2, t2);
+      if ((i & 15) === 15) { yield; STAT.nu = 'afvoer'; }
+    }
+    for (const c of scene.children) if (!gezien.has(c) && !groepen.includes(c)) verzamel(c, g2, m2, t2);
+    if (zaal2Groep) verzamel(zaal2Groep, g2, m2, t2);
+    for (const g of losseGroepen) if (!groepen.includes(g)) verzamel(g, g2, m2, t2);
     for (const p of pool) verzamel(p.d.root, g2, m2, t2);
-    for (const x of G) if (!g2.has(x) && !houden(x)) x.dispose();
-    for (const x of Mt) if (!m2.has(x) && !houden(x)) x.dispose();
-    for (const x of T) if (!t2.has(x) && !houden(x)) x.dispose();
+    const weg = [];
+    for (const x of G) if (!g2.has(x) && !houden(x)) weg.push(x);
+    for (const x of Mt) if (!m2.has(x) && !houden(x)) weg.push(x);
+    for (const x of T) if (!t2.has(x) && !houden(x)) weg.push(x);
+    for (let i = 0; i < weg.length; i++) { weg[i].dispose(); if ((i & 31) === 31) { yield; STAT.nu = 'afvoer'; } }
+    STAT.afgevoerd += weg.length;
   }
+  function afvoerLater(groepen) { klus('opruimen', afvoerStappen(groepen)); }
 
   // --- standaardmaterialen van ctx.doos (onverlicht: geen lamp nodig, ook op de tv) ---
   const tegelTex = houd(canvasTexture(256, 256, (g, w, h) => {
@@ -541,9 +686,9 @@
 
   // --- kamers bouwen, kiezen en slopen ---
   let sindsBoiler = 2;
-  function kiesSoort(vorige) {
+  function kiesSoort(vorige, voorraad) {  // voorraad: doolhof.volgende (testwens) niet opmaken, die geldt voor de start zelf
     const K = doolhof.kamers, soorten = Object.keys(K);
-    if (doolhof.volgende && K[doolhof.volgende]) { const s = doolhof.volgende; doolhof.volgende = null; return s; }
+    if (doolhof.volgende && K[doolhof.volgende] && !voorraad) { const s = doolhof.volgende; doolhof.volgende = null; return s; }
     if (K.boiler && vorige !== 'boiler' && sindsBoiler >= 3) return 'boiler';  // minstens eens per 4 kamers
     let kand = soorten.filter(s => s !== vorige);
     if (!kand.length) kand = soorten;
@@ -562,27 +707,54 @@
     if (r[r.length - 2].z < dh - 1.2) r.splice(r.length - 1, 0, V3(0, dh - 0.9));
     return afronden(r, 0.7);
   }
-  function probeerKamer(z, soort, inOv) {  // inOv = de overgang vóór deze kamer (zelfde gang als achter de vorige kamer)
+  // een kamer bouwen, in stappen (generator): groep + maak (een kamer-module mag zelf ook een generator teruggeven: dan per stuk),
+  // gang in, gang uit, looppad. De groep blijft los van de scène (losseGroepen) tot de wissel. inOv = de overgang vóór deze kamer (zelfde
+  // gang als achter de vorige kamer). gestopt() = het doolhof of de voorraad is intussen weg: dan slopen. o.zonderGangen: proefkamer.
+  let slotTel = 0;
+  function* kamerStappen(soort, inOv, gestopt, o) {
     const def = doolhof.kamers[soort]; if (!def) return null;
-    const sxIn = inOv.sx;
-    const groep = new THREE.Group(), slot = z.slot++;
+    o = o || {};
+    const sxIn = inOv ? inOv.sx : 1;
+    const groep = new THREE.Group(), slot = slotTel++;
     groep.position.set(SLOT_X - (slot % 4) * SLOT_STAP, 0, SLOT_Z);
-    groep.visible = false; scene.add(groep); groep.updateMatrixWorld(true); z.eigen.add(groep);
+    groep.visible = false; groep.updateMatrixWorld(true);
+    if (!o.zonderGangen) losseGroepen.add(groep);
     const R = { isKamer: true, soort, groep, figs: [], lampen: [], trips: [], modelTel: new Map(), zwaar: zwaar(), sxIn, sxUit: Math.random() < 0.5 ? -1 : 1, t0: 0, tIn: null, actief: false };
     R.ctx = maakCtx(R);
     let kamer = null;
-    try { kamer = def.maak(R.ctx); } catch (e) { fout('kamer ' + soort + ' bouwen', e); }
+    STAT.nu = 'maak ' + soort;
+    try {
+      const r = def.maak(R.ctx);
+      if (r && typeof r.next === 'function' && !r.maat) {  // stapsgewijs: elke yield van de module = een pauzeplek
+        for (;;) {
+          const s = r.next();
+          if (s.done) { kamer = s.value; break; }
+          yield;
+          if (gestopt && gestopt()) { sloop(null, R); return null; }
+        }
+      } else kamer = r;
+    } catch (e) { fout('kamer ' + soort + ' bouwen', e); kamer = null; }
     if (!kamer || !kamer.maat || !(kamer.maat.w > 0) || !(kamer.maat.d > 0)) {
-      if (kamer !== null) console.error('doolhof: kamer ' + soort + ' gaf geen { maat: { w, d, h } } terug');
-      sloop(z, R, true); return null;
+      if (kamer) console.error('doolhof: kamer ' + soort + ' gaf geen { maat: { w, d, h } } terug');
+      sloop(null, R); return null;
     }
     kamer.soort = soort; R.kamer = kamer;
+    if (o.zonderGangen) return R;
+    yield RUST;
+    if (gestopt && gestopt()) { sloop(null, R); return null; }
     const m = kamer.maat, G = groep.position, dh = m.d / 2;
     R.blijf = kamer.blijf == null ? 12 : Math.max(0, +kamer.blijf || 0);
     // gangen in de ruimte van de kamer: vóór de ingang (begin dicht) en achter de uitgang (eind dicht); de uitgang krijgt een nieuwe stijl
     R.inOv = inOv; R.uitOv = nieuweOvergang(inOv.stijl); R.sxUit = R.uitOv.sx;
     const inL = { x: -sxIn * L2, z: -dh - L1 - L3, yaw: 0 }, uitL = { x: 0, z: dh, yaw: 0 };
-    R.gangIn = gang(groep, inL, inOv, 'begin'); R.gangUit = gang(groep, uitL, R.uitOv, 'eind');
+    STAT.nu = 'gang ' + inOv.stijl;
+    R.gangIn = yield* gangStappen(groep, inL, inOv, 'begin');
+    yield;
+    if (gestopt && gestopt()) { sloop(null, R); return null; }
+    STAT.nu = 'gang ' + R.uitOv.stijl;
+    R.gangUit = yield* gangStappen(groep, uitL, R.uitOv, 'eind');
+    yield;
+    if (gestopt && gestopt()) { sloop(null, R); return null; }
     R.inFrame = { x: G.x + inL.x, z: G.z + inL.z, yaw: 0 }; R.uitFrame = { x: G.x, z: G.z + dh, yaw: 0 };
     // spoor in wereld-coördinaten: gang in, route, gang uit
     const route = kamerRoute(kamer, R.ctx.rnd).map(p => p.add(G));
@@ -594,31 +766,117 @@
     groep.updateMatrixWorld(true);
     return R;
   }
-  function bouwKamer(z, soort, inOv) {
-    return probeerKamer(z, soort, inOv) || (soort !== 'gang-kamer' ? probeerKamer(z, 'gang-kamer', inOv) : null);
+  function* bouwStappen(soort, inOv, gestopt) {  // lukt een kamer niet, dan de eenvoudige gang-kamer van de kern
+    const R = yield* kamerStappen(soort, inOv, gestopt);
+    if (R || soort === 'gang-kamer' || (gestopt && gestopt())) return R;
+    return yield* kamerStappen('gang-kamer', inOv, gestopt);
   }
-  function sloop(z, R, nu) {
+  function sloop(z, R) {
     if (R.weg) return; R.weg = true;
     if (R.kamer && R.kamer.opruimen) try { R.kamer.opruimen(); } catch (e) { fout('opruimen van ' + R.soort, e); }
     for (const p of R.figs) terug(p);
     R.figs.length = 0; R.lampen.length = 0; R.trips.length = 0;
-    R.groep.visible = false; scene.remove(R.groep); z.eigen.delete(R.groep);
+    R.groep.visible = false; if (R.groep.parent) R.groep.parent.remove(R.groep);
+    losseGroepen.delete(R.groep); if (z) z.eigen.delete(R.groep);
     if (doolhof.actief === R.kamer) doolhof.actief = null;
-    if (nu) afvoeren(R.groep);
-    else { z.afvoer.push(R.groep); z.klus.unshift({ wacht: 2, doe: () => { const i = z.afvoer.indexOf(R.groep); if (i >= 0) { z.afvoer.splice(i, 1); afvoeren(R.groep); } } }); }
+    afvoerLater([R.groep]);
   }
-  // opwarmen: de verborgen kamer één keer klein tekenen (shaders compileren, texturen en geometrie naar de gpu), in dezelfde
-  // toestand als na de wissel (zaal 2 uit, club-figuren uit, zelfde lampen): bij de wissel zelf hapert dan niets
+
+  // opwarmen in stappen, in de toestand waarin de groep straks getekend wordt (stand 'doolhof' of 'zaal2', zie lampenVan):
+  // 1. shaders per materiaal (een nieuw programma = rust tot het volgende beeld), 2. texturen één voor één naar de gpu,
+  // 3. één kleine render met een vervangend materiaal (alles in beeld, ook wat nog verborgen is): geometrie, instanties en botten naar de gpu.
+  // Programma's bestaan na het voorwarmen (club/voorwarm.js) al; dan kost stap 1 alleen het bijhouden per materiaal.
   const warmRT = new THREE.WebGLRenderTarget(32, 32), warmCam = new THREE.PerspectiveCamera(100, 1, 0.5, 400);
   warmCam.up.set(0, 0, -1);
-  function opwarmen(z, R) {
-    const m = R.kamer.maat, G = R.groep.position;
-    const ext = Math.max(m.w / 2 + 1, L2 + 2, m.d / 2 + L1 + L3 + 1), hoog = ext / Math.tan(50 * Math.PI / 180) + (m.h || 4) + 2;
-    warmCam.position.set(G.x, hoog, G.z); warmCam.lookAt(G.x, 0, G.z); warmCam.updateMatrixWorld();
-    const z2v = zone2.visible, gv = R.groep.visible, rt = renderer.getRenderTarget(), fv = R.figs.map(p => p.d.root.visible);
-    zone2.visible = false; R.groep.visible = true; for (const p of R.figs) p.d.root.visible = true;
-    try { renderer.setRenderTarget(warmRT); renderer.render(scene, warmCam); } catch (e) { fout('opwarmen', e); }
-    finally { renderer.setRenderTarget(rt); zone2.visible = z2v; R.groep.visible = gv; R.figs.forEach((p, i) => { p.d.root.visible = fv[i]; }); }
+  const upScene = new THREE.Scene();
+  const gedecodeerd = new WeakSet();
+  function soortObj(o) { return o.isSkinnedMesh ? 1 : o.isInstancedMesh ? (o.instanceColor ? 3 : 2) : o.isPoints ? 4 : o.isLine ? 5 : o.isSprite ? 6 : 0; }
+  // vervangend materiaal per soort object (geen overrideMaterial): three r128 wisselt bij instanceColor wel/niet niet van programma, dan
+  // las een InstancedMesh zonder kleuren de kleuren van een vorige (TypeError 'isInterleavedBufferAttribute' van null, render afgebroken)
+  const upMats = [];
+  const upMat = o => { const k = soortObj(o); return upMats[k] || (upMats[k] = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false })); };
+  // de shaders van de upload-render (vervangend materiaal, één per soort object, zonder lampen) alvast compileren, zonder te wachten
+  const nepUp = { isScene: true, fog: null, environment: null, lijst: [], traverseVisible() {}, traverse(f) { for (const o of this.lijst) f(o); } };
+  function upCompileren(groepen) {
+    const per = new Map();
+    for (const g of groepen) g.traverse(o => { if (o.material) { const k = soortObj(o); if (!per.has(k)) per.set(k, o); } });
+    for (const o of per.values()) {
+      const m = o.material; o.material = upMat(o); nepUp.lijst = [o];
+      try { losCompileren(() => renderer.compile(nepUp, camera), [o]); } finally { o.material = m; nepUp.lijst = []; }
+    }
+  }
+  function* opwarmStappen(groepen, stand, gestopt, alleenShaders) {
+    const lampen = lampenVan(stand), gedaan = new Map(), een = [null], echt = stand === 'doolhof' && tekortLampen() === 0;
+    const objs = []; for (const g of groepen) g.traverse(o => { if (o.material) objs.push(o); });
+    for (const o of objs) {
+      // hetzelfde materiaal op hetzelfde soort object geeft dezelfde shader: één keer is genoeg
+      const ms = [].concat(o.material), k = soortObj(o);
+      if (ms.every(m => !m || (gedaan.get(m) || 0) & (1 << k))) continue;
+      for (const m of ms) if (m) gedaan.set(m, (gedaan.get(m) || 0) | (1 << k));
+      while (losVol()) { yield RUST; if (gestopt && gestopt()) return false; }
+      een[0] = o; STAT.nu = 'shader ' + stand;
+      const nieuw = compileer(een, lampen, echt);
+      yield nieuw && !PAR ? RUST : undefined;  // zonder de extensie wacht een nieuwe shader: dan rust
+      if (gestopt && gestopt()) return false;
+    }
+    upCompileren(groepen);
+    if (alleenShaders) return true;  // (proefkamers: club/voorwarm.js wacht aan het eind in één keer op het linken)
+    // wachten tot de driver klaar is met linken (kijkt alleen, wacht nergens op); hooguit ~5 s, daarna gewoon verder
+    for (let i = 0; i < 300 && PAR && !losKlaar(); i++) { yield RUST; if (gestopt && gestopt()) return false; }
+    for (const t of texturenVan(groepen)) {
+      const im = t.image;
+      if (t.version === 0 || !im || im.complete === false || gpuKlaar(t)) continue;
+      // een foto (muurschildering, ~3168x1344) eerst buiten de hoofdlus uitpakken: anders doet texImage2D dat midden in het beeld
+      // (~50 ms). In een verborgen tabblad kan decode blijven hangen: na 1,5 s dan toch.
+      if (typeof im.decode === 'function' && im.complete !== undefined && !gedecodeerd.has(im)) {
+        let klaar = false; const t0 = performance.now();
+        im.decode().then(() => { klaar = true; }, () => { klaar = true; });
+        while (!klaar && performance.now() - t0 < 1500) { yield RUST; if (gestopt && gestopt()) return false; }
+        gedecodeerd.add(im);
+      }
+      STAT.nu = 'textuur ' + (im.width || 0) + 'x' + (im.height || 0);
+      renderer.initTexture(t); STAT.texturen++;
+      yield;
+      if (gestopt && gestopt()) return false;
+    }
+    // geometrie naar de gpu: per ~60 objecten één kleine render (op een trage cpu ~10-20 ms per hele kamer)
+    const tekenbaar = []; for (const g of groepen) g.traverse(o => { if (o.isMesh || o.isPoints || o.isLine || o.isSprite) tekenbaar.push(o); });
+    for (let i = 0; i < tekenbaar.length; i += 60) {
+      STAT.nu = 'upload';
+      uploadRender(groepen, new Set(tekenbaar.slice(i, i + 60)));
+      yield;
+      if (gestopt && gestopt()) return false;
+    }
+    yield RUST;
+    return true;
+  }
+  // alleen: alleen deze objecten tekenen (via een eigen laag: zo blijven hun kinderen gewoon bereikbaar); zonder: alles
+  const UPLAAG = 30;
+  function uploadRender(groepen, alleen) {
+    const ouders = [], zicht = [], laag = [], fc = [], mats = [], rt = renderer.getRenderTarget(), P = renderer.info.programs, n0 = P.length;
+    for (const g of groepen) {
+      ouders.push([g, g.parent]); upScene.add(g);
+      g.traverse(o => {
+        if (!o.visible) { zicht.push(o); o.visible = true; }
+        if (o.frustumCulled) { fc.push(o); o.frustumCulled = false; }
+        if ((!alleen || alleen.has(o)) && !(o.layers.mask & (1 << UPLAAG))) {
+          o.layers.enable(UPLAAG); laag.push(o);
+          if (o.material) { mats.push(o, o.material); o.material = upMat(o); }
+        }
+      });
+    }
+    warmCam.position.set(0, -1000, 0); warmCam.lookAt(0, -2000, 0); warmCam.updateMatrixWorld(); warmCam.layers.set(UPLAAG);
+    try { renderer.setRenderTarget(warmRT); renderer.render(upScene, warmCam); }
+    catch (e) { fout('opwarmen', e); }
+    finally {
+      renderer.setRenderTarget(rt);
+      for (const o of zicht) o.visible = false;
+      for (const o of laag) o.layers.disable(UPLAAG);
+      for (let i = 0; i < mats.length; i += 2) mats[i].material = mats[i + 1];
+      for (const o of fc) o.frustumCulled = true;
+      for (const [g, p] of ouders) { upScene.remove(g); if (p) p.add(g); }
+      if (P.length > n0) vastzetten(n0);
+    }
   }
 
   // --- de club tijdens het doolhof: figuren en wat altijd getekend wordt (frustumCulled uit) onzichtbaar, daarna terug ---
@@ -666,18 +924,54 @@
     z.z2licht.clear();
   }
 
-  // vaste lampen voor de kamers: elk beeld krijgen ze plek, kleur en sterkte van de lamp-handvatten van de actieve kamer
+  // vaste lampen voor de kamers: elk beeld krijgen ze plek, kleur en sterkte van de lamp-handvatten van de actieve kamer.
+  // Geleend van de club: vaste puntlampen van zaal 1 (direct in de scène, zonder schaduw, al een tijd onveranderd, bv. de lampen bij de
+  // podia) gaan tijdens het doolhof naar de kamer en daarna terug. Dan telt three evenveel lampen als in zaal 1: geen eigen lampstand voor
+  // de kamers en bij de terugkeer (de drop) geen golf van shader-wissels in heel zaal 1 (met 2 extra lampen: 5-10 beelden van 20-45 ms).
+  // Zijn er te weinig, dan extra lampen (poolLicht) zoals vroeger.
   const poolLicht = [0, 1].map(() => new THREE.PointLight(0xffffff, 0, 10, 1.5));
+  let vasteLampen = [];
+  const leenProef = new Map();  // lamp -> stand bij de vorige blik
+  const lampStand = l => [l.position.x, l.position.y, l.position.z, l.intensity, l.color.getHex(), l.distance, l.decay].join(',');
+  function kijkLampen() {  // om de ~2 s (buiten het doolhof): welke clublampen veranderden sinds de vorige blik niet
+    const uit = [];
+    for (const c of scene.children) {
+      if (!c.isPointLight || c.castShadow || !c.visible || poolLicht.includes(c) || c === strobeLight || (typeof slugLight !== 'undefined' && c === slugLight) || !(c.intensity > 0)) continue;
+      const s = lampStand(c), was = leenProef.get(c);
+      leenProef.set(c, s);
+      if (was === s) uit.push(c);
+    }
+    vasteLampen = uit;
+  }
+  let lampTel = 0;
+  clubHooks.push(() => { if (!actief && lampTel++ % 120 === 0) kijkLampen(); });
+  const tekortLampen = () => Math.max(0, MAXLAMP[zwaar()] - vasteLampen.length);
+  function lampenAan(z) {  // bij de eerste kamer (zaal 2 is dan uit beeld): clublampen lenen, zo nodig aangevuld met eigen lampen
+    z.lampen = []; z.geleend = [];
+    const vrij = vasteLampen.filter(l => l.parent === scene && l.visible && !l.castShadow);
+    for (let i = 0; i < z.nLamp; i++) {
+      const l = vrij[i];
+      if (l) { z.geleend.push({ l, pos: l.position.clone(), kleur: l.color.clone(), int: l.intensity, dist: l.distance, decay: l.decay }); l.intensity = 0; z.lampen.push(l); }
+      else { const p = poolLicht[i]; p.intensity = 0; if (p.parent !== scene) scene.add(p); z.eigen.add(p); z.lampen.push(p); }
+    }
+  }
+  function lampenTerug(z) {
+    for (const g of z.geleend || []) { const l = g.l; l.position.copy(g.pos); l.color.copy(g.kleur); l.intensity = g.int; l.distance = g.dist; l.decay = g.decay; l.updateMatrix(); }
+    z.geleend = []; z.lampen = [];
+    for (const l of poolLicht) if (l.parent) l.parent.remove(l);
+  }
   function lampenBeeld(z) {
+    if (!z.lampen) return;
     const R = z.own && z.own.isKamer ? z.own : null, lmax = Math.min(z.nLamp, MAXLAMP[zwaar()]);
     // vervagen: uit in het donkere stuk van de gang (rond de wissel), aan in de kamer
     const f = R ? glad(z.dist, E_TP + 0.3, R.ingangBoog + 0.6) * (1 - glad(z.dist, R.uitgangBoog - 0.4, R.tpBoog - 0.3)) : 0;
-    for (let i = 0; i < z.nLamp; i++) {
-      const l = poolLicht[i], px = R && i < lmax ? R.lampen[i] : null;
+    for (let i = 0; i < z.lampen.length; i++) {
+      const l = z.lampen[i], px = R && i < lmax ? R.lampen[i] : null;
       if (!px) { l.intensity = 0; continue; }
       px.visible = false;
       l.color.copy(px.color); l.distance = px.distance; l.decay = px.decay; l.intensity = Math.max(0, px.intensity) * f;
       if (px.parent) px.getWorldPosition(l.position); else l.position.copy(px.position).applyMatrix4(R.groep.matrixWorld);
+      l.updateMatrix();  // (club/optimaliseer.js zet matrixAutoUpdate uit op wat lang stilstaat)
     }
   }
 
@@ -692,17 +986,84 @@
   let actief = null;  // toestand van het lopende doolhof-shot
   function einde(s) { s.beats = Math.max(0.01, beatPos - s.b0); if (s.z) s.z.klaar = true; }
 
+  // --- de voorraad: kamer 1 + ∞-gang + loper staan al klaar (gebouwd en opgewarmd op de achtergrond, los van de scène) vóór de showregie
+  // het doolhof start (in de break). Zo kost de start zelf alleen nog het omhangen. Klaarmaken begint als het voorwarmen klaar is en
+  // ~5 s na elk doolhof; de ∞-gang wordt pas gewisseld als zaal 2 niet in beeld is. Andere kwaliteitsstand = opnieuw.
+  let voorraad = null, naShot = -1e9;
+  const T_KERN = performance.now();
+  function magVoorbereiden() {
+    if (actief || voorraad) return false;
+    if (performance.now() - naShot < 5000) return false;
+    if (typeof LAAD !== 'undefined' && LAAD.klaar < LAAD.totaal) return false;
+    if (!ACTS.Casual_Walk || !allModels().length || !Object.keys(doolhof.gangStijlen).length || !Object.keys(doolhof.kamers).length) return false;
+    const VW = window.clubVoorwarm;  // eerst het voorwarmen (dat compileert de shaders van alle kamers en gangen); hooguit 2 min wachten
+    if (VW && VW.klaar && !VW.klaar() && performance.now() - T_KERN < 120000) return false;
+    return true;
+  }
+  clubHooks.push(() => {
+    if (voorraad && !actief && (voorraad.stand !== KW.stand || voorraad.zwaar !== zwaar())) voorraadWeg();
+    if (magVoorbereiden()) { voorraad = { stand: KW.stand, zwaar: zwaar(), klaar: false, weg: false, t0: performance.now() }; klus('voorraad', voorbereiden(voorraad)); }
+  });
+  function voorraadWeg() {
+    const V = voorraad; if (!V) return;
+    voorraad = null; V.weg = true;
+    if (V.R && !V.R.weg) sloop(null, V.R);
+    if (V.loper) { terug(V.loper); V.loper = null; }
+    if (V.houder) { losseGroepen.delete(V.houder); if (V.gang && V.gang.parent === V.houder) afvoerLater([V.houder]); }
+  }
+  function* voorbereiden(V) {
+    const weg = () => V.weg || voorraad !== V;
+    if (weg()) return;
+    // de ∞-gang: is de huidige nog niet gebruikt (alleen zijn eigen helft staat), dan komt kamer 1 daarachter; anders een nieuwe stijl
+    if (zaal2Ov && zaal2Ov.stijl && zaal2Ov.n === 1 && !zaal2Ov.kapot) V.ov = zaal2Ov;
+    else {
+      V.ov = nieuweOvergang(zaal2Ov && zaal2Ov.stijl, ZAAL2_SX);
+      V.houder = new THREE.Group(); losseGroepen.add(V.houder);
+      V.gang = yield* gangStappen(V.houder, ZAAL2_UIT, V.ov, 'eind');
+      yield RUST;
+      if (weg()) return;
+      if (!(yield* opwarmStappen([V.houder], 'zaal2', weg))) return;  // in zaal 2 te zien: daar opwarmen
+    }
+    // kamer 1, los van de scène
+    const R = V.R = yield* bouwStappen(kiesSoort(null, true), V.ov, weg);
+    if (!R || weg()) { if (R && !R.weg) sloop(null, R); if (voorraad === V) voorraadWeg(); return; }
+    if (!(yield* opwarmStappen([R.groep], 'doolhof', weg))) return;
+    // de loper: in beide standen (de wandeling door zaal 2 en de kamers)
+    const p = V.loper = lenen(null, null, false);
+    if (p) {
+      const huis = new THREE.Group(); huis.add(p.d.root);
+      for (const st of ['zaal2', 'doolhof']) if (!(yield* opwarmStappen([huis], st, weg))) { huis.remove(p.d.root); return; }
+      huis.remove(p.d.root);
+      herkleur(p, p.M.type === 'pop' && !/man-1/.test(p.M.file)); maat(p, false);  // na het compileren: dan bestaan de uniforms
+    }
+    // de ∞-gang omwisselen als de camera in zaal 1 is (vanuit zaal 1 is de ∞-deur nooit te zien; zone2.visible staat ook vanaf de
+    // ingang van zaal 1 aan)
+    const inZaal1 = () => Math.abs(camera.position.x) < ROOM + 0.5 && Math.abs(camera.position.z) < ROOM + 0.5;
+    while (V.houder && (!inZaal1() || actief)) { yield RUST; if (weg()) return; }
+    if (V.houder) {
+      const oud = zaal2Groep;
+      zone2.add(V.gang); losseGroepen.delete(V.houder); V.houder = null;
+      zaal2Ov = V.ov; zaal2Groep = V.gang;
+      if (oud) { zone2.remove(oud); afvoerLater([oud]); }
+    }
+    V.klaar = true; V.ms = Math.round(performance.now() - V.t0); STAT.voorraad++;
+  }
+
   function maakShot() {
     const direct = !!doolhof.direct; doolhof.direct = false;  // showregie in de break: meteen de gang vóór kamer 1 in (de wandeling door zaal 2 duurt ~15 s)
-    const z = { lt: 0, klus: [], afvoer: [], eigen: new Set(), verborgen: new Map(), z2licht: new Map(), z2lampen: [], fase: 'zaal2', dist: 0, v: 1.1,
-      dans: false, modus: 'volg', snap: null, rond: null, slot: 0, doel: 3 + Math.floor(Math.random() * 3), amb: ambient.intensity, kw: null, nLamp: 0 };
+    const z = { lt: 0, eigen: new Set(), verborgen: new Map(), z2licht: new Map(), z2lampen: [], fase: 'zaal2', dist: 0, v: 1.1,
+      dans: false, modus: 'volg', snap: null, rond: null, doel: 3 + Math.floor(Math.random() * 3), amb: ambient.intensity, kw: null, nLamp: 0 };
+    // klaarstaande voorraad gebruiken (niet als een test om een andere soort vraagt of de stand intussen anders is)
+    let V = voorraad;
+    if (!(V && V.klaar && !V.weg && V.stand === KW.stand && V.zwaar === zwaar() && V.R && (!doolhof.volgende || doolhof.volgende === V.R.soort))) V = null;
     try {
-      zaal2Gang();  // nieuwe stijl voor de ∞-gang (de knip naar dit shot verbergt de wissel)
-      const p = ACTS.Casual_Walk ? lenen(null, null, false) : null;
-      if (!p) { z.mislukt = true; return z; }
+      if (V) { voorraad = null; STAT.gebruikt++; if (doolhof.volgende === V.R.soort) doolhof.volgende = null; z.voorraad = true; }
+      else { voorraadWeg(); zaal2Gang(); STAT.zonder++; }  // nieuwe stijl voor de ∞-gang (de knip naar dit shot verbergt de wissel)
+      const p = V && V.loper ? V.loper : ACTS.Casual_Walk ? lenen(null, null, false) : null;
+      if (!p) { z.mislukt = true; if (V) { V.weg = true; if (V.R) sloop(null, V.R); } return z; }
       z.loper = p;
       const w = p.d;
-      herkleur(p, p.M.type === 'pop' && !/man-1/.test(p.M.file)); maat(p, false);
+      if (!(V && V.loper)) { herkleur(p, p.M.type === 'pop' && !/man-1/.test(p.M.file)); maat(p, false); }
       w.rol = 'loper';
       scene.add(w.root); z.eigen.add(w.root);
       z.own = zaal2Eigenaar(); z.dist = z.own.startBoog;
@@ -710,15 +1071,26 @@
       w.root.rotation.y = Math.atan2(tA.x - w.root.position.x, tA.z - w.root.position.z);
       setClip(w, ACTS.Casual_Walk, 0.1);
       if (Math.random() < 0.45) giveDrink(w, Math.random() < 0.5 ? 'bier' : 'glas');  // geen sigaret: de rook zou bij de wissel achterblijven
+      // de kamerlampen (geleend van zaal 1) pas bij de eerste wissel, als zaal 2 uit beeld is. Vroeger kwamen hier 2 extra lampen bij: met
+      // zaal 2 in beeld (6 + 2) kreeg alles in beeld een eigen shader, ook zaal 1 in de spiegelpas (doolhof via zaal 2: 4 beelden van 57-700 ms)
       z.nLamp = MAXLAMP[zwaar()];
-      for (let i = 0; i < z.nLamp; i++) { poolLicht[i].intensity = 0; scene.add(poolLicht[i]); z.eigen.add(poolLicht[i]); }
       zone2.traverse(o => { if (o.isLight) z.z2lampen.push(o); });
       verberg(z); bewaarKW(z);
       actief = z;
-      const R = bouwKamer(z, kiesSoort(null), z.own.uitOv);
-      if (!R) { z.mislukt = true; return z; }
-      R.nr = 1; z.next = R; z.laatste = R.soort;
-      opwarmen(z, R); R.klaar = true;
+      z.bekend = new WeakSet(renderer.info.programs); z.nProg = renderer.info.programs.length;
+      const R = V ? V.R : null;
+      if (!R) {
+        // geen voorraad (vlak na het laden, een test, net een andere kwaliteitsstand): kamer 1 op de achtergrond bouwen terwijl de loper
+        // loopt (vroeger in één keer: 40-500 ms). Een directe start begint dan bij de ∞-deur (~6 m tot de wissel) i.p.v. vóór kamer 1.
+        if (direct) {
+          z.dist = Math.max(z.own.startBoog, z.own.uitgangBoog - 0.6);
+          opSpoor(z.own.sp, z.dist, w.root.position); opSpoor(z.own.sp, z.dist + 0.5, tA);
+          w.root.rotation.y = Math.atan2(tA.x - w.root.position.x, tA.z - w.root.position.z);
+        }
+        planVolgende(z);
+        return z;
+      }
+      R.nr = 1; z.next = R; z.laatste = R.soort; R.klaar = true;
       if (direct) {  // de knip verbergt de sprong: de loper staat ~3 m voor de deur van kamer 1, de camera kijkt door de gang naar binnen
         const A = z.own;
         z.dist = A.tpBoog; opSpoor(A.sp, z.dist, w.root.position);
@@ -736,25 +1108,37 @@
   function opruimenShot(z) {
     if (z.weg) return; z.weg = true;
     if (actief === z) actief = null;
-    for (const R of [z.own, z.next]) if (R && R.isKamer) sloop(z, R, true);
-    for (const g of z.afvoer.splice(0)) afvoeren(g);
+    naShot = performance.now();
+    for (const R of [z.own, z.next]) if (R && R.isKamer) sloop(z, R);  // weggooien gebeurt op de achtergrond (terug naar zaal 1 = de drop)
     if (z.loper) { terug(z.loper); z.loper = null; }
-    for (const l of poolLicht) if (l.parent) l.parent.remove(l);
+    lampenTerug(z);
     herstel(z);
+    // het hoofdscript zette sporen (feedback) en bloom deze frame al op 'zaal 2/verder', want de camera stond vorige frame nog in het
+    // doolhof: één beeld vol sporen in zaal 1 (en de eerste keer na het laden ~120 ms compileren). Terug naar de stand van zaal 1.
+    if (camera.position.z > TUN_END - 0.5) {
+      if (feedback && !(KW.stand === 'laag' || KW.stand === 'minimaal')) {
+        const u = feedback.material.uniforms, nu = performance.now() / 1000;
+        feedback.enabled = S.fb > 0.01 || S.mirror;
+        u.amount.value = S.fb; u.zoom.value = 1.02 + 0.012 * Math.sin(nu * 0.21); u.rotA.value = 0.006 * Math.sin(nu * 0.13);
+      }
+      if (bloom && bloom.enabled) bloom.strength /= 0.55;
+    }
     if (z.kw) { KW.bol = z.kw.bol; KW.schaduw = z.kw.schaduw; renderer.shadowMap.needsUpdate = true; }
     zaal2LichtTerug(z);
     doolhof.actief = null;
     if (!z.mislukt && typeof lastTrip !== 'undefined') lastTrip = performance.now() / 1000;  // het doolhof ging ook door zaal 2: de verplichte trip pas over 2 min weer
   }
-  function bouwVolgende(z) {
+  function* volgendeStappen(z) {  // de volgende kamer (of kamer 1 zonder voorraad) op de achtergrond bouwen en opwarmen, los van de scène
+    const weg = () => z.weg;
+    if (z.weg || z.next || !z.own) { z.bouwGepland = false; return; }
+    const own = z.own, R = yield* bouwStappen(kiesSoort(own.isKamer ? z.laatste : null), own.uitOv, weg);
+    if (!R) { z.bouwGepland = false; return; }
+    if (z.weg || z.own !== own) { sloop(null, R); z.bouwGepland = false; return; }
+    R.nr = (own.nr || 0) + 1; z.next = R; z.laatste = R.soort;
+    if ((yield* opwarmStappen([R.groep], 'doolhof', () => z.weg || R.weg)) && !R.weg) R.klaar = true;
     z.bouwGepland = false;
-    if (z.weg || z.next || !z.own || !z.own.isKamer) return;
-    const R = bouwKamer(z, kiesSoort(z.laatste), z.own.uitOv);
-    if (!R) return;
-    R.nr = z.own.nr + 1; z.next = R; z.laatste = R.soort;
-    z.klus.push({ wacht: 2, doe: () => { if (!R.weg) { opwarmen(z, R); R.klaar = true; } } });
   }
-  function planVolgende(z) { if (!z.bouwGepland && !z.next) { z.bouwGepland = true; z.klus.push({ wacht: 8, doe: () => bouwVolgende(z) }); } }
+  function planVolgende(z) { if (!z.bouwGepland && !z.next) { z.bouwGepland = true; klus('volgende kamer', volgendeStappen(z), true); } }
   function wissel(z, t, later) {  // loper en camera van de gang van A naar dezelfde plek in de gang van B (later: volgende kamer pas plannen als z.doel vaststaat)
     const A = z.own, B = z.next, w = z.loper.d;
     const M = frameMat(B.inFrame).multiply(frameMat(A.uitFrame).invert()), dyaw = B.inFrame.yaw - A.uitFrame.yaw;
@@ -763,9 +1147,11 @@
     for (const v of [camPos, camLook]) v.applyMatrix4(M);
     if (z.snap) { z.snap.p.applyMatrix4(M); z.snap.l.applyMatrix4(M); }
     z.dist -= A.uitgangBoog;
-    if (A.isKamer) sloop(z, A, false);
-    else { z.fase = 'doolhof'; zaal2LichtTerug(z); }
+    if (A.isKamer) sloop(z, A);
+    else { z.fase = 'doolhof'; zaal2LichtTerug(z); lampenAan(z); }
     z.own = B; z.next = null; z.wacht = 0;
+    if (B.groep.parent !== scene) scene.add(B.groep);
+    losseGroepen.delete(B.groep); z.eigen.add(B.groep);
     B.t0 = t; B.actief = true; B.groep.visible = true; doolhof.actief = B.kamer;
     for (const p of B.figs) p.d.root.visible = true;
     if (later) z.planNa = true;
@@ -803,7 +1189,7 @@
       const eindeloos = S.cam === 'doolhof';
       if (own.isKamer && own.nr >= z.doel && !eindeloos && !z.next) { einde(s); z.dist = own.tpBoog; }  // laatste kamer: de loper verdwijnt in het donker
       else if (z.next && z.next.klaar) wissel(z, t);
-      else { z.dist = own.tpBoog; if (own.isKamer) planVolgende(z); if ((z.wacht = (z.wacht || 0) + dt) > 6) einde(s); }
+      else { z.dist = own.tpBoog; planVolgende(z); if ((z.wacht = (z.wacht || 0) + dt) > 6) einde(s); }
     }
     const o2 = z.own;
     opSpoor(o2.sp, z.dist, w.root.position); opSpoor(o2.sp, z.dist + 0.35, tA);
@@ -879,7 +1265,9 @@
     const now = performance.now() / 1000;
     verberg(z); bewaarKW(z);
     if (z.planNa) { z.planNa = false; if (S.cam === 'doolhof' || z.own.nr < z.doel) planVolgende(z); }  // directe start: z.doel staat nu vast
-    if (z.klus.length && --z.klus[0].wacht <= 0) z.klus.shift().doe();  // hooguit één klusje per beeld
+    // nieuwe programma's (iets dat het opwarmen miste) vasthouden: ook die horen bij het doolhof
+    const P = renderer.info.programs;
+    if (P.length !== z.nProg) { for (const p of P) if (!z.bekend.has(p)) { z.bekend.add(p); if (!vast.has(p)) { vast.add(p); p.usedTimes++; STAT.laat = (STAT.laat || 0) + 1; } } z.nProg = P.length; }
     loperBeeld(s, z, t, dt);
     const R = z.own.isKamer ? z.own : null;
     if (R) {
@@ -912,6 +1300,47 @@
   doolhof.start = (soort, direct) => { if (soort) doolhof.volgende = soort; doolhof.direct = !!direct; startShot('doolhof', performance.now() / 1000); };
   doolhof.direct = false;  // true vlak vóór startShot('doolhof'): begin in de gang vóór kamer 1 (showregie in de break)
   doolhof.toestand = () => actief;  // voor de testronde: kamer, loper, booglengte (null buiten het shot)
+  doolhof.voorraad = () => voorraad && { klaar: voorraad.klaar, soort: voorraad.R && voorraad.R.soort, gang: voorraad.ov && voorraad.ov.stijl, ms: voorraad.ms };
+  doolhof.werk = () => werk.map(k => k.naam);
+  doolhof.losse = () => [...losseGroepen, ...pool.map(p => p.d.root)];  // testronde: wat buiten de scène leeft (lekzoeker)
+
+  // --- voor club/voorwarm.js: van elke kamersoort en elke gangstijl een proefexemplaar bouwen (los van de scène), de shaders compileren
+  // (die blijven bestaan, zie vastzetten) en weer weggooien. Kamers in de doolhof-stand, gangen ook in de zaal-2-stand (de ∞-gang).
+  // Texturen niet (die gooien we meteen weer weg); wel de shaders van de upload-render (vervangend materiaal).
+  // Het geheugen van de loting (stijl.js: laatste sferen en schilderingen, de laatste gangen, de boiler-teller) blijft zoals het was.
+  function bewaarLoting() {
+    const G = doolhof.stijl && doolhof.stijl.GEHEUGEN, kopie = G ? JSON.parse(JSON.stringify(G)) : null;
+    const laatste = doolhof.laatsteStijl, sb = sindsBoiler, rg = recenteGangen.slice();
+    return () => {
+      if (G && kopie) for (const k of Object.keys(kopie)) {
+        if (Array.isArray(G[k])) { G[k].length = 0; G[k].push(...kopie[k]); }
+        else if (G[k] && typeof G[k] === 'object') { for (const kk of Object.keys(G[k])) delete G[k][kk]; Object.assign(G[k], kopie[k]); }
+      }
+      doolhof.laatsteStijl = laatste; sindsBoiler = sb; recenteGangen.length = 0; recenteGangen.push(...rg);
+    };
+  }
+  doolhof.proef = {
+    *stappen() {  // elke next() = een klein stuk; 'rust' = er gebeurde iets zwaars (bouwen, een nieuwe shader)
+      for (const soort of Object.keys(doolhof.kamers)) {
+        const terugZet = bewaarLoting();
+        let R = null;
+        try { R = voltooi(kamerStappen(soort, null, null, { zonderGangen: true })); } catch (e) { fout('proefkamer ' + soort, e); }
+        terugZet();
+        yield RUST;
+        if (!R) continue;
+        yield* opwarmStappen([R.groep], 'doolhof', null, true);
+        sloop(null, R);
+        yield RUST;
+      }
+      for (const stijl of Object.keys(doolhof.gangStijlen)) {
+        const ov = { stijl, sx: 1, zaad: (Math.random() * 4294967296) >>> 0, zwaar: zwaar(), deel: new Map(), n: 0 }, houder = new THREE.Group();
+        try { gang(houder, { x: 0, z: 0, yaw: 0 }, ov, 'eind'); } catch (e) { fout('proefgang ' + stijl, e); }
+        yield RUST;
+        for (const st of ['doolhof', 'zaal2']) yield* opwarmStappen([houder], st, null, true);
+        afvoerLater([houder]);
+      }
+    },
+  };
   {
     const sel = document.getElementById('cam');
     if (sel && !sel.querySelector('option[value="doolhof"]')) {

@@ -1641,7 +1641,9 @@
   } };
 
   // --- een kamer samenstellen ---
-  function maakKamer(archNaam, ctx) {
+  // In stappen (generator): de kern bouwt op de achtergrond en pauzeert bij elke yield als het budget van het beeld op is (een hele kamer
+  // in één keer kostte 3-12 ms). maakKamer = alles in één keer (testronde).
+  function* maakKamerStappen(archNaam, ctx) {
     const r = ctx.rnd, Z = Math.max(0, Math.min(2, ctx.zwaar | 0)), G = ctx.groep, b0 = ctx.beat() || {}, reg = regie();
     const sf = kiesSfeer(r, archNaam, reg.stand), S = SFEER[sf], schild = kiesSchild(r, sf, Z), P = maakPalet(r, sf, schild);
     const B = { ctx, r, Z, G, sf, S, schild, P, energie: klem(S.energie * 0.55 + (b0.energy || 0) * 0.45 + (reg.stand === 'drop' ? 0.15 : 0)),
@@ -1649,6 +1651,7 @@
     B.M = materialen(B);
     B.focus = V(0, 1.6, 0);
     B.net = maakNet(B);
+    yield;
     // plafond: een onderdeel of de eigen balken (beslist vóór de architectuur, want die tekent ze mee)
     const wilPlafond = r() < 0.65;
     B.plafondEigen = !wilPlafond;
@@ -1657,6 +1660,7 @@
     B.middenDj = !!(ARCH[archNaam].middenKans && heeftOnderdeel(B, 'midden') && r() < ARCH[archNaam].middenKans);
     const A = ARCH[archNaam].maak(B);
     B.A = A;
+    yield;
     if (A.focus) B.focus.copy(A.focus); else B.focus.set(A.dj.x, (A.dj.y || 0) + 1.6, A.dj.z);
     if (A.camPlek) B.obst.push({ x: A.camPlek.x, z: A.camPlek.z, r: 0.8, cam: true });  // vrije plek voor de lage camera
     B.naam = kiesWoord(B);  // naam van de kamer: op de dj-tafel en op het grote bord
@@ -1680,6 +1684,7 @@
       bus.focus = { x: B.dj.x, y: B.dj.y + 1.55, z: B.dj.z };  // rigs en shows van onderdelen.js richten op onze dj
       bus.midden = { x: B.dj.x, z: B.dj.z, r: 1.3, top: B.dj.TOP + 1.9 };
     }
+    yield;
     // overige onderdelen: hooguit drie; drukke schildering = geen muurwerk en minder. Een tweede middenplek krijgt een eigen
     // stuk (totem, kristallen, paalpodium): de middenstukken van onderdelen.js hebben hun eigen dj.
     let ruimte = SCHILD[schild].drukte > 0.75 ? 2 : 3;
@@ -1687,14 +1692,17 @@
       const plek = kies(r, A.midden);
       eigenMidden(B, plek);
       B.obst.push({ x: plek.x, z: plek.z, r: plek.r });
+      yield;
     }
-    if (A.plafondH && wilPlafond && ruimte > 0) { if (plaatsOnderdeel(B, 'plafond', { h: A.plafondH })) ruimte--; else if (A.vorm === 'recht' || A.vorm === 'galerij') plafondBalken(B, A.w - 2, A.d, A.plafondH - 0.35); }
-    if (A.muurH && SCHILD[schild].drukte < 0.75 && ruimte > 0 && r() < 0.5 && plaatsOnderdeel(B, 'muur', { w: A.w, d: A.d, h: A.muurH, deuren: [{ x: 0, z: -A.d / 2, b: 2, h: 2.6 }, { x: 0, z: A.d / 2, b: 2, h: 2.6 }] })) { ruimte--; B.wandMarge = 0.75; }
-    if (A.vloerOK && ruimte > 0 && r() < 0.4 && plaatsOnderdeel(B, 'vloer', { w: A.w, d: A.d })) ruimte--;
+    if (A.plafondH && wilPlafond && ruimte > 0) { if (plaatsOnderdeel(B, 'plafond', { h: A.plafondH })) ruimte--; else if (A.vorm === 'recht' || A.vorm === 'galerij') plafondBalken(B, A.w - 2, A.d, A.plafondH - 0.35); yield; }
+    if (A.muurH && SCHILD[schild].drukte < 0.75 && ruimte > 0 && r() < 0.5 && plaatsOnderdeel(B, 'muur', { w: A.w, d: A.d, h: A.muurH, deuren: [{ x: 0, z: -A.d / 2, b: 2, h: 2.6 }, { x: 0, z: A.d / 2, b: 2, h: 2.6 }] })) { ruimte--; B.wandMarge = 0.75; yield; }
+    if (A.vloerOK && ruimte > 0 && r() < 0.4 && plaatsOnderdeel(B, 'vloer', { w: A.w, d: A.d })) { ruimte--; yield; }
     if (!(ruimte > 0 && r() < 0.85 && plaatsOnderdeel(B, 'show', { w: A.w, d: A.d, h: A.h }))) eigenShow(B);
     const accent = ctx.licht(P.b.getHex(), 1.2, 12, B.dj.x - Math.sin(B.dj.face) * 1.5, B.dj.y + 2.6, B.dj.z - Math.cos(B.dj.face) * 1.5);
+    yield;
     // publiek, licht en borden
     bevolk(B, A);
+    yield;
     maakBundels(B, A.bundels || []);
     maakPoelen(B, A.poelen || []);
     maakWaas(B, 6, -A.w / 2 + 2, A.w / 2 - 2, Math.min(A.h - 1.2, 3.4), Math.min(A.h - 0.6, 4.2), -A.d / 2 + 2.5, A.d / 2 - 2.5);
@@ -1706,9 +1714,11 @@
       uitBord = ctx.neon(kiesWoord(B), css(P.b), Math.min(uitH * 4, A.w - 1), uitH);
       if (uitBord) { uitBord.position.set(0, uitTop - uitH / 2, A.d / 2 - 0.08); uitBord.rotation.y = Math.PI; }
     }
+    yield;
     // statisch spul samenvoegen, ledlijnen klaar
     if (B.vast.length) G.add(new THREE.Mesh(samen(B.vast), new THREE.MeshLambertMaterial({ vertexColors: true })));
     B.net.klaar();
+    yield;
     const camDefs = A.cams(B);
     if (B.dj.viaMidden) {
       camDefs.lijst = camDefs.lijst.filter(k => k.naam !== 'schouder');
@@ -1754,10 +1764,13 @@
     return kamer;
   }
 
+  function maakKamer(archNaam, ctx) { const it = maakKamerStappen(archNaam, ctx); for (;;) { const s = it.next(); if (s.done) return s.value; } }
+
   // --- registreren: één soort per architectuur (de kern kiest nooit twee keer dezelfde soort achter elkaar) ---
+  // maak geeft de generator: de kern bouwt hem in stukjes (doolhof/kern.js, kamerStappen)
   for (const naam of Object.keys(ARCH)) {
     const soort = DH.kamers && DH.kamers[naam] ? 'stijl-' + naam : naam;
-    DH.registreer(soort, { gewicht: ARCH[naam].gewicht, maak: ctx => maakKamer(naam, ctx) });
+    DH.registreer(soort, { gewicht: ARCH[naam].gewicht, maak: ctx => maakKamerStappen(naam, ctx) });
   }
   DH.stijl = { ARCH, SFEER, SCHILD, GEHEUGEN, maakKamer };  // voor de testronde
 })();

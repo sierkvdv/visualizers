@@ -1,5 +1,6 @@
 // --- Gangstijlen van het doolhof: elke S-gang tussen twee kamers krijgt een eigen stijl, minstens op het niveau van de acid-gang (z2/gang.js) ---
 // Contract (doolhof/kern.js): doolhof.gangStijl(naam, { gewicht, maak(g, maat, rnd, zwaar) => { muur?, vloer?, plafond?, muurMaat?, vloerMaat?, update(dt, now, b, stand) } }).
+// maak mag een generator zijn (zoals hier): de kern bouwt dan op de achtergrond en pauzeert bij een yield als het budget van het beeld op is.
 // maak draait per overgang TWEE keer (de gang achter de uitgang van kamer A en die vóór de ingang van kamer B), met dezelfde maat en hetzelfde
 // zaad. Daarom: alleen rnd gebruiken (nooit Math.random/rnd()/pick), maat.deel-fabriekjes trekken zelf geen rnd, en update is een zuivere
 // functie van now/b/stand (geen tellertjes, geen dt-optelsommen): dan zijn beide helften op elk moment gelijk en valt de wissel niet op.
@@ -292,7 +293,8 @@ void main() {
   }
 
   // --- bouwstenen ---
-  const bolGeo = (maat, geo) => maat.deel('geo:' + geo.uuid, () => { const c = geo.clone(); c.boundingSphere = maat.bol.clone(); return c; });
+  // (clone() neemt userData mee, dus ook doolhofHouden van VLAK/TORUS: dan gooide de kern deze kopie nooit weg, ~3 geometrieën per bezoek)
+  const bolGeo = (maat, geo) => maat.deel('geo:' + geo.uuid, () => { const c = geo.clone(); c.userData = {}; c.boundingSphere = maat.bol.clone(); return c; });
   function inst(g, maat, geo, mat, n) {  // InstancedMesh met de omhullende bol van de gang (anders culling op het verkeerde bolletje)
     const m = new THREE.InstancedMesh(bolGeo(maat, geo), mat, Math.max(1, n));
     m.count = n;
@@ -524,20 +526,26 @@ void main() {
   // ======================= de stijlen =======================
 
   // 1. acid: de oude rode gang, opgepimpt: rode plafondlampjes, looplicht in acid-kleuren, lichtringen, vloerpijlen, smileys, 303
-  doolhof.gangStijl('acid', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('acid', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(wallTex, { zwaar, tint: 0x6a3034, drempel: 0.55, gloeiKleur: 0xff4020, scanKleur: 0xff2a10, randKleur: 0xff1a08, rand: 0.35 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x0d0808, kleurA: 0xffe01a, stroom: 0.35, scanKleur: 0xff3010 }));
     const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x0a0405, scanKleur: 0xff2010, scan: 0.6 }));
+    yield;
     const L = leds(g, maat), R = ringen(g, maat, plekken(maat, [1, 2, 1])), P = pijlen(g, maat), S = smileys(g, maat, rnd, [5, 4, 2][zwaar]);
+    yield;
     const W = wolken(g, maat, rnd, { n: 6 });
+    yield;
     const lampS = [1.3, 3.9, 6.5, 9.1], lamp = inst(g, maat, SPH, maat.deel('lampMat', () => plus()), 4), gloed = zwaar < 2 ? inst(g, maat, VLAK, maat.deel('gloedMat', () => plus(rondTex, THREE.DoubleSide)), 4) : null;
     lampS.forEach((s, i) => {
       const p = maat.xz(s, 0);
       mtx.compose(vp.set(p.x, maat.H - 0.07, p.z), qa.identity(), vs.set(0.06, 0.06, 0.06)); lamp.setMatrixAt(i, mtx);
       if (gloed) { mtx.compose(vp.set(p.x, maat.H - 0.012, p.z), qa.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2), vs.set(1.5, 1.5, 1)); gloed.setMatrixAt(i, mtx); }
     });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['ACID HOUSE', 'GO DEEPER', 'ACID']), '#fff01f', kijkPlek(maat, 0, 1.75), 1.7, true);
+    yield;
     const B2 = bord(g, maat, '303', '#39ff14', kijkPlek(maat, 1, 1.85), 1.1, true);
+    yield;
     const tinten = [0.15, 0.33, 0.92, 0.02], basis = new THREE.Color(0.22, 0.02, 0.01), rood = new THREE.Color(1, 0.18, 0.1);
     return { muur, vloer, plafond, muurMaat: [5.2, maat.H], update(dt, now, b) {
       const k = stemming(b, now);
@@ -560,16 +568,23 @@ void main() {
   } });
 
   // 2. uv-jungle: blacklight-schildering die op de bas oplicht, violette uv-gloed langs vloer en plafond, vuurvliegjes, lianen van el-draad
-  doolhof.gangStijl('uv-jungle', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('uv-jungle', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('uv-jungle'), { zwaar, tint: 0x6a6088, sat: 0.9, gloeiW: [0.2, 0.2, 0.2], drempel: 0.5, gloeiKleur: 0xd0b0ff, scanKleur: 0x8a40ff, randKleur: 0x6a20ff, rand: 0.45, warp: zwaar < 2 ? 0.003 : 0 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x08050f, kleurA: 0x7a30ff, vlek: 0.22, scanKleur: 0x9a50ff }));
     const plafond = maat.deel('plafond', () => vlakMat(tex('uv-jungle'), { pad: [12, 2.6], tint: 0x1a1430, scanKleur: 0x5020c0, scan: 0.5 }));
+    yield;
     const L = leds(g, maat), K = kabels(g, maat, rnd, { n: 3, el: true, zak: 0.22, kleur: 0x0a1608, gap: 1.1 });
+    yield;
     const R = ringen(g, maat, plekken(maat, [0, 2, 0]));
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'vuurvlieg', n: 150, modus: 0, kleurA: 0xd8ff40, kleurB: 0x40ffb0, maat: 0.03, knip: 1, zwaai: 0.35, y0: 0.3, dy: 2.0 });
+    yield;
     const W = wolken(g, maat, rnd, { n: 5, y0: 1.5, v: 0.1, maat: 1.8 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['DEEPER', 'GO DEEPER', 'BLOODLINE']), '#39ff14', kijkPlek(maat, 0, 1.8), 1.7, true);
+    yield;
     const B2 = bord(g, maat, '∞', '#ff2bd6', kijkPlek(maat, 1, 1.9), 1.0, true);
+    yield;
     const tinten = [0.8, 0.9, 0.52], basis = new THREE.Color(0.09, 0.015, 0.26);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -588,18 +603,27 @@ void main() {
 
   // 3. bass-tempel: stenen tempelwand waarvan de speaker- en draaitafelglyphen oplichten als het lichtpakket langskomt, gouden poortjes
   // met een turquoise binnenrand die op de kick gloeit, een gloeiende goot in de stenen vloer en zwevend goudstof
-  doolhof.gangStijl('bass-tempel', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('bass-tempel', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('bass-tempel'), { zwaar, tint: 0x8a7c66, sat: 1.0, gloeiW: [0.15, 0.15, 0.15], drempel: 0.32, gloeiKleur: 0xffe0a0, scanKleur: 0x30ffe0, randKleur: 0xffa030, rand: 0.12 }));
     const vloer = maat.deel('vloer', () => vlakMat(tex('baksteen', true), { tint: 0x4a4038, kleurA: 0x30ffe0, stroom: 1, scanKleur: 0x30ffe0 }));
     const plafond = maat.deel('plafond', () => vlakMat(tex('baksteen', true), { tint: 0x16120e, scanKleur: 0xffb040, scan: 0.4 }));
+    yield;
     const poortS = plekken(maat, [1, 2, 1]);
+    yield;
     const goud = maat.deel('goud', () => glansMat(0xd8a640, 0));
+    yield;
     const P = ringen(g, maat, poortS, { mat: goud, dik: 0.13, diep: 0.24, halo: false });
+    yield;
     const R = ringen(g, maat, poortS, { dik: 0.022, diep: 0.03, rand: 0.145 });
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'goudstof', n: 90, modus: 0, kleurA: 0xffc860, kleurB: 0xfff0c0, maat: 0.018, knip: 0.6, zwaai: 0.25 });
+    yield;
     const W = wolken(g, maat, rnd, { n: 4, y0: 1.7, v: 0.07, maat: 1.6 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['BLOODLINE', 'DEEPER', 'SAMSONIGHT']), '#ffc040', kijkPlek(maat, 0, 1.8), 1.7, true);
+    yield;
     const B2 = bord(g, maat, '∞', '#30ffe0', kijkPlek(maat, 1, 1.85), 0.9, true);
+    yield;
     const turk = new THREE.Color(0.18, 1, 0.88);
     return { muur, vloer, plafond, vloerMaat: [1.4, 1.4], update(dt, now, b) {
       const k = stemming(b, now);
@@ -619,14 +643,19 @@ void main() {
   } });
 
   // 4. paddenstoelen-trip: 70s-schildering die golft en door de regenboog draait, regenboogringen, kleurringen die over de vloer uitdijen, sporen
-  doolhof.gangStijl('paddenstoelen', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('paddenstoelen', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('paddenstoelen'), { zwaar, tint: 0x8a7c84, golf: 0.55, warp: zwaar < 2 ? 0.006 : 0, drempel: 0.75, gloeiKleur: 0xffffff, scanKleur: 0xff60c0, randKleur: 0xff40a0, rand: 0.15 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x0a0610, kleurA: 0xff40c0, rimpel: 0.75, scanKleur: 0xffa040 }));
     const plafond = maat.deel('plafond', () => vlakMat(tex('paddenstoelen'), { pad: [10.6, 2.4], tint: 0x2a2030, scanKleur: 0xff40a0, scan: 0.4 }));
+    yield;
     const R = ringen(g, maat, plekken(maat, [1, 2, 1]));
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'sporen', n: 120, modus: 3, snel: 0.14, kleurA: 0xff70d0, kleurB: 0xffc040, maat: 0.03, knip: 0.5 });
+    yield;
     const W = wolken(g, maat, rnd, { n: 5, y0: 1.3, v: 0.09, maat: 1.9 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['DEEPER', '∞', 'GO DEEPER']), '#ff8a1a', kijkPlek(maat, 0, 1.8), 1.6, true);
+    yield;
     const B2 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEP STEPPER']), '#ff3cc8', kijkPlek(maat, 1, 1.9), 1.6, true);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -641,28 +670,37 @@ void main() {
   } });
 
   // 5. rave-flyers: 90s folderwand, kale peertjes aan snoertjes die op de tel knipperen (loop, om en om, alles, fonkel), smileys, natte vloer
-  doolhof.gangStijl('rave-flyers', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('rave-flyers', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('rave-flyers'), { zwaar, tint: 0x6a6460, drempel: 0.8, gloeiKleur: 0xfff0b0, scanKleur: 0xffe040, randKleur: 0xffa040, rand: 0.25 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x0c0b0d, plas: 0.8, kleurA: 0xffa050, kleurB: 0xff40a0, scanKleur: 0xffd040, scan: 0.6 }));
     const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x080708, scan: 0 }));
     // peertjes in twee rijen naast de looplijn (onderkant boven 2,3 m: een lange alien loopt eronderdoor)
+    yield;
     const pr = [];
     for (const kant of [-1, 1]) {
       const L = maat.lijn(kant * 0.66), n = Math.floor(L.len / 0.72);
       for (let i = 0; i < n; i++) { const p = L.op((i + 0.5) * L.len / n); pr.push({ x: p.x, z: p.z, snoer: 0.06 + rnd() * 0.1, i: pr.length, kant, s: maat.st(p.x, p.z)[0] }); }
     }
+    yield;
     const peer = inst(g, maat, SPH, maat.deel('peerMat', () => plus()), pr.length);
+    yield;
     const halo = zwaar < 2 ? inst(g, maat, VLAK, maat.deel('peerHalo', () => plus(rondTex, THREE.DoubleSide)), pr.length) : null;
+    yield;
     const snoerGeo = maat.deel('snoeren', () => samen(pr.map(q => new THREE.CylinderGeometry(0.004, 0.004, q.snoer, 4).translate(q.x, maat.H - q.snoer / 2, q.z)), 0x111111, 0.5));
     add(g, snoerGeo, kleurVert);
     pr.forEach((q, i) => {
       mtx.compose(vp.set(q.x, maat.H - q.snoer - 0.04, q.z), qa.identity(), vs.set(0.045, 0.055, 0.045)); peer.setMatrixAt(i, mtx);
       if (halo) { const p = maat.xz(q.s, 0); mtx.compose(vp.set(q.x, maat.H - q.snoer - 0.04, q.z), qa.setFromAxisAngle(AY, Math.atan2(p.dx, p.dz)), vs.set(0.42, 0.42, 1)); halo.setMatrixAt(i, mtx); }
     });
+    yield;
     const S = smileys(g, maat, rnd, [6, 5, 3][zwaar]);
+    yield;
     const W = wolken(g, maat, rnd, { n: 5, y0: 1.6, v: 0.11, maat: 1.7 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'BLOODLINE']), '#fff01f', kijkPlek(maat, 0, 1.85), 1.7, true);
+    yield;
     const B2 = bord(g, maat, kies(rnd, ['DEEP STEPPER', 'DEEPER', '∞']), '#ff2bd6', kijkPlek(maat, 1, 1.85), 1.6, true);
+    yield;
     const warm = new THREE.Color(1, 0.62, 0.28);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -689,11 +727,12 @@ void main() {
 
   // 6. betonbunker: brutalistisch beton met buizen en kabels, een rode noodlichtstrip waar twee zwaailichten overheen draaien,
   // kooilampjes (eentje stuk), gevarenstrepen langs de vloer; op de drop vol stroboscoop
-  doolhof.gangStijl('betonbunker', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('betonbunker', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('beton-bunker'), { zwaar, tint: 0x8a8888, gloeiW: [1, -0.6, -0.6], drempel: 0.3, gloeiKleur: 0xff2a18, scanKleur: 0xff1a10, randKleur: 0x501010, rand: 0.2 }));
     const vloer = maat.deel('vloer', () => vlakMat(tex('staal', true), { tint: 0x4a4848, strepen: 1, kleurB: 0xffb010, scanKleur: 0xff2010, scan: 0.7 }));
     const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x0b0b0c, scanKleur: 0xff1010, scan: 0.3 }));
     // buizen onder het plafond langs beide muren (met bochtstukken)
+    yield;
     const buisGeo = maat.deel('buizen', () => {
       const delen = [];
       for (const [d, y, r] of [[-(maat.h - 0.13), maat.H - 0.14, 0.075], [maat.h - 0.1, maat.H - 0.12, 0.05], [maat.h - 0.08, maat.H - 0.3, 0.035]]) {
@@ -708,21 +747,31 @@ void main() {
       return samen(delen, 0x3a3836, 0.25);
     });
     add(g, buisGeo, kleurVert);
+    yield;
     const K = kabels(g, maat, rnd, { n: 2, zak: 0.16, kleur: 0x121212 });
     // noodlichtstrip (stukjes van 0,4 m op 2,2 m hoogte langs beide muren) + twee zwaailichten in de bochten
+    yield;
     const strip = [];
     for (const kant of [-1, 1]) { const L = maat.lijn(kant * (maat.h - 0.03)), n = Math.floor(L.len / 0.4); for (let i = 0; i < n; i++) { const p = L.op((i + 0.5) * L.len / n); strip.push({ x: p.x, z: p.z, yaw: Math.atan2(p.dx, p.dz) }); } }
+    yield;
     const sm = inst(g, maat, BOX, maat.deel('stripMat', () => plus()), strip.length);
     strip.forEach((q, i) => { mtx.compose(vp.set(q.x, 2.2, q.z), qa.setFromAxisAngle(AY, q.yaw), vs.set(0.03, 0.05, 0.36)); sm.setMatrixAt(i, mtx); });
+    yield;
     const zw = [maat.xz(maat.L1, 0), maat.xz(maat.L1 + maat.L2, 0)].map(p => ({ x: p.x, z: p.z }));
+    yield;
     const kap = inst(g, maat, SPH, maat.deel('zwaaiMat', () => plus()), 2);
     zw.forEach((p, i) => { mtx.compose(vp.set(p.x, maat.H - 0.06, p.z), qa.identity(), vs.set(0.09, 0.07, 0.09)); kap.setMatrixAt(i, mtx); });
     // kooilampjes op de muren
+    yield;
     const kooi = plekken(maat, [1, 2, 1]).map((s, i) => wandPlek(maat, i % 2 ? 1 : -1, s, 1.95, 0.06));
+    yield;
     const km = inst(g, maat, BOX, maat.deel('kooiMat', () => plus()), kooi.length), stuk = Math.floor(rnd() * kooi.length);
     kooi.forEach((q, i) => { mtx.compose(vp.set(q.x, q.y, q.z), qa.setFromAxisAngle(AY, q.ry), vs.set(0.16, 0.1, 0.06)); km.setMatrixAt(i, mtx); });
+    yield;
     const W = wolken(g, maat, rnd, { n: 6, y0: 1.3, v: 0.1, maat: 1.9 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['DEEPER', 'BLOODLINE']), '#ff2a20', kijkPlek(maat, 0, 1.75), 1.6, true);
+    yield;
     const rood = new THREE.Color(1, 0.08, 0.04);
     return { muur, vloer, plafond, vloerMaat: [1.6, 1.6], update(dt, now, b) {
       const k = stemming(b, now), strobo = k.flits * 0.65;
@@ -748,15 +797,20 @@ void main() {
   } });
 
   // 7. kosmos-portaal: nevel op muren en plafond (draait langzaam door de kleuren), ovale portaalringen, sterren die naar je toe vliegen
-  doolhof.gangStijl('kosmos', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('kosmos', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     // de nevel is fel: tint en gloei laag (anders brandt de wand wit uit); de vloer is dezelfde nevel, donker, met glans (lopen door de ruimte)
     const muur = maat.deel('muur', () => muurMat(tex('kosmos'), { zwaar, tint: 0x5c5c7c, warp: zwaar < 2 ? 0.008 : 0, drempel: 0.7, gloeiKleur: 0xa0b4ff, scanKleur: 0x6080ff, randKleur: 0x3040b0, rand: 0.2 }));
     const vloer = maat.deel('vloer', () => vlakMat(tex('kosmos'), { pad: [10.6, 2.6], tint: 0x262640, glans: 0.35, kleurB: 0x6a40ff, scanKleur: 0x5060ff, scan: 0.6 }));
     const plafond = maat.deel('plafond', () => vlakMat(tex('kosmos'), { pad: [10.6, 2.6], tint: 0x6a6a90, scanKleur: 0x8040ff, scan: 0.5 }));
+    yield;
     const ps = plekken(maat, [1, 2, 1]), ring = inst(g, maat, TORUS, maat.deel('portaalMat', () => plus()), ps.length);
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'sterren', n: 220, modus: 1, snel: -2.2, kleurA: 0xffffff, kleurB: 0x9ab8ff, maat: 0.022, knip: 0.3 });
+    yield;
     const W = wolken(g, maat, rnd, { n: 3, y0: 1.2, v: 0.06, maat: 2.0 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEPER', 'DEEP STEPPER']), '#7fe8ff', kijkPlek(maat, 0, 1.8), 1.7, true);
+    yield;
     const B2 = bord(g, maat, '∞', '#b46cff', kijkPlek(maat, 1, 1.85), 1.0, true);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -777,17 +831,20 @@ void main() {
   } });
 
   // 8. neonsteeg: natte steeg vol neonbuizen (flikkeren), spiegelende plassen die op de kick rimpelen, stoom uit twee roosters, motregen
-  doolhof.gangStijl('neonsteeg', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('neonsteeg', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('neonsteeg'), { zwaar, tint: 0x7a7a8a, sat: 0.6, gloeiW: [0.25, 0.25, 0.25], drempel: 0.55, gloeiKleur: 0xffffff, scanKleur: 0xff2a90, randKleur: 0x2a60ff, rand: 0.1 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x0b0b10, plas: 1, kleurA: 0xff2a90, kleurB: 0x20e0ff, scanKleur: 0x20e0ff, scan: 0.5 }));
     const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x07070a, scan: 0 }));
+    yield;
     const K = kabels(g, maat, rnd, { n: 2, zak: 0.14, kleur: 0x101014 });
     // neonbuizen op de muren (staand en liggend) + hun weerschijn op de natte vloer
+    yield;
     const kl3 = [new THREE.Color(1, 0.16, 0.56), new THREE.Color(0.12, 0.88, 1), new THREE.Color(0.7, 0.3, 1), new THREE.Color(1, 0.85, 0.2)], buis = [];
     for (let i = 0; i < [10, 8, 6][zwaar]; i++) {
       const [a, b] = maat.dwars[i % 3], s = a + rnd() * (b - a), kant = rnd() < 0.5 ? -1 : 1, staand = rnd() < 0.5;
       buis.push({ s, kant, staand, y: staand ? 0.9 + rnd() * 0.8 : 1.4 + rnd() * 0.9, l: staand ? 0.5 + rnd() * 0.7 : 0.4 + rnd() * 0.8, c: Math.floor(rnd() * 4), i });
     }
+    yield;
     const bm = inst(g, maat, BOX, maat.deel('neonMat', () => plus()), buis.length), rm = inst(g, maat, VLAK, maat.deel('weerMat', () => plus(rondTex, THREE.DoubleSide)), buis.length);
     buis.forEach((q, i) => {
       const w = wandPlek(maat, q.kant, q.s, q.y, 0.04);
@@ -796,11 +853,16 @@ void main() {
       qa.setFromEuler(eul.set(-Math.PI / 2, v.ry, 0, 'YXZ'));
       mtx.compose(vp.set(v.x, 0.006, v.z), qa, vs.set(q.staand ? 0.3 : q.l * 1.2, 0.8, 1)); rm.setMatrixAt(i, mtx);
     });
+    yield;
     const roost = [2.0, 7.6], rooster = inst(g, maat, BOX, maat.deel('roosterMat', () => new THREE.MeshBasicMaterial({ color: 0x1a1a1e })), roost.length);
     roost.forEach((s, i) => { const p = maat.xz(s, 0.15); mtx.compose(vp.set(p.x, 0.004, p.z), qa.setFromAxisAngle(AY, Math.atan2(p.dx, p.dz)), vs.set(0.5, 0.008, 0.4)); rooster.setMatrixAt(i, mtx); rooster.setColorAt(i, ca.setRGB(1, 1, 1)); });
+    yield;
     const ST = wolken(g, maat, rnd, { n: 6, stijg: true, plekken: roost, v: 0.5, maat: 0.9 });
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'regen', n: 110, modus: 2, snel: 2.4, kleurA: 0x9ac8ff, kleurB: 0xffffff, maat: 0.012 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEPER']), '#ff2a90', kijkPlek(maat, 0, 1.8), 1.7, true);
+    yield;
     const B2 = bord(g, maat, kies(rnd, ['DEEP STEPPER', 'BLOODLINE']), '#20e0ff', kijkPlek(maat, 1, 1.85), 1.7, true);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -819,20 +881,29 @@ void main() {
   } });
 
   // 9. slijmhol: biomechanische wand die ademt en groen opgloeit op de bas, slijmdruppels van het plafond met spatjes, ribben, bellen, groene grondmist
-  doolhof.gangStijl('slijmhol', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('slijmhol', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('slijmhol'), { zwaar, tint: 0x7a8670, gloeiW: [-0.6, 1.2, -0.6], drempel: 0.15, gloeiKleur: 0x80ff50, warp: 0.01, scanKleur: 0x40ff30, randKleur: 0x30ff40, rand: 0.3 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x050904, vlek: 0.55, kleurA: 0x40ff30, scanKleur: 0x60ff20, scan: 0.6 }));
     const plafond = maat.deel('plafond', () => vlakMat(tex('slijmhol'), { pad: [10.6, 2.4], tint: 0x3a4436, scanKleur: 0x40ff30, scan: 0.4 }));
+    yield;
     const rib = maat.deel('rib', () => glansMat(0x2a3424, 0.15));
+    yield;
     const R = ringen(g, maat, plekken(maat, [1, 2, 1]), { mat: rib, dik: 0.1, diep: 0.14, halo: false });
+    yield;
     const G = ringen(g, maat, plekken(maat, [1, 2, 1]), { dik: 0.018, diep: 0.02, rand: 0.11 });
     // druppels: groeien aan het plafond, vallen, spatten (zuiver op de klok)
+    yield;
     const dr = [];
     for (let i = 0; i < [12, 8, 5][zwaar]; i++) { const [a, b] = maat.dwars[i % 3]; dr.push({ s: a + rnd() * (b - a), d: (rnd() * 2 - 1) * 0.75, P: 4 + rnd() * 3, f: rnd() }); }
+    yield;
     const dm = inst(g, maat, SPH, maat.deel('drupMat', () => plus()), dr.length), sp = inst(g, maat, VLAK, maat.deel('spatMat', () => plus(rondTex, THREE.DoubleSide)), dr.length);
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'bellen', n: 80, modus: 3, snel: 0.2, kleurA: 0x60ff40, kleurB: 0xb0ff60, maat: 0.035, knip: 0.4 });
+    yield;
     const W = wolken(g, maat, rnd, { n: 6, y0: 0.15, dy: 0.35, v: 0.08, maat: 1.6 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['∞', 'DEEPER', 'BLOODLINE']), '#5aff2a', kijkPlek(maat, 0, 1.85), 1.4, true);
+    yield;
     const groen = new THREE.Color(0.35, 1, 0.2), val = Math.sqrt((maat.H - 0.15) / 4.9);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -861,17 +932,25 @@ void main() {
   } });
 
   // 10. chroom: vloeibaar chroom dat met de kijkhoek van kleur verschiet, spiegelende ringen, glinsters, een zwarte spiegelvloer met olieglans
-  doolhof.gangStijl('chroom', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('chroom', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('chroom'), { zwaar, tint: 0x9a9aa4, iris: 0.55, drempel: 0.7, gloeiKleur: 0xffffff, scanKleur: 0xc0d0ff, randKleur: 0x8060ff, rand: 0.1 }));
     const vloer = maat.deel('vloer', () => vlakMat(tex('chroom'), { pad: [7.2, 2.2], tint: 0x34343e, glans: 0.7, kleurB: 0xa0c0ff, scanKleur: 0xc0c0ff, scan: 0.5 }));  // vloeibaar chroom, donkerder dan de wand
     const plafond = maat.deel('plafond', () => vlakMat(tex('chroom'), { pad: [10.6, 2.4], tint: 0x44444c, scanKleur: 0xffffff, scan: 0.3 }));
+    yield;
     const spiegel = maat.deel('spiegel', () => glansMat(0xd8dce8, 0.75));
+    yield;
     const R = ringen(g, maat, plekken(maat, [1, 2, 1]), { mat: spiegel, dik: 0.07, diep: 0.1, halo: false });
+    yield;
     const H = ringen(g, maat, plekken(maat, [1, 2, 1]), { dik: 0.015, diep: 0.012, rand: 0.083 });
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'glinster', n: 160, modus: 0, kleurA: 0xffffff, kleurB: 0xc0e0ff, maat: 0.014, knip: 1, zwaai: 0.15 });
+    yield;
     const L = leds(g, maat);
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['DEEP STEPPER', 'SAMSONIGHT']), '#e0f4ff', kijkPlek(maat, 0, 1.8), 1.7, true);
+    yield;
     const B2 = bord(g, maat, '∞', '#ff7ae0', kijkPlek(maat, 1, 1.85), 1.0, true);
+    yield;
     const tinten = [0.55, 0.8, 0.95], basis = new THREE.Color(0.06, 0.06, 0.09);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -900,16 +979,22 @@ void main() {
     c.globalCompositeOperation = 'destination-over'; c.shadowColor = '#ff2fb0'; c.shadowBlur = 24;
     c.beginPath(); c.arc(w / 2, h / 2, w / 2 - 22, 0, TAU); c.fillStyle = 'rgba(255,40,160,0.25)'; c.fill();
   });
-  doolhof.gangStijl('arcade', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('arcade', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('arcade'), { zwaar, tint: 0x7a7088, sat: 0.6, gloeiW: [0.2, 0.2, 0.2], drempel: 0.55, gloeiKleur: 0xffffff, scanKleur: 0xff20d0, randKleur: 0xff20c0, rand: 0.35 }));
     const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x05020a, raster: 1, gap: 0.5, kleurA: 0xff20d0, kleurB: 0x20e0ff, scanKleur: 0xff40e0, scan: 0.6 }));
     const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x030107, raster: 0.55, gap: 0.5, kleurA: 0x20e0ff, kleurB: 0xb040ff, scan: 0.3, scanKleur: 0x20e0ff }));
+    yield;
     const L = leds(g, maat, { plafond: zwaar < 2 });
+    yield;
     const zon = add(g, VLAK, maat.deel('zonMat', () => plus(zonTex)), [maat.kijk[0].x, 1.45, maat.kijk[0].z - 0.01], [1.5, 1.5, 1]);
     zon.rotation.y = maat.kijk[0].ry;
+    yield;
     const D = deeltjes(g, maat, rnd, { naam: 'pixels', n: 110, modus: 3, snel: 0.25, kleurA: 0xff30d0, kleurB: 0x30f0ff, maat: 0.045, vierkant: true, knip: 0.3 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEP STEPPER']), '#ff3ce0', kijkPlek(maat, 0, 2.3), 1.5);
+    yield;
     const B2 = bord(g, maat, kies(rnd, ['GO DEEPER', 'DEEPER', 'BLOODLINE']), '#30f0ff', kijkPlek(maat, 1, 1.85), 1.7, true);
+    yield;
     const tinten = [0.85, 0.52, 0.75], basis = new THREE.Color(0.12, 0.02, 0.2);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
@@ -926,18 +1011,27 @@ void main() {
 
   // 12. laserraster: stalen gang met gevarenstrepen, laserstralen dwars door de gang die op de maat op en neer zwiepen en kantelen
   // (kleur per maat, op de drop allemaal aan en sneller), stippen waar ze de muur raken, nevel om de stralen te zien
-  doolhof.gangStijl('laserraster', { gewicht: 1, maak(g, maat, rnd, zwaar) {
+  doolhof.gangStijl('laserraster', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
     const muur = maat.deel('muur', () => muurMat(tex('staal', true), { zwaar, tint: 0x5a5e66, gloeiW: [0.4, 0.3, -0.6], drempel: 0.25, gloeiKleur: 0xffc040, scanKleur: 0xff1030, randKleur: 0xff0830, rand: 0.25 }));
     const vloer = maat.deel('vloer', () => vlakMat(tex('staal', true), { tint: 0x2a2c30, strepen: 1, kleurB: 0xffb000, scanKleur: 0xff1030, scan: 0.7 }));
     const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x060608, scan: 0.3, scanKleur: 0xff1030 }));
+    yield;
     const L = leds(g, maat);
+    yield;
     const st = []; maat.dwars.forEach(([a, b], i) => { const n = [2, 3, 2][i]; for (let j = 0; j < n; j++) st.push({ s: a + (j + 0.5) * (b - a) / n, f: rnd(), f2: rnd(), j: st.length }); });
+    yield;
     const kern = inst(g, maat, BOX, maat.deel('laserMat', () => plus()), st.length);
+    yield;
     const gloed = zwaar < 2 ? inst(g, maat, BOX, maat.deel('laserGloed', () => plus()), st.length) : null;
+    yield;
     const stip = inst(g, maat, VLAK, maat.deel('stipMat', () => plus(rondTex, THREE.DoubleSide)), st.length * 2);
+    yield;
     const W = wolken(g, maat, rnd, { n: 7, y0: 0.9, dy: 1.3, v: 0.12, maat: 2.0 });
+    yield;
     const B1 = bord(g, maat, kies(rnd, ['GO DEEPER', 'DEEPER', 'BLOODLINE']), '#ff2040', kijkPlek(maat, 0, 1.8), 1.7, true);
+    yield;
     const tinten = [0.0, 0.33, 0.6, 0.85], basis = new THREE.Color(0.18, 0.0, 0.03), kleuren = [0xff1030, 0x20ff40, 0x2060ff, 0xff20e0].map(c => new THREE.Color(c));
+    yield;
     const as = new THREE.Vector3();
     return { muur, vloer, plafond, vloerMaat: [1.6, 1.6], muurMaat: [1.8, 1.8], update(dt, now, b) {
       const k = stemming(b, now);

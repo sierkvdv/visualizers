@@ -228,6 +228,26 @@
     if (im.complete && im.naturalWidth) zet(); else im.addEventListener('load', zet, { once: true });
     return t;
   }
+  // dezelfde plaatjes hangen al als textuur op de clubmuren (repeat -2, 1; al op de gpu). Een eigen textuur per kamer betekende elke keer
+  // twee uploads van 3168x1344 (~50 ms per stuk in één beeld) en ~22 MB per stuk. Die van de club dus gebruiken, de herhaling zit dan in de
+  // uv's van een eigen vlak: zelfde beeld.
+  function clubGraf(i) {
+    const naam = 'graffiti-' + (i + 1) + '.jpg', kand = [];
+    if (typeof room !== 'undefined' && room && Array.isArray(room.material)) kand.push(...room.material);
+    if (typeof frontWall !== 'undefined' && Array.isArray(frontWall)) for (const w of frontWall) kand.push(w.material);
+    for (const m of kand) {
+      const t = m && m.map, src = t && t.image && typeof t.image.src === 'string' && t.image.src.split('?')[0];
+      if (src && src.endsWith(naam) && t.offset.x === 0 && t.offset.y === 0 && t.repeat.y === 1 && t.repeat.x !== 0 && t.rotation === 0 && t.wrapS === THREE.RepeatWrapping) return t;
+    }
+    return null;
+  }
+  function graffitiVlak(i, rx, zwaar) {  // { geo, map }: geo null = het gewone vlak van de kamer
+    const t = zwaar ? null : clubGraf(i % GRAF.length);
+    if (!t) return { geo: null, map: graffitiTex(i, rx, zwaar) };
+    const geo = new THREE.PlaneGeometry(1, 1), uv = geo.attributes.uv;
+    for (let k = 0; k < uv.count; k++) uv.setX(k, uv.getX(k) * rx / t.repeat.x);  // na de uv-transformatie van de textuur: u * rx
+    return { geo, map: t };
+  }
 
   // figuur via de kern; lukt het met filter niet, dan elk figuur
   const fig = (ctx, o) => ctx.figuur(o) || (o.filter ? ctx.figuur({ x: o.x, z: o.z, face: o.face, rol: o.rol }) : null);
@@ -938,7 +958,8 @@
     // graffiti op beide zijwanden (vlak tegen de muur, leesbaar van binnen)
     const gi = Math.floor(r() * 3);
     for (const s of [-1, 1]) {
-      const m = add(g, K.plane, basic(0xb8b0a8, { map: graffitiTex(gi + (s > 0 ? 1 : 0), Math.max(1, Math.round(d / (h * 2.2))), Z) }), [s * (w / 2 - 0.03), h / 2, 0], [d - 0.1, h - 0.05, 1]);
+      const gv = graffitiVlak(gi + (s > 0 ? 1 : 0), Math.max(1, Math.round(d / (h * 2.2))), Z);
+      const m = add(g, gv.geo || K.plane, basic(0xb8b0a8, { map: gv.map }), [s * (w / 2 - 0.03), h / 2, 0], [d - 0.1, h - 0.05, 1]);
       m.rotation.y = -s * Math.PI / 2;
     }
     // tl-buizen aan het plafond, een paar zijn kapot en flikkeren

@@ -482,7 +482,9 @@
   function bodyOf(d, j, outV) {
     let h = bodyBones.get(d);
     if (!h) { h = [null, null]; if (d.body) d.body.traverse(o => { if (o.isBone && o.name === 'Head' && !h[0]) h[0] = o; if (o.isBone && o.name === 'Hips' && !h[1]) h[1] = o; }); bodyBones.set(d, h); }
-    return h[j] ? outV.setFromMatrixPosition(h[j].matrixWorld) : outV.set(d.root.position.x, j ? 1 : 1.6, d.root.position.z);
+    if (!h[j]) return outV.set(d.root.position.x, j ? 1 : 1.6, d.root.position.z);
+    const A = window.clubOpt && clubOpt.anim;  // niet bijgewerkt figuur (optimaliseer.js, buiten beeld): botmatrices kunnen oud zijn, dan vers uitrekenen
+    return A && A.stil(d) ? h[j].getWorldPosition(outV) : outV.setFromMatrixPosition(h[j].matrixWorld);
   }
 
   // om te testen in de console: clubBarman.rondje()

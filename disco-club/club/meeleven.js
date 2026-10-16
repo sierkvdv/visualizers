@@ -212,6 +212,8 @@
   // mode: stand (staand publiek), sit (lounge: hoofd en schouders), walk (lopers), worm
   function groove(d, mode, bar, dt, pLate) {
     if (!d.root.visible) return;
+    const opt = window.clubOpt && clubOpt.anim;  // optimaliseer.js laadt na dit script
+    if (opt && opt.stil && opt.stil(d)) return;  // clip dit beeld niet bijgewerkt (buiten beeld of klein): dan ook niets erbovenop
     const s = info(d), E = energy, inG = G && s.gid === G.id;
     clean(s);
     s.nod += ((s.late ? pLate : pulse) - s.nod) * Math.min(1, dt * 22);  // korte aanzet: knik óp de tel, geen schok

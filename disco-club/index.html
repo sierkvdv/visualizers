@@ -112,7 +112,7 @@ function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } 
 
 // Kwaliteit: club/kwaliteit.js kiest hoog/midden/laag en zet KW; deze beginwaarden zijn 'hoog' (zoals altijd)
 const MOBIEL = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
-const KW = { stand: 'hoog', schaduw: 1, bol: 3, spiegel: true, imag: 3, spiegelElke: 1, bolFiguren: true };  // schaduw/bol/imag/spiegelElke: om de hoeveel beelden (0 = nooit)
+const KW = { stand: 'hoog', schaduw: 2, bol: 4, spiegel: true, imag: 3, spiegelElke: 2, bolFiguren: false };  // schaduw/bol/imag/spiegelElke: om de hoeveel beelden (0 = nooit); zie teken()
 
 // --- Scène ---
 // Telefoons: botstanden als uniforms i.p.v. een float-textuur per figuur. Die textuur gaat elke render opnieuw naar de GPU
@@ -243,6 +243,19 @@ function add(parent, geo, mat, pos, scl) {
 
 // Zaal: donkere doos om de dansvloer
 const ROOM = 14, CEIL = 7;
+function samenvoegen(geos) {  // geometrieën met dezelfde attributen en een index tot één (vaste vlakken die één materiaal delen)
+  const uit = new THREE.BufferGeometry(), index = [];
+  let v = 0;
+  for (const k of Object.keys(geos[0].attributes)) {
+    const a = geos[0].attributes[k], arr = new Float32Array(geos.reduce((n, g) => n + g.attributes[k].count, 0) * a.itemSize);
+    let o = 0;
+    for (const g of geos) { arr.set(g.attributes[k].array, o); o += g.attributes[k].array.length; }
+    uit.setAttribute(k, new THREE.BufferAttribute(arr, a.itemSize));
+  }
+  for (const g of geos) { for (let i = 0; i < g.index.count; i++) index.push(g.index.getX(i) + v); v += g.attributes.position.count; g.dispose(); }
+  uit.setIndex(index);
+  return uit;
+}
 function canvasTexture(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); return new THREE.CanvasTexture(c); }
 // wand: ruw beton met naden, vochtplekken, roestvegen en graffiti (underground)
 const wallTex = canvasTexture(1024, 512, (g, w, h) => {
@@ -431,24 +444,34 @@ flecks.renderOrder = 3;
 const fleckDir = [];
 for (let i = 0; i < FLECKS; i++) fleckDir.push(new THREE.Vector3().setFromSphericalCoords(1, Math.acos(rnd(-1, 0.75)), rnd(0, TAU)));
 scene.add(flecks);
-const fd = new THREE.Vector3(), fn = new THREE.Vector3(), fu = new THREE.Vector3(), fv = new THREE.Vector3(), fp = new THREE.Vector3(), yAxis = new THREE.Vector3(0, 1, 0);
+// Per beeld alles met losse getallen, rechtstreeks in de instance-buffers: Vector3/Color-methodes per vlekje gaven ~70 KB afval per beeld
+// (getallen die als object terugkomen) = vaker GC-haperingen. Zelfde wiskunde als makeBasis(u, v, n) + setPosition(p).
+const fleckD = new Float32Array(FLECKS * 3), fleckK = new Float32Array(12);
+fleckDir.forEach((v, i) => { fleckD[i * 3] = v.x; fleckD[i * 3 + 1] = v.y; fleckD[i * 3 + 2] = v.z; });
 function updateFlecks(angle, bright) {
-  for (let i = 0; i < FLECKS; i++) {
-    fd.copy(fleckDir[i]).applyAxisAngle(yAxis, angle);
-    // dichtstbijzijnde vlak van de zaal langs de straal (zonder hulpfunctie per vlekje: die gaf ~4 MB afval per seconde = vaker GC-haperingen)
-    let t = 1e9, d;
-    if (fd.x !== 0 && (d = ((fd.x > 0 ? ROOM : -ROOM) - ballPos.x) / fd.x) > 0 && d < t) { t = d; fn.set(fd.x > 0 ? -1 : 1, 0, 0); }
-    if (fd.z !== 0 && (d = ((fd.z > 0 ? ROOM : -ROOM) - ballPos.z) / fd.z) > 0 && d < t) { t = d; fn.set(0, 0, fd.z > 0 ? -1 : 1); }
-    if (fd.y !== 0 && (d = ((fd.y > 0 ? CEIL : 0.03) - ballPos.y) / fd.y) > 0 && d < t) { t = d; fn.set(0, fd.y > 0 ? -1 : 1, 0); }
-    const cosI = Math.max(0.22, Math.abs(fd.dot(fn))), size = 0.045 + 0.011 * t;
-    fu.copy(fd).addScaledVector(fn, -fd.dot(fn));  // richting waarin het vlekje uitrekt bij schuine inval
-    if (fu.lengthSq() < 1e-6) fu.set(fn.y ? 1 : 0, 0, fn.y ? 0 : 1);
-    fu.normalize();
-    fv.crossVectors(fn, fu);
-    fp.copy(ballPos).addScaledVector(fd, t).addScaledVector(fn, 0.045);
-    m4.makeBasis(fu.multiplyScalar(size / cosI), fv.multiplyScalar(size), fn).setPosition(fp);
-    flecks.setMatrixAt(i, m4);
-    flecks.setColorAt(i, tmpColor.copy(spots[i & 3].light.color).lerp(white, 0.45).multiplyScalar(bright * (0.6 + 0.4 * Math.sin(i * 7.3 + angle * 9))));
+  if (!flecks.instanceColor) flecks.setColorAt(0, white);
+  const M = flecks.instanceMatrix.array, C = flecks.instanceColor.array, K = fleckK, n = Math.min(flecks.count, FLECKS);
+  const ca = Math.cos(angle), sa = Math.sin(angle), bx = ballPos.x, by = ballPos.y, bz = ballPos.z;
+  for (let s = 0; s < 4; s++) { const c = spots[s].light.color; K[s * 3] = c.r + (1 - c.r) * 0.45; K[s * 3 + 1] = c.g + (1 - c.g) * 0.45; K[s * 3 + 2] = c.b + (1 - c.b) * 0.45; }
+  for (let i = 0; i < n; i++) {
+    // richting gedraaid om de y-as (applyAxisAngle)
+    const x0 = fleckD[i * 3], dy = fleckD[i * 3 + 1], z0 = fleckD[i * 3 + 2], dx = x0 * ca + z0 * sa, dz = z0 * ca - x0 * sa;
+    // dichtstbijzijnde vlak van de zaal langs de straal
+    let t = 1e9, d, nx = 0, ny = 0, nz = 0;
+    if (dx !== 0 && (d = ((dx > 0 ? ROOM : -ROOM) - bx) / dx) > 0 && d < t) { t = d; nx = dx > 0 ? -1 : 1; ny = 0; nz = 0; }
+    if (dz !== 0 && (d = ((dz > 0 ? ROOM : -ROOM) - bz) / dz) > 0 && d < t) { t = d; nx = 0; ny = 0; nz = dz > 0 ? -1 : 1; }
+    if (dy !== 0 && (d = ((dy > 0 ? CEIL : 0.03) - by) / dy) > 0 && d < t) { t = d; nx = 0; ny = dy > 0 ? -1 : 1; nz = 0; }
+    const dn = dx * nx + dy * ny + dz * nz, cosI = Math.max(0.22, Math.abs(dn)), size = 0.045 + 0.011 * t;
+    let ux = dx - nx * dn, uy = dy - ny * dn, uz = dz - nz * dn, ul = ux * ux + uy * uy + uz * uz;  // richting waarin het vlekje uitrekt bij schuine inval
+    if (ul < 1e-6) { ux = ny ? 1 : 0; uy = 0; uz = ny ? 0 : 1; ul = 1; }
+    ul = 1 / Math.sqrt(ul); ux *= ul; uy *= ul; uz *= ul;
+    const su = size / cosI, o = i * 16;
+    M[o] = ux * su; M[o + 1] = uy * su; M[o + 2] = uz * su; M[o + 3] = 0;
+    M[o + 4] = (ny * uz - nz * uy) * size; M[o + 5] = (nz * ux - nx * uz) * size; M[o + 6] = (nx * uy - ny * ux) * size; M[o + 7] = 0;  // n x u
+    M[o + 8] = nx; M[o + 9] = ny; M[o + 10] = nz; M[o + 11] = 0;
+    M[o + 12] = bx + dx * t + nx * 0.045; M[o + 13] = by + dy * t + ny * 0.045; M[o + 14] = bz + dz * t + nz * 0.045; M[o + 15] = 1;
+    const k = bright * (0.6 + 0.4 * Math.sin(i * 7.3 + angle * 9)), s3 = (i & 3) * 3;
+    C[i * 3] = K[s3] * k; C[i * 3 + 1] = K[s3 + 1] * k; C[i * 3 + 2] = K[s3 + 2] * k;
   }
   flecks.instanceMatrix.needsUpdate = true;
   flecks.instanceColor.needsUpdate = true;
@@ -565,18 +588,48 @@ function distToBeam(p, origin, target) {  // afstand van punt p tot de as van ee
   const t = Math.max(0, Math.min(1, segB.subVectors(p, origin).dot(segA) / segA.lengthSq()));
   return segB.copy(origin).addScaledVector(segA, t).distanceTo(p);
 }
+// Rook kleuren: de bundels één keer per beeld als getallen (oorsprong, as, 1/|as|², kleur x sterkte, verval), daarna per wolkje alleen
+// rekenen. Hetzelfde als distToBeam + addColor per bundel, maar zonder de ~50 KB afval per beeld (getallen die als object terugkomen).
+const BUNDEL = new Float64Array(16 * 11);
+let bundelN = 0, bundelBeeld = -1, rookR = 0, rookG = 0, rookB = 0;
+function bundelZet(k, o, t, c, sterkte, verval, kop) {
+  const q = k * 11, ax = t.x - o.x, ay = t.y - o.y, az = t.z - o.z, l = ax * ax + ay * ay + az * az;
+  BUNDEL[q] = o.x; BUNDEL[q + 1] = o.y; BUNDEL[q + 2] = o.z; BUNDEL[q + 3] = ax; BUNDEL[q + 4] = ay; BUNDEL[q + 5] = az;
+  BUNDEL[q + 6] = l > 0 ? 1 / l : 0; BUNDEL[q + 7] = c.r * sterkte; BUNDEL[q + 8] = c.g * sterkte; BUNDEL[q + 9] = c.b * sterkte; BUNDEL[q + 10] = verval + kop * 100;
+}
+function bundelsLezen() {
+  if (bundelBeeld === frameNo) return;
+  bundelBeeld = frameNo;
+  let k = 0;
+  for (let i = 0; i < spots.length && k < 16; i++) { const s = spots[i]; bundelZet(k++, s.beam.g.position, s.beam.target, s.light.color, s.beam.mat.uniforms.strength.value, 0.35, 0); }
+  for (let i = 0; i < heads.length && k < 16; i++) { const h = heads[i], u = h.beam.mat.uniforms; bundelZet(k++, h.beam.g.position, h.beam.target, u.color.value, u.strength.value, 1.4, 1); }
+  bundelN = k;
+}
+function rookLicht(x, y, z, wSpot, wKop) {  // som van de bundels op plek x,y,z in rookR/G/B (spots x wSpot, moving heads x wKop)
+  let r = 0, g = 0, b = 0;
+  for (let k = 0; k < bundelN; k++) {
+    const q = k * 11, ox = BUNDEL[q], oy = BUNDEL[q + 1], oz = BUNDEL[q + 2], ax = BUNDEL[q + 3], ay = BUNDEL[q + 4], az = BUNDEL[q + 5];
+    let t = ((x - ox) * ax + (y - oy) * ay + (z - oz) * az) * BUNDEL[q + 6];
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = ox + ax * t - x, ey = oy + ay * t - y, ez = oz + az * t - z, v = BUNDEL[q + 10], kop = v > 50;
+    const w = (kop ? wKop : wSpot) * Math.exp(-(ex * ex + ey * ey + ez * ez) * (kop ? v - 100 : v));
+    r += BUNDEL[q + 7] * w; g += BUNDEL[q + 8] * w; b += BUNDEL[q + 9] * w;
+  }
+  rookR = r; rookG = g; rookB = b;
+}
 function updateSmoke(dt) {
-  for (const f of puffs) {
-    const p = f.sp.position;
+  bundelsLezen();
+  const fl = strobeLight.intensity * 0.012, k = S.smoke * 1.6;
+  for (let i = 0; i < puffs.length; i++) {
+    const f = puffs[i], p = f.sp.position;
     p.x += f.vx * dt; p.z += f.vz * dt;
     if (Math.abs(p.x) > 9.5) f.vx *= -1;
     if (Math.abs(p.z) > 9.5) f.vz *= -1;
     f.sp.material.rotation += f.spin * dt;
-    f.lit.setRGB(0.025, 0.022, 0.035);
-    for (const s of spots) { const d = distToBeam(p, s.beam.g.position, s.beam.target); addColor(f.lit, s.light.color, s.beam.mat.uniforms.strength.value * 0.55 * Math.exp(-d * d * 0.35)); }
-    for (const h of heads) { const d = distToBeam(p, h.beam.g.position, h.beam.target); addColor(f.lit, h.beam.mat.uniforms.color.value, h.beam.mat.uniforms.strength.value * 0.4 * Math.exp(-d * d * 1.4)); }
-    addColor(f.lit, white, strobeLight.intensity * 0.012);
-    f.sp.material.color.copy(f.lit).multiplyScalar(S.smoke * 1.6);
+    rookLicht(p.x, p.y, p.z, 0.55, 0.4);
+    const r = 0.025 + rookR + fl, g = 0.022 + rookG + fl, b = 0.035 + rookB + fl;
+    f.lit.setRGB(r, g, b);
+    f.sp.material.color.setRGB(r * k, g * k, b * k);
   }
 }
 
@@ -598,34 +651,41 @@ function updateFog(dt, beat, energy) {
   if (beat !== lastFogBeat && energy > 0.65 && Math.random() < 0.08) fireFog(pick(FOGGERS), 1.6);
   lastFogBeat = beat;
   const now = performance.now() / 1000;
-  fogQueue = fogQueue.filter(q => {
-    if (q.at > now) return true;
-    const f = fogPool.find(f => !f.sp.visible);
+  let j = 0, vrij = 0;  // wachtrij op zijn plek inkorten (geen nieuwe lijst per beeld)
+  for (let i = 0; i < fogQueue.length; i++) {
+    const q = fogQueue[i];
+    if (q.at > now) { fogQueue[j++] = q; continue; }
+    while (vrij < fogPool.length && fogPool[vrij].sp.visible) vrij++;
+    const f = fogPool[vrij];
     if (f) {
       const m = q.m;
       f.sp.visible = true; f.age = 0; f.life = rnd(8, 13); f.s0 = rnd(0.9, 1.3); f.green = false;
       f.sp.position.set(m.x + m.dir.x * 0.3, 0.35, m.z + m.dir.z * 0.3);
-      f.v.copy(m.dir).multiplyScalar(rnd(4, 6)).add(new THREE.Vector3(rnd(-0.6, 0.6), rnd(0.1, 0.5), rnd(-0.6, 0.6)));
+      f.v.copy(m.dir).multiplyScalar(rnd(4, 6));
+      f.v.x += rnd(-0.6, 0.6); f.v.y += rnd(0.1, 0.5); f.v.z += rnd(-0.6, 0.6);
     }
-    return false;
-  });
-  for (const f of fogPool) {
+  }
+  fogQueue.length = j;
+  bundelsLezen();
+  const rem = Math.exp(-dt * 1.4), sk = 0.27 * (0.4 + S.smoke);
+  for (let i = 0; i < fogPool.length; i++) {
+    const f = fogPool[i];
     if (!f.sp.visible) continue;
     f.age += dt;
     if (f.age > f.life) { f.sp.visible = false; continue; }
-    f.v.multiplyScalar(Math.exp(-dt * 1.4));  // remt af en blijft laag hangen
-    f.sp.position.addScaledVector(f.v, dt);
+    f.v.multiplyScalar(rem);  // remt af en blijft laag hangen
+    const p = f.sp.position;
+    p.x += f.v.x * dt; p.y += f.v.y * dt; p.z += f.v.z * dt;
     const sc = f.s0 + f.age * 1.55;
     f.sp.scale.set(sc * 1.4, sc, 1);
-    const p = f.sp.position;
-    f.lit.setRGB(0.05, 0.045, 0.06);
-    for (const s of spots) { const d = distToBeam(p, s.beam.g.position, s.beam.target); addColor(f.lit, s.light.color, s.beam.mat.uniforms.strength.value * 0.6 * Math.exp(-d * d * 0.35)); }
-    for (const h of heads) { const d = distToBeam(p, h.beam.g.position, h.beam.target); addColor(f.lit, h.beam.mat.uniforms.color.value, h.beam.mat.uniforms.strength.value * 0.45 * Math.exp(-d * d * 1.4)); }
-    if (f.green) f.lit.setRGB(0.12, 0.42, 0.05);  // boer van de slak
-    const fade = Math.min(1, f.age * 3) * (1 - f.age / f.life);
-    const peak = Math.max(f.lit.r, f.lit.g, f.lit.b);
-    if (peak > 0.3) f.lit.multiplyScalar(0.3 / peak);  // nooit een witte muur onder een felle spot (meer wolkjes = al voller)
-    f.sp.material.color.copy(f.lit).multiplyScalar(fade * 0.27 * (0.4 + S.smoke));
+    let r, g, b;
+    if (f.green) { r = 0.12; g = 0.42; b = 0.05; }  // boer van de slak
+    else { rookLicht(p.x, p.y, p.z, 0.6, 0.45); r = 0.05 + rookR; g = 0.045 + rookG; b = 0.06 + rookB; }
+    const peak = Math.max(r, g, b);
+    if (peak > 0.3) { const q = 0.3 / peak; r *= q; g *= q; b *= q; }  // nooit een witte muur onder een felle spot (meer wolkjes = al voller)
+    f.lit.setRGB(r, g, b);
+    const fade = Math.min(1, f.age * 3) * (1 - f.age / f.life) * sk;
+    f.sp.material.color.setRGB(r * fade, g * fade, b * fade);
   }
 }
 
@@ -637,12 +697,34 @@ const speakers = [], darkBox = new THREE.MeshStandardMaterial({ color: 0x1c1c20,
 // met een brede trechtervormige hoorn (conus in de keel) en een kleine hoog-hoorn erboven. Matzwart, getrapt.
 const coneMat = new THREE.MeshStandardMaterial({ color: 0x1f1f23, roughness: 0.6, metalness: 0.2 }), hornMat = new THREE.MeshStandardMaterial({ color: 0x0d0d0f, roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide });
 const dustCap = new THREE.MeshStandardMaterial({ color: 0x2e2e33, roughness: 0.3, metalness: 0.6 });
+// Conussen pompen op de bas. Alle conussen en stofkappen samen als twee InstancedMeshes (2 draws per pass i.p.v. 32): op de plek van elke
+// conus staat een leeg Object3D (wereldmatrix), per beeld komt daar de pompschaal bij (zelfde beeld als losse meshes met c.scale).
+const MAX_CONUS = 24, conusGeo = new THREE.CylinderGeometry(1, 0.45, 0.5, 28, 1, true);
+const conussen = new THREE.InstancedMesh(conusGeo, coneMat, MAX_CONUS), kappen = new THREE.InstancedMesh(SPH, dustCap, MAX_CONUS);
+for (const m of [conussen, kappen]) { m.count = 0; m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(m); }
+const kapLokaal = [], pompV = new THREE.Vector3();
 function speakerCone(parent, r, pos) {
-  const c = add(parent, new THREE.CylinderGeometry(r, r * 0.45, r * 0.5, 28, 1, true), coneMat, pos);
+  const c = new THREE.Object3D();
+  c.position.set(pos[0], pos[1], pos[2]);
   c.rotation.x = Math.PI / 2;
-  add(c, SPH, dustCap, [0, -r * 0.2, 0], [r * 0.32, r * 0.12, r * 0.32]);
+  c.userData.r = r;
+  parent.add(c);
+  c.updateWorldMatrix(true, false);  // meteen goed (het eerste beeld tekent vóór de eerste matrix-update)
+  kapLokaal.push(new THREE.Matrix4().makeTranslation(0, -r * 0.2, 0).multiply(new THREE.Matrix4().makeScale(r * 0.32, r * 0.12, r * 0.32)));
   speakers.push(c);
+  conussen.count = kappen.count = speakers.length;
+  pompen(1);
   return c;
+}
+function pompen(k) {  // schaal k op alle conussen (met stofkap)
+  for (let i = 0; i < speakers.length; i++) {
+    const c = speakers[i], r = c.userData.r;
+    m4.copy(c.matrixWorld).scale(pompV.set(k * r, k * r, k * r));
+    conussen.setMatrixAt(i, m4);
+    m4.copy(c.matrixWorld).scale(pompV.set(k, k, k)).multiply(kapLokaal[i]);
+    kappen.setMatrixAt(i, m4);
+  }
+  conussen.instanceMatrix.needsUpdate = kappen.instanceMatrix.needsUpdate = true;
 }
 function f1Stack(x, z, ry, sc = 1) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ry; g.scale.setScalar(sc); scene.add(g);
@@ -677,8 +759,14 @@ function djSubs() {
 }
 add(scene, BOX, new THREE.MeshStandardMaterial({ color: 0x22222c, roughness: 0.5, metalness: 0.3 }), [0, 0.55, -7.6], [4, 1.1, 1.2]).castShadow = true;
 for (const x of [-0.9, 0.9]) add(scene, CYL, new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.3, metalness: 0.5 }), [x, 1.12, -7.6], [0.42, 0.03, 0.42]);
-const wallBars = [];
-for (const sx of [-1, 1]) for (let i = 0; i < 6; i++) wallBars.push(add(scene, BOX, new THREE.MeshBasicMaterial({ color: 0x000000 }), [sx * (ROOM - 0.08), 2.6, -7.5 + i * 3], [0.08, 3.6, 0.14]));
+// ledbalken op de zijwanden: één InstancedMesh (hoogte en kleur per balk per beeld; was 12 losse meshes met elk een eigen materiaal)
+const WALLBARS = [];
+for (const sx of [-1, 1]) for (let i = 0; i < 6; i++) WALLBARS.push([sx * (ROOM - 0.08), -7.5 + i * 3]);
+const wallBars = new THREE.InstancedMesh(BOX, new THREE.MeshBasicMaterial(), WALLBARS.length);
+wallBars.frustumCulled = false;
+wallBars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+WALLBARS.forEach((w, i) => { wallBars.setMatrixAt(i, m4.makeScale(0.08, 3.6, 0.14).setPosition(w[0], 2.6, w[1])); wallBars.setColorAt(i, tmpColor.setRGB(0, 0, 0)); });
+scene.add(wallBars);
 
 // --- Figuren ---
 // Elk figuur is een hiërarchie van scharnieren; ledematen hangen vanuit hun scharnier omlaag (-y).
@@ -995,6 +1083,7 @@ const slimeGeo = new THREE.CircleGeometry(1, 20), slime = [];
 for (let i = 0; i < 70; i++) {
   const m = new THREE.Mesh(slimeGeo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
   m.rotation.x = -Math.PI / 2; m.visible = false; m.renderOrder = 3; scene.add(m); slime.push({ m, age: 0 });
+  m.layers.set(2);  // L_KLEIN (teken): ligt op de vloer, het spiegelbeeld valt eronder; alleen het hoofdbeeld
 }
 let slimeNext = 0, lastSlime = new THREE.Vector3(999, 0, 999);
 laadFiguur('models/slak-1.glb', g => {
@@ -1720,13 +1809,18 @@ function buildClub() {
   // gekleurd strijklicht dat langs de wanden omhoog schijnt
   const washTex = canvasTexture(8, 128, (g, w, h) => { const gr = g.createLinearGradient(0, h, 0, 0); gr.addColorStop(0, 'rgba(255,255,255,0.75)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.18)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); });
   for (let k = 0; k < 3; k++) washMats.push(new THREE.MeshBasicMaterial({ map: washTex, color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  // per materiaal één mesh: additief zonder diepte te schrijven, dus de volgorde maakt niet uit; 28 vlakken = 3 draws per pass i.p.v. ~25
+  const washVlak = [[], [], []], plek = new THREE.Object3D();
   let n = 0;
   for (let i = -3; i <= 3; i++) for (const [ax, sgn] of [['x', 1], ['x', -1], ['z', 1], ['z', -1]]) {
-    const wash = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 5.5), washMats[n++ % 3]);
-    if (ax === 'x') { wash.position.set(sgn * (ROOM - 0.06), 2.75, i * 4); wash.rotation.y = -sgn * Math.PI / 2; }
-    else { wash.position.set(i * 4, 2.75, sgn * (ROOM - 0.06)); wash.rotation.y = sgn > 0 ? Math.PI : 0; }
-    scene.add(wash);
+    if (ax === 'x') { plek.position.set(sgn * (ROOM - 0.06), 2.75, i * 4); plek.rotation.set(0, -sgn * Math.PI / 2, 0); }
+    else { plek.position.set(i * 4, 2.75, sgn * (ROOM - 0.06)); plek.rotation.set(0, sgn > 0 ? Math.PI : 0, 0); }
+    plek.updateMatrix();
+    washVlak[n++ % 3].push(new THREE.PlaneGeometry(2.6, 5.5).applyMatrix4(plek.matrix));
   }
+  // renderOrder -1: vóór de andere doorzichtige dingen, zoals toen elk vlak op zijn eigen (verste) plek gesorteerd werd (de wanden liggen
+  // achter alles in de zaal; de samengevoegde mesh staat zelf in het midden)
+  washVlak.forEach((vlakken, k) => { const m = new THREE.Mesh(samenvoegen(vlakken), washMats[k]); m.renderOrder = -1; scene.add(m); });
   // bar langs de rechterwand
   add(scene, BOX, wood, [12.2, 0.475, 0], [0.9, 0.95, 9]).castShadow = true;  // toog op 1,01 m: gasten en barman steken er met hun bovenlijf boven uit
   add(scene, BOX, glossy, [12.15, 0.98, 0], [1.1, 0.06, 9.2]);
@@ -2031,7 +2125,8 @@ function analyse(dt, now) {
   let hzPerBin;
   if (!native) { analyser.getByteFrequencyData(bins); hzPerBin = ctx.sampleRate / analyser.fftSize; }
   let total = 0;
-  for (const [k, b] of bands.entries()) {
+  for (let k = 0; k < bands.length; k++) {
+    const b = bands[k];
     let raw;
     if (native) raw = native[k];
     else {
@@ -2317,6 +2412,14 @@ let strobeUntil = 0, nextStrobe = 20, strobeHz = 11;
 
 // --- Loop ---
 const meters = [...document.querySelectorAll('#meters i')];
+function fxZet(mesh, kind, level, now) {  // fractal-vloer en -wand
+  const u = mesh.material.uniforms;
+  u.time.value = now;
+  u.level.value = level;
+  u.kind.value = kind;
+  u.colA.value.copy(pal[0]);
+  u.colB.value.copy(pal[1]);
+}
 let last = performance.now(), pattern = 0, lastBeat = -1, frameNo = 0;
 function frame(nowMs) {
   // de eerste rAF-tijd kan net vóór `last` liggen; een negatieve dt zou beatPos negatief maken
@@ -2366,14 +2469,8 @@ function frame(nowMs) {
   const fractalFloor = S.floor === 'fractal' || (S.floor === 'auto' && cueFractal);
   tiles.visible = !fractalFloor;
   floorFx.visible = fractalFloor;
-  for (const [mesh, kind, level] of [[floorFx, floorKind, (0.45 + 0.75 * pulse * (0.4 + energy * 0.6)) * L.floor * dim * 1.3], [wallFx, wallKind, (0.22 + 0.2 * pulse) * (strobing ? 0.3 : 1)]]) {
-    const u = mesh.material.uniforms;
-    u.time.value = now;
-    u.level.value = level;
-    u.kind.value = kind;
-    u.colA.value.copy(pal[0]);
-    u.colB.value.copy(pal[1]);
-  }
+  fxZet(floorFx, floorKind, (0.45 + 0.75 * pulse * (0.4 + energy * 0.6)) * L.floor * dim * 1.3, now);
+  fxZet(wallFx, wallKind, (0.22 + 0.2 * pulse) * (strobing ? 0.3 : 1), now);
   ledMat.color.copy(pal[beat & 1]).multiplyScalar((0.25 + 0.75 * hit) * dim);
 
   // equalizer, speakers, wandbalken
@@ -2385,12 +2482,15 @@ function frame(nowMs) {
   }
   bars.instanceMatrix.needsUpdate = true;
   bars.instanceColor.needsUpdate = true;
-  for (const s of speakers) s.scale.setScalar(1 + 0.25 * bass * pulse);
-  wallBars.forEach((w, i) => {
-    const lvl = bands[i % 3].v;
-    w.scale.y = 0.6 + 3.4 * lvl;
-    w.material.color.copy(pal[i & 1]).multiplyScalar((0.15 + 0.75 * lvl) * L.wash * dim);
-  });
+  pompen(1 + 0.25 * bass * pulse);
+  for (let i = 0; i < WALLBARS.length; i++) {
+    const w = WALLBARS[i], lvl = bands[i % 3].v;
+    m4.makeScale(0.08, 0.6 + 3.4 * lvl, 0.14).setPosition(w[0], 2.6, w[1]);
+    wallBars.setMatrixAt(i, m4);
+    wallBars.setColorAt(i, tmpColor.copy(pal[i & 1]).multiplyScalar((0.15 + 0.75 * lvl) * L.wash * dim));
+  }
+  wallBars.instanceMatrix.needsUpdate = true;
+  wallBars.instanceColor.needsUpdate = true;
 
   // spots: zwieren over de vloer
   spots.forEach((s, i) => {
@@ -2477,20 +2577,59 @@ function frame(nowMs) {
 // - matrices één keer per beeld: three deed scene.updateMatrixWorld bij elke render-aanroep opnieuw (spiegel, bolzijden, hoofd: ~0,55 ms per keer)
 // - één 'render-frame' per beeld voor three (info.autoReset uit): botten (skeleton.update + float-textuur naar de gpu) en geometrie-controles
 //   één keer per beeld i.p.v. per pass (waren 114-161 uploads per beeld)
-// - bol-opname in stukjes: KW.bol = beelden per volle ronde van 6 zijden, dus 6/KW.bol zijden per beeld (hoog 3: 2 per beeld, elke zijde nog
-//   steeds elke 3 beelden vers, maar zonder het piekje van 6 renders in één beeld). Zaal 2 en wat ver weg staat (doolhof) gaan in de bol
-//   even uit: achter de voorwand of voorbij het verre vlak van de bol-camera, dus niet te zien. Figuren blijven erin (de paal, plassen en
-//   bekertjes spiegelen de bol-opname ook; zonder figuren scheelde het met de culling van club/optimaliseer.js nog maar ~0,2 ms per beeld).
-// - spiegel alleen als de vloer van zaal 1 in het kijkveld ligt, bol alleen met de camera in zaal 1 (anders ziet niemand ze); spiegel-opname
-//   als eigen render vóór het hoofdbeeld (zie spiegelOpname)
-// - schaduwkaarten per lamp om de beurt: KW.schaduw = om de hoeveel beelden per lamp (hoog 1 = elk beeld allebei)
-// - KW.spiegelElke: spiegel-opname om de hoeveel beelden (hoog 1); daartussen blijft de vorige liggen. KW.bolFiguren false: bol zonder figuren
+// - ritme: KW.spiegelElke 2 (hoog) = het ene beeld de spiegel-opname, het volgende de bolzijden en de schaduwkaarten, zodat elk beeld
+//   ongeveer even duur is (alles elk beeld gaf 12-12-28 ms). Tussendoor blijft de vorige opname liggen; de spiegel is wereldvast (textuurmatrix
+//   van die opname) en vervaagd, dus 30 Hz zie je niet. Na een camerasprong (nieuw shot) of als de vloer net weer in beeld komt meteen een
+//   verse spiegel.
+// - KW.bol = beelden per volle bol-ronde van 6 zijden (hoog 4: 3 zijden in elk beeld zonder spiegel-opname, elke zijde 15x per s).
+//   Zonder figuren, zaal 2 en wat ver weg staat: op 128 px per zijde zie je figuren niet, alleen licht, wanden en vloer.
+// - KW.schaduw = om de hoeveel beelden beide schaduwkaarten (hoog 2), in een beeld zonder spiegel-opname; alleen als de vloer van zaal 1
+//   in beeld is (anders ziet niemand ze; daarna meteen vers)
+// - spiegel en schaduw alleen als de vloer van zaal 1 in het kijkveld ligt en de camera in zaal 1 of de gang is (vanuit zaal 2 tekende de
+//   spiegel bij een uitstapje naar het doolhof nog de hele zaal), bol alleen met de camera in zaal 1; spiegel-opname als eigen render vóór
+//   het hoofdbeeld (zie spiegelOpname)
+// - klein spul (laag 2, kleinIndelen) niet in spiegel en bol; zaal 2 vanuit zaal 1 alleen in het hoofdbeeld als de deur in beeld is
 renderer.info.autoReset = false;
 const zicht = new THREE.Frustum(), zichtM = new THREE.Matrix4();
 const vloerDoos = new THREE.Box3(new THREE.Vector3(-ROOM, -0.05, -ROOM), new THREE.Vector3(ROOM, 0.1, ROOM));
+const deurDoos = new THREE.Box3(new THREE.Vector3(DOOR2.x - 1.2, 0, DOOR2.z - 0.3), new THREE.Vector3(DOOR2.x + 1.2, 3, DOOR2.z + 0.3));
 const schaduwLampen = spots.filter((p, i) => i % 2 === 0).map(p => p.light);
-let bolTegoed = 0, bolZijde = 0, spiegelTel = 0, lijstN = -1, lijstTel = 0;
-const bolUit = [], bolKaalUit = [], spiegelUit = [], was = [];
+let bolTegoed = 0, bolZijde = 0, bolWacht = 0, lijstN = -1, lijstTel = 0, schaduwOud = 99, spiegelOud = 99, spiegelFov = 0;
+const bolUit = [], bolKaalUit = [], spiegelUit = [], bolEnv = [], was = [], wasZ2 = [], wasEnv = [], figuurTop = new WeakMap();
+const spiegelPos = new THREE.Vector3(), spiegelRicht = new THREE.Vector3(), kijkRicht = new THREE.Vector3();
+// Klein spul (straal < 0,2 m: glazen, flesjes, sigaretten, dopjes, kleine rommel) alleen in het hoofdbeeld: in de vervaagde spiegel (512 px)
+// en de bol (128 px) zie je het niet, maar elk kost een draw. Laag 2 ziet alleen de hoofdcamera (spiegel, bol en de ledwand-camera kijken
+// naar laag 0). Van gebouwde figuren (robots, aliens) alleen de kleinste delen (< 0,12 m: handen, vingers), de rest blijft in het
+// spiegelbeeld; wat licht geeft ook (lampjes, gloeiringen, sigarettenpuntjes, lichtgevende drankjes en additieve gloed: een felle stip blijft
+// vervaagd in de vloer zichtbaar).
+// Eén keer per object, vóór club/optimaliseer.js samenvoegt (die deelt per laag in). TEKENLAAG.klein = false: weer overal (vergelijken).
+const L_KLEIN = 2, KLEIN_R = 0.2, KLEIN_FIG = 0.12, TEKENLAAG = { klein: true };
+camera.layers.enable(L_KLEIN);
+const kleinGezien = new WeakSet(), kleinBol = new THREE.Sphere();
+let kleinGrens = KLEIN_R;
+function kleinObject(o) {
+  if (kleinGezien.has(o)) return;
+  kleinGezien.add(o);
+  if (!(o.isMesh || o.isPoints || o.isLine) || o.isSkinnedMesh || o.isInstancedMesh || o.userData.optSamen || o.layers.mask !== 1) return;
+  const g = o.geometry, m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!g || !g.attributes || !g.attributes.position || !m || m.blending === THREE.AdditiveBlending) return;
+  if (!g.boundingSphere) g.computeBoundingSphere();
+  kleinBol.copy(g.boundingSphere).applyMatrix4(o.matrixWorld);
+  if (!(kleinBol.radius < kleinGrens)) return;
+  const fel = c => c && Math.max(c.r, c.g, c.b) > 0.3;
+  if ((m.isMeshBasicMaterial && !m.transparent && fel(m.color)) || fel(m.emissive)) return;  // geeft licht: blijft (ook een gloeipuntje zie je vervaagd in de vloer)
+  o.layers.set(L_KLEIN);
+}
+function kleinIndelen() {
+  const gebouwd = new Set();
+  for (const lijst of [dancers, crowd, walkers, poleDancers, zone2Dancers]) for (const d of lijst) if (d.type !== 'model') gebouwd.add(d.root);
+  if (dj && dj.type !== 'model') gebouwd.add(dj.root);
+  for (const c of scene.children) {
+    if (c === zone2 || c.isLight) continue;
+    kleinGrens = gebouwd.has(c) ? KLEIN_FIG : KLEIN_R;
+    c.traverse(kleinObject);
+  }
+}
 // Lampen blijven in elke pass aan: een ander aantal lampen geeft three andere shaders (hercompileren / wisselen per pass).
 // Een groep met een lamp erin gaat dus niet als geheel uit, alleen de delen zonder lamp.
 function zonderLamp(o, uit) {
@@ -2502,87 +2641,143 @@ function zonderLamp(o, uit) {
 }
 // bol en spiegel: geen zaal 2 (achter de voorwand); bol ook niet wat verder dan 60 m staat (doolhof; verder dan het verre vlak van de
 // bol-camera). Vast decor blijft erin: dat voegt club/optimaliseer.js samen, en een verborgen deel haalt zo'n samenvoeging uit elkaar.
-// bolKaal (KW.bolFiguren false, midden): ook zonder figuren; scheelt vooral het doorlopen van alle botten per zijde.
+// bolKaal: ook zonder figuren (KW.bolFiguren false, alle standen); scheelt ook het doorlopen van alle botten per zijde.
 function lijsten() {
   bolUit.length = 0; bolKaalUit.length = 0; spiegelUit.length = 0;
   zonderLamp(zone2, spiegelUit);
   for (const c of scene.children) {
     if (c === zone2 || c.isLight || c.isSprite) continue;
     if (Math.abs(c.position.x) > 60 || Math.abs(c.position.z) > 60) { zonderLamp(c, bolUit); continue; }
-    let fig = false;
-    c.traverse(o => { if (o.isSkinnedMesh) fig = true; });
-    if (fig) zonderLamp(c, bolKaalUit);
+    // figuur (met of zonder lamp erin) één keer bepalen: niet elke keer alle botten doorlopen
+    let f = figuurTop.get(c);
+    if (f === undefined || f === 0) {
+      let fig = false, lamp = false;
+      c.traverse(o => { if (o.isSkinnedMesh) fig = true; if (o.isLight) lamp = true; });
+      f = fig ? (lamp ? 2 : 1) : 0;
+      figuurTop.set(c, f);
+    }
+    if (f === 1) bolKaalUit.push(c);
+    else if (f === 2) zonderLamp(c, bolKaalUit);
   }
+  for (const lijst of [dancers, crowd, walkers, poleDancers]) for (const d of lijst) if (d.type !== 'model' && d.root.parent === scene) bolKaalUit.push(d.root);  // gebouwde figuren
   bolUit.push(...spiegelUit);
   bolKaalUit.push(...bolUit);
-  lijstN = scene.children.length + zone2.children.length;
+  // alles met de bol-opname zelf als envMap (glimmend decor, de glimmende vloer van midden/laag): dat kan niet in zijn eigen opname
+  // (WebGL weigert die draws, 'feedback loop'), dus daar even uit: zelfde bol, minder draws en geen GL-fouten. Samengevoegde meshes zelf
+  // (de originelen tekenen dan toch niet), geen figuren (die gaan als geheel uit).
+  bolEnv.length = 0;
+  const envGebruiker = m => Array.isArray(m) ? m.some(envGebruiker) : !!(m && m.envMap === envRT.texture);
+  for (const c of scene.children) {
+    if (c === zone2 || c.isLight || figuurTop.get(c) || Math.abs(c.position.x) > 60 || Math.abs(c.position.z) > 60) continue;
+    c.traverse(o => { if (o.isMesh && o.layers.mask !== 0 && envGebruiker(o.material)) bolEnv.push(o); });
+  }
+  kleinIndelen();
+  lijstN = lijstSig();
 }
-function bijLijsten() { if (scene.children.length + zone2.children.length !== lijstN ? lijstTel++ % 10 === 0 : lijstTel++ % 300 === 0) lijsten(); }
-function uitZetten(lijst) { for (let i = 0; i < lijst.length; i++) { was[i] = lijst[i].visible; lijst[i].visible = false; } }
-function terugZetten(lijst) { for (let i = 0; i < lijst.length; i++) lijst[i].visible = was[i]; }
+// wie er direct in de scène en in zaal 2 hangt: aantal + som van de ids (een nieuwe bezetting vervangt figuren zonder dat het aantal verandert)
+function lijstSig() {
+  const ch = scene.children;
+  let s = ch.length * 7919 + zone2.children.length * 104729;
+  for (let i = 0; i < ch.length; i++) s += ch[i].id;
+  return s;
+}
+function bijLijsten() { if (lijstSig() !== lijstN ? lijstTel++ % 10 === 0 : lijstTel++ % 300 === 0) lijsten(); }
+function uitZetten(lijst, w) { for (let i = 0; i < lijst.length; i++) { w[i] = lijst[i].visible; lijst[i].visible = false; } }
+function terugZetten(lijst, w) { for (let i = 0; i < lijst.length; i++) lijst[i].visible = w[i]; }
 function bolOpname(zijden) {
-  bijLijsten();
+  // nieuwe objecten (laden, nieuwe bezetting, samenvoegingen van club/optimaliseer.js) meteen indelen, niet pas bij de 10e beurt van
+  // bijLijsten: anders tekent de bol een tijd lang figuren en dingen met zijn eigen opname als envMap (WebGL weigert ze, GL-fouten)
+  if (lijstSig() !== lijstN) lijsten();
   const uit = KW.bolFiguren === false ? bolKaalUit : bolUit;
-  uitZetten(uit);
+  uitZetten(uit, was);
+  uitZetten(bolEnv, wasEnv);
   const bv = ball.visible, mv = mirror.visible, prev = renderer.getRenderTarget(), mip = envRT.texture.generateMipmaps;
   ball.visible = false; mirror.visible = false;
   try {
     for (let k = 0; k < zijden; k++) {
+      const c = cubeCam.children[bolZijde];
+      c.layers.mask = TEKENLAAG.klein ? 1 : 1 | 1 << L_KLEIN;
       envRT.texture.generateMipmaps = mip && bolZijde === 5;  // mipmaps één keer per ronde, na de laatste zijde (zoals cubeCam.update)
       renderer.setRenderTarget(envRT, bolZijde);
-      renderer.render(scene, cubeCam.children[bolZijde]);
+      renderer.render(scene, c);
       bolZijde = (bolZijde + 1) % 6;
     }
   } finally {
     envRT.texture.generateMipmaps = mip;
     renderer.setRenderTarget(prev);
     ball.visible = bv; mirror.visible = mv;
-    terugZetten(uit);
+    terugZetten(bolEnv, wasEnv);
+    terugZetten(uit, was);
   }
 }
 // Spiegel-opname bovenaan in teken(), niet genest vanuit de hoofdrender (Reflector.onBeforeRender): three geeft elke render-diepte eigen
 // lampgegevens met een eigen versienummer, dus genest zocht elk belicht materiaal twee keer per beeld zijn shader opnieuw op (getProgram).
 const spiegelKern = mirror.isReflector ? mirror.onBeforeRender : null;
 if (spiegelKern) mirror.onBeforeRender = function () {};
-function spiegelOpname() {  // true als er deze keer een opname is gemaakt
-  if (!spiegelKern || !mirror.visible) return false;
-  if (KW.spiegelElke > 1 && spiegelTel++ % KW.spiegelElke) return false;  // tussendoor blijft de vorige opname liggen
-  bijLijsten();
-  if (!zone2.visible) spiegelKern.call(mirror, renderer, scene, camera);
-  else { uitZetten(spiegelUit); try { spiegelKern.call(mirror, renderer, scene, camera); } finally { terugZetten(spiegelUit); } }  // zaal 2 ligt achter de voorwand, nooit in de vloer te zien
+let spiegelCam = null;  // de camera van de Reflector (zit in zijn closure), voor de lagen
+function spiegelKernRender() {
+  if (spiegelCam) { spiegelCam.layers.mask = TEKENLAAG.klein ? 1 : 1 | 1 << L_KLEIN; spiegelKern.call(mirror, renderer, scene, camera); return; }
+  const r = renderer.render;
+  renderer.render = function (s, c) { spiegelCam = c; return r.apply(this, arguments); };  // eerste keer: de camera opvangen
+  try { spiegelKern.call(mirror, renderer, scene, camera); } finally { renderer.render = r; }
+}
+function spiegelOpname(druk) {  // true als er deze keer een opname is gemaakt; druk: dit beeld is al zwaar (zie teken)
+  if (!spiegelKern || !mirror.visible) { spiegelOud = 99; return false; }
+  camera.getWorldDirection(kijkRicht);
+  // tussendoor blijft de vorige opname liggen, behalve na een sprong van de camera (ander shot): dan meteen een verse
+  const sprong = !(camera.position.distanceToSquared(spiegelPos) < 0.25 && kijkRicht.dot(spiegelRicht) > 0.985 && Math.abs(camera.fov - spiegelFov) < 2);
+  if (!sprong && (++spiegelOud < KW.spiegelElke || (druk && spiegelOud < 2 * KW.spiegelElke))) return false;
+  spiegelOud = 0; spiegelPos.copy(camera.position); spiegelRicht.copy(kijkRicht); spiegelFov = camera.fov;
+  if (!zone2.visible) spiegelKernRender();
+  else { uitZetten(spiegelUit, was); try { spiegelKernRender(); } finally { terugZetten(spiegelUit, was); } }  // zaal 2 ligt achter de voorwand, nooit in de vloer te zien
   return true;
 }
 function teken() {
+  // druk: de haken tekenden dit beeld al veel (ledwand-camera elk 3e beeld ~200 draws, voortekenen doolhof): spiegel, bol en schaduw dan
+  // een beeld later (hooguit één keer uitstellen), zodat zo'n beeld niet ook nog de duurste pass krijgt
+  const druk = KW.spiegelElke > 1 && renderer.info.render.calls > 40;
   renderer.info.reset();
   scene.updateMatrixWorld();
   camera.updateMatrixWorld();
+  bijLijsten();  // na de matrices: kleinIndelen meet de wereldmaat
   scene.autoUpdate = false;  // alleen binnen dit blok: losse renders elders (ledwand, doolhof) werken hun matrices zelf bij
   // spiegel, hoofdbeeld en bolzijden zijn samen één beeld: wie aan scene.onBefore/AfterRender hangt (club/optimaliseer.js) ziet één
   // buitenste render en de losse renders hierbinnen als genest (daar doet hij zijn controles niet nog eens)
   scene.onBeforeRender(renderer, scene, camera, null);
   const mv = mirror.visible;
+  let z2weg = false;
   try {
     zicht.setFromProjectionMatrix(zichtM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    // vloer van zaal 1 in beeld: alleen vanuit zaal 1 of de gang (door de deur); vanuit zaal 2 en het doolhof nooit (muren)
     const p = camera.position, inZaal1 = Math.abs(p.x) < ROOM + 0.5 && Math.abs(p.z) < ROOM + 0.5;
-    if (mv && !zicht.intersectsBox(vloerDoos)) mirror.visible = false;
-    // schaduw: per lamp om de beurt; wil iemand anders meteen een nieuwe kaart (needsUpdate), dan allebei
-    const per = KW.schaduw, alles = renderer.shadowMap.needsUpdate;
-    schaduwLampen.forEach((l, i) => {
-      if (alles || (per && (frameNo + Math.floor(i * per / schaduwLampen.length)) % per === 0)) { l.shadow.needsUpdate = true; renderer.shadowMap.needsUpdate = true; }
-    });
-    if (per && frameNo % per === 0) renderer.shadowMap.needsUpdate = true;  // overige lampen met schaduw (autoUpdate)
+    const inGang = Math.abs(p.x - DOOR2.x) < 2 && p.z > DOOR2.z - 0.5 && p.z < TUN_END + 0.5;
+    const vloerZicht = (inZaal1 || inGang) && zicht.intersectsBox(vloerDoos);
+    if (mv && !vloerZicht) mirror.visible = false;
+    // wil iemand anders meteen een nieuwe schaduwkaart (needsUpdate, bv. een andere stand): pas vóór het hoofdbeeld, niet al in de
+    // spiegel-opname (three tekent de kaarten in de eerste render daarna, met de lagen van die camera)
+    const alles = renderer.shadowMap.needsUpdate;
+    renderer.shadowMap.needsUpdate = false;
     frameNo++;
-    const spiegelNu = spiegelOpname();
+    const spiegelNu = spiegelOpname(druk), om = spiegelNu && KW.spiegelElke > 1;  // om: dit beeld is van de spiegel, bol en schaduw het volgende
+    schaduwOud++;
+    if (alles || (KW.schaduw && vloerZicht && schaduwOud >= KW.schaduw && ((!om && !druk) || schaduwOud >= 2 * KW.schaduw))) {
+      for (const l of schaduwLampen) l.shadow.needsUpdate = true;
+      renderer.shadowMap.needsUpdate = true;  // ook de overige lampen met schaduw (autoUpdate)
+      schaduwOud = 0;
+    }
+    // zaal 2 tekent mee zodra de camera bij de deur is (updateZone2); vanuit zaal 1 zie je hem alleen door de deur
+    if (zone2.visible && inZaal1 && !zicht.intersectsBox(deurDoos)) { uitZetten(spiegelUit, wasZ2); z2weg = true; }
     if (composer) composer.render(); else renderer.render(scene, camera);
-    // bol: 6/KW.bol zijden per beeld, ook als de bol zelf niet in beeld is (robots, aliens, palen, leer en bekertjes spiegelen de opname ook);
-    // buiten zaal 1 niet (daar gebruikt niets hem). Spiegel niet elk beeld (midden): de bol in de beelden zonder spiegel-opname, dan kost
-    // elk beeld ongeveer even veel.
+    if (z2weg) { z2weg = false; terugZetten(spiegelUit, wasZ2); }
+    // bol: ook als de bol zelf niet in beeld is (robots, aliens, palen, leer en bekertjes spiegelen de opname ook); buiten zaal 1 niet
+    // (daar gebruikt niets hem); in de beelden zonder spiegel-opname
     if (KW.bol && inZaal1) {
-      bolTegoed = Math.min(6, bolTegoed + 6 / KW.bol);
+      bolTegoed = Math.min(Math.max(1, 12 / KW.bol), bolTegoed + 6 / KW.bol);
       const n = Math.floor(bolTegoed);
-      if (n > 0 && !(spiegelNu && KW.spiegelElke > 1)) { bolTegoed -= n; bolOpname(n); }
+      if (n > 0 && ((!om && !druk) || bolWacht >= 3)) { bolTegoed -= n; bolOpname(n); bolWacht = 0; } else bolWacht++;  // nooit langer dan 3 beelden uitstellen
     }
   } finally {
+    if (z2weg) terugZetten(spiegelUit, wasZ2);
     scene.autoUpdate = true;
     mirror.visible = mv;
     scene.onAfterRender(renderer, scene, camera);
@@ -2662,6 +2857,7 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="club/dansgevoel.js"></script>
 <script src="club/kwaliteit.js"></script>
 <script src="club/optimaliseer.js"></script>
+<script src="club/rookbatch.js"></script>
 <script src="club/publiek.js"></script>
 <script src="doolhof/kern.js"></script>
 <script src="doolhof/gangen.js"></script>

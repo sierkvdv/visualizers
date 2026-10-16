@@ -32,15 +32,39 @@
   }
   // dansvloer: tegels tot 0,03 hoog, ledstrip (6,1..6,2) tot 0,07
   const floorY = (x, z) => { const m = Math.max(Math.abs(x), Math.abs(z)); return m < 6.1 ? 0.03 : m < 6.2 ? 0.07 : 0; };
+  // groundAt/blocked lopen elk beeld voor elk trillend of rollend ding over alle vormen: de vormen daarvoor als getallen op een rij
+  // (drie soorten objecten door elkaar lezen maakte bij elke kommagetal-lezing een nieuw getal-object = afval per beeld). Zelfde som als inside().
+  let SHN = 0, SHF = null;
+  function vormenPak() {  // per vorm 10 getallen: soort, top, dan de maten van die soort
+    SHN = SH.length; SHF = new Float64Array(SHN * 10);
+    for (let i = 0; i < SHN; i++) {
+      const s = SH[i], o = i * 10;
+      SHF[o] = s.k; SHF[o + 1] = s.top;
+      if (s.k === 0) { SHF[o + 2] = s.x0; SHF[o + 3] = s.x1; SHF[o + 4] = s.z0; SHF[o + 5] = s.z1; }
+      else if (s.k === 1) { SHF[o + 2] = s.x; SHF[o + 3] = s.z; SHF[o + 4] = s.r; }
+      else { SHF[o + 2] = s.x; SHF[o + 3] = s.z; SHF[o + 4] = s.ax; SHF[o + 5] = s.az; SHF[o + 6] = s.bx; SHF[o + 7] = s.bz; SHF[o + 8] = s.hx; SHF[o + 9] = s.hz; }
+    }
+  }
+  function binnenF(F, o, x, z, pad) {  // = inside(SH[o / 10], x, z, pad)
+    const k = F[o];
+    if (k === 0) return x > F[o + 2] - pad && x < F[o + 3] + pad && z > F[o + 4] - pad && z < F[o + 5] + pad;
+    const dx = x - F[o + 2], dz = z - F[o + 3];
+    if (k === 1) { const r = F[o + 4] + pad; return dx * dx + dz * dz < r * r; }
+    return Math.abs(dx * F[o + 4] + dz * F[o + 5]) < F[o + 8] + pad && Math.abs(dx * F[o + 6] + dz * F[o + 7]) < F[o + 9] + pad;
+  }
   function groundAt(x, z, y) {
     let g = floorY(x, z);
-    for (const s of SH) if (s.top <= y + 0.04 && s.top > g && inside(s, x, z, 0)) g = s.top;
+    if (SHN !== SH.length) vormenPak();
+    const F = SHF, yt = y + 0.04;
+    for (let o = 0, e = SHN * 10; o < e; o += 10) { const top = F[o + 1]; if (top <= yt && top > g && binnenF(F, o, x, z, 0)) g = top; }
     return g;
   }
   function blocked(x, z, y, pad = 0) {
     if (Math.abs(x) > 13.8 - pad || Math.abs(z) > 13.8 - pad) return true;
     if (y < 0.03 && Math.abs(x) < 6.2 + pad && Math.abs(z) < 6.2 + pad) return true;  // ledstrip = stoeprand: vloerrommel schuift de dansvloer niet op
-    for (const s of SH) if (s.top > y + 0.04 && inside(s, x, z, pad)) return true;
+    if (SHN !== SH.length) vormenPak();
+    const F = SHF, yt = y + 0.04;
+    for (let o = 0, e = SHN * 10; o < e; o += 10) if (F[o + 1] > yt && binnenF(F, o, x, z, pad)) return true;
     return false;
   }
   const stackDist = (x, z) => { let d = 1e9; for (const s of STACKS) d = Math.min(d, Math.hypot(x - s.fx, z - s.fz)); return d; };
@@ -293,7 +317,8 @@
     if (!active || d2 > 1 || d2 < 1e-8) return;  // stilstaand of verspringend: niets
     const sp = Math.sqrt(d2) / dt, mx = dx / Math.sqrt(d2), mz = dz / Math.sqrt(d2);  // snelheid en looprichting
     if (sp < 0.05) return;
-    for (const it of items) {
+    for (let i = 0; i < items.length; i++) {  // indexlus: geen iterator per aanroep
+      const it = items[i];
       if (!it.on || it.y > 0.35) continue;
       const ex = it.x - p.x, ez = it.z - p.z, e2 = ex * ex + ez * ez;
       if (e2 > R * R) continue;
@@ -504,7 +529,8 @@
     for (const w of worms) kicker(w.root, 0.3, false, dt, w.root.visible, 1.2, now);  // klein: tikt het weg
     if (slug) kicker(slug.root, 1.55, true, dt, slug.root.visible, 1, now);  // 1,55 m = rand van zijn voet (gemeten in slak-1.glb)
     // alleen bijwerken wat beweegt of trilt
-    for (const it of items) {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
       if (!it.on) continue;
       if (it.mv) { step(it, dt, now); write(it, 0, now); it.lv = 0; continue; }
       if (!it.zone) continue;

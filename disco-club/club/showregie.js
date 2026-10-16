@@ -1,17 +1,17 @@
 // Showregie: zaal 1 is het hoofdpodium. Uitstapjes naar de diepte (trip naar zaal 2, het doolhof) komen alleen via deze regie:
 // in de break of het begin van de opbouw ('we gaan dieper in de break'), en zonder breaks af en toe; de drop knalt altijd in zaal 1.
 // Alleen in 'auto'. Wrapt startShot (ná doolhof/kern.js): 'auto' wordt hier gekozen, dus de verplichte trip (TRIP_ELKE) en de
-// 50%-doorloop trip -> doolhof van de kern komen niet meer aan bod. Tegoed: per seconde zaal 1 0,35 s diepte (hooguit ~26% buiten).
+// 50%-doorloop trip -> doolhof van de kern komen niet meer aan bod. Tegoed: per seconde zaal 1 0,55 s diepte (hooguit ~35% buiten).
 // Testen: showRegie.toestand(), showRegie.dieper('trip'|'doolhof'), showRegie.log.
 (() => {
   'use strict';
   if (typeof SHOTS === 'undefined' || typeof startShot !== 'function' || typeof clubHooks === 'undefined') return;
 
-  const OPWARM = 90;                                   // s na het laden: alleen zaal 1
-  const RENTE = 0.35, MAX_TEGOED = 90, ROOD = 15;      // tegoed per s zaal 1 (hooguit 26% buiten); spaarplafond; hooguit 15 s rood
-  const MIN_BREAK = 16, MIN_GROOVE = 40, MIN_DOOR = 40; // tegoed nodig: uitstap in de break, zonder breaks, na de trip door naar het doolhof
-  const RUST_BREAK = 40, RUST_GROOVE = 150;            // s zaal 1 tussen twee uitstapjes
-  const ZONDER_BREAK = 150;                            // zo lang geen break gezien = muziek zonder secties
+  const OPWARM = 45;                                   // s na het laden: alleen zaal 1
+  const RENTE = 0.55, MAX_TEGOED = 90, ROOD = 15;      // tegoed per s zaal 1 (hooguit ~35% buiten); spaarplafond; hooguit 15 s rood
+  const MIN_BREAK = 16, MIN_GROOVE = 30, MIN_DOOR = 30; // tegoed nodig: uitstap in de break, zonder breaks, na de trip door naar het doolhof
+  const RUST_BREAK = 35, RUST_GROOVE = 75;             // s zaal 1 tussen twee uitstapjes (Sierk zag de gangen te weinig)
+  const ZONDER_BREAK = 60;                             // zo lang geen break gezien = muziek zonder secties (echte muziek: breaks vaak niet herkend)
   const BUITEN = new Set(['trip', 'doolhof']);
   const TERUG = ['rondje', 'kraan', 'voorlangs', 'dj']; // terug in de club: wijd over de zaal of de dj
   const klok = () => performance.now() / 1000;
@@ -56,7 +56,7 @@
     if (!reden) return null;
     // om en om trip en doolhof (de eerste keer de trip: iemand loopt van de club naar binnen); in de break kapt de drop het af,
     // zonder breaks loopt het doolhof tot het eind van een kamer: dan genoeg tegoed nodig
-    const naarDoolhof = SHOTS.doolhof && nUit % 2 === 1 && (reden === 'break' || tegoed >= MIN_DOOR + 5);
+    const naarDoolhof = SHOTS.doolhof && nUit % 3 !== 0 && (reden === 'break' || tegoed >= MIN_DOOR + 5);  // trip, doolhof, doolhof, trip, ...
     const soort = naarDoolhof ? 'doolhof' : SHOTS.trip ? 'trip' : SHOTS.doolhof ? 'doolhof' : null;
     return soort ? { kind: soort, reden, doel: soort === 'doolhof' ? doelVoor() : 0 } : null;
   }

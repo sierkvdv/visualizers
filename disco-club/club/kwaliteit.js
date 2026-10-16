@@ -1,9 +1,9 @@
-// Kwaliteitsstanden zodat de club ook op telefoons en trage computers loopt; 'hoog' is precies de kern zoals hij was.
-//  hoog   - alles elk beeld (spiegelvloer, bol-opname 2 zijden per beeld = elke zijde elk 3e beeld, schaduwen, feedback, bloom)
-//  midden - zelfde zaal, goedkoper getekend (MacBook 2018): spiegelvloer 256 px om het andere beeld,
-//           bol-opname 1 zijde per 2 beelden (in de beelden zonder spiegel, zonder figuren), schaduwkaarten om de beurt (per lamp elk 4e beeld),
-//           bloom op halve resolutie, max ~2 megapixel; is de gpu te traag (beeldtijd hoog maar weinig werk op de cpu) dan in stapjes
-//           tot 0,8 megapixel. Intel-gpu's (laptops) starten hier en gaan niet naar hoog.
+// Kwaliteitsstanden zodat de club ook op telefoons en trage computers loopt; 'hoog' is het volle beeld.
+//  hoog   - spiegelvloer (512 px) en bol-opname + schaduwkaarten om en om (zie teken() in index.html), feedback, bloom
+//  midden - zelfde zaal, goedkoper getekend (MacBook 2018, cpu ~3x trager per kern): de glimmende vloer van laag i.p.v. de echte spiegel,
+//           bol-opname 1 zijde per 4 beelden (zonder figuren), geen schaduwkaarten, bloom op halve resolutie, figuren buiten beeld niet
+//           tekenen, max ~2 megapixel; is de gpu te traag (beeldtijd hoog maar weinig werk op de cpu) dan in stapjes tot 0,8 megapixel.
+//           Intel-gpu's (laptops) starten hier en gaan niet naar hoog.
 //  laag   - glimmende donkere vloer (lampen + bol-opname als envMap) i.p.v. de echte spiegel, geen bol-opname/schaduwen/feedback/bloom, ~1 megapixel, minder figuren,
 //           minder rook, kleinere texturen (telefoon), figuren buiten beeld niet tekenen
 //  minimaal - laag + alleen de twee hoofdspots aan (tv: elke lamp kost per pixel op elk figuur; testronde Mali-G52 6 -> 25 fps)
@@ -25,7 +25,7 @@
   const GPU = (() => { try { const gl = renderer.getContext(), d = gl.getExtension('WEBGL_debug_renderer_info'); return d ? String(gl.getParameter(d.UNMASKED_RENDERER_WEBGL)) : ''; } catch (e) { return ''; } })();
   const ZWAK = !MOBIEL && /Intel|Iris|UHD Graphics|HD Graphics/i.test(GPU) && !/\bArc\b/i.test(GPU);
   const PLAFOND = MOBIEL || ZWAK ? 'midden' : 'hoog';  // de bewaker gaat op mobiel en laptop-gpu nooit hoger
-  const BODEM = MOBIEL ? 'minimaal' : 'midden';     // en op de pc nooit lager: de spiegelvloer blijft (laag kan nog met de hand)
+  const BODEM = MOBIEL ? 'minimaal' : 'midden';     // en op de pc nooit lager: alle figuren blijven (laag kan nog met de hand)
   const PR_HOOG = PR;  // zoals de kern hem bij de start uitrekende
   const BUDGET = [1e6, 7e5, 5e5, 3e5];  // laag/minimaal: pixels; de bewaker kan nog drie stapjes zakken (tv: 0,5 MP = scherm, 0,3 MP = 730x410)
   const MBUDGET = [2e6, 1.5e6, 1.1e6, 8e5];  // midden: pixels; omlaag als de gpu het niet trekt (zie bewaak)
@@ -44,7 +44,7 @@
     bloom.setSize = (w, h) => kernSize(Math.max(1, Math.round(w * bloomK)), Math.max(1, Math.round(h * bloomK)));
   }
 
-  // --- laag: glimmende donkere vloer onder de tegels (de echte spiegel gaat uit, de bol-opname geeft de weerschijn) ---
+  // --- midden/laag: glimmende donkere vloer onder de tegels (de echte spiegel gaat uit, de bol-opname geeft de weerschijn) ---
   const vloerTex = canvasTexture(256, 256, (g, w, h) => {
     g.fillStyle = '#3e3c3a'; g.fillRect(0, 0, w, h);
     const img = g.getImageData(0, 0, w, h), d = img.data;
@@ -171,10 +171,10 @@
   }
   LAAD.voor = g => verklein(g.scene);
 
-  // --- laag: figuren buiten beeld niet tekenen (hun meshes staan op frustumCulled = false) ---
+  // --- midden/laag: figuren buiten beeld niet tekenen (geen spiegel of schaduw die ze nog ziet; de bol-opname is zonder figuren) ---
   const frus = new THREE.Frustum(), pm = new THREE.Matrix4(), bol = new THREE.Sphere(new THREE.Vector3(), 2), verborgen = [];
   function knip() {
-    if (!isLaag()) return;
+    if (KW.stand === 'hoog') return;
     camera.updateMatrixWorld();
     frus.setFromProjectionMatrix(pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     for (const lijst of [dancers, crowd, walkers, poleDancers, worms]) for (const d of lijst) {
@@ -209,18 +209,18 @@
     lampen(false);  // eerst terug zoals het was, daarna zetten de standen hun eigen lampen
     const was = KW.stand, mini = s === 'minimaal', laag = s === 'laag' || mini, midden = s === 'midden';
     KW.stand = s;
-    KW.schaduw = laag ? 0 : midden ? 4 : 1;  // per lamp om de hoeveel beelden (de twee lampen om de beurt)
-    KW.bol = laag ? 0 : midden ? 12 : 3;     // beelden per volle bol-ronde van 6 zijden (hoog 2 zijden per beeld, midden 1 per 2 beelden)
-    KW.spiegelElke = midden ? 2 : 1;         // midden: spiegel om het andere beeld, de bol in de beelden ertussen
-    KW.bolFiguren = !midden;                 // midden: bol-opname zonder figuren (paal/robots spiegelen dan alleen de zaal)
+    const hoog = s === 'hoog';
+    KW.schaduw = hoog ? 2 : 0;               // om de hoeveel beelden beide schaduwkaarten (hoog: in de beelden zonder spiegel-opname)
+    KW.bol = laag ? 0 : midden ? 24 : 4;     // beelden per volle bol-ronde van 6 zijden (hoog 3 zijden om het andere beeld, midden 1 per 4)
+    KW.spiegelElke = 2;                      // hoog: spiegel om het andere beeld, bol en schaduw in de beelden ertussen
+    KW.bolFiguren = false;                   // bol-opname zonder figuren (128 px: alleen licht, wanden en vloer tellen)
     KW.imag = laag ? 12 : midden ? 6 : 3;
-    KW.spiegel = !laag;
-    mirror.visible = !laag;
-    vloer.visible = laag;
-    if (mirror.getRenderTarget) { const r = s === 'hoog' ? 512 : 256; mirror.getRenderTarget().setSize(r, r); }
-    spots.forEach((p, i) => { if (i % 2 === 0) p.light.castShadow = !laag; });
-    shadowCatcher.visible = !laag;
-    if (!laag) renderer.shadowMap.needsUpdate = true;  // meteen een schaduwkaart, anders is de vloer even zwart onder die spots
+    KW.spiegel = hoog;
+    mirror.visible = hoog;
+    vloer.visible = !hoog;
+    spots.forEach((p, i) => { if (i % 2 === 0) p.light.castShadow = hoog; });
+    shadowCatcher.visible = hoog;
+    if (hoog) renderer.shadowMap.needsUpdate = true;  // meteen een schaduwkaart, anders is de vloer even zwart onder die spots
     for (const l of extraLicht) l.visible = !laag;
     rook(laag, mini);
     if (bloom) bloom.enabled = !laag;
@@ -357,12 +357,12 @@
     }
     if (isLaag()) {
       if (feedback) feedback.enabled = false;  // de kern zet hem elk beeld aan bij sporen/spiegel/zaal 2
-      if (bolNu) { bolNu = false; ball.visible = false; mirror.visible = false; vloer.visible = false; cubeCam.update(renderer, scene); vloer.visible = true; ball.visible = true; }
+      if (bolNu) { bolNu = false; scene.updateMatrixWorld(); lijsten(); bolOpname(6); }  // index.html: zonder bol, spiegel, figuren en wat de opname zelf als envMap heeft (lijsten vers: net herbouwd)
     }
     if (!geladen && laadLabel()) {
       geladen = true;
       rustTot = Math.max(rustTot, performance.now() + 5000);  // na het laden eerst even uitrazen
-      if (isLaag()) bolNu = true;  // de bol ziet nu ook het publiek
+      if (isLaag()) bolNu = true;  // nog een opname nu alles er staat
     }
   });
 

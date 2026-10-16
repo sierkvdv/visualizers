@@ -150,7 +150,8 @@
     return { x: c * r, z: s * r };
   }
 
-  function maak(ctx) {
+  // in stappen (generator): de kern bouwt op de achtergrond en pauzeert bij een yield als het budget van het beeld op is (~13 ms in één keer)
+  function* maak(ctx) {
     const G = ctx.groep, Z = Math.max(0, Math.min(2, ctx.zwaar | 0)), R = ctx.rnd;
     const rr = (a, b) => a + R() * (b - a);
     // kleur van deze kelder: meestal oranje, soms rood, roze of (zelden) cyaan
@@ -166,6 +167,7 @@
     const plafond = new THREE.MeshBasicMaterial({ map: tex('beton', 512, 512, tekenBeton, W / 4, D / 4), color: 0x3a3634 });
     ctx.doos({ w: W, d: D, h: H, vloer, muur, plafond });
 
+    yield;
     // --- de dj eerst: zijn lengte bepaalt de tafelhoogte en de camerahoogte ---
     const podium = new THREE.Group(); podium.position.y = DAIS; G.add(podium);  // dj staat op de verhoging
     const dj = ctx.figuur({ x: 0, z: DJZ, face: Math.PI, rol: 'dj', filter: /alien|wizard/ }) || ctx.figuur({ x: 0, z: DJZ, face: Math.PI, rol: 'dj' });
@@ -178,6 +180,7 @@
     const TOP = DAIS + Math.max(0.95, Math.min(1.25, 0.56 * djH));  // tafelblad op heuphoogte
     const CAMY = Math.min(DAIS + 0.93 * djH, 2.15);                  // schoudercamera; hoger past niet in de piramide
 
+    yield;
     // --- statisch spul in één belicht mesh (lambert, kleur per hoekpunt) ---
     const vast = [];
     vast.push([bx, mat4(0, DAIS / 2, 0, 2.7, DAIS, 2.7), 0x17151a]);                                   // verhoging
@@ -208,6 +211,7 @@
     }
     G.add(new THREE.Mesh(samen(vast, true), new THREE.MeshLambertMaterial({ vertexColors: true })));
 
+    yield;
     // --- de piramide: gloeiende randen, glas, scanringen en een draaiende top ---
     const hoek = [[-B, -B], [B, -B], [B, B], [-B, B]].map(([x, z]) => new THREE.Vector3(x, 0, z)), apex = new THREE.Vector3(0, PH, 0);
     const randen = (dik, y0) => {
@@ -239,6 +243,7 @@
     const topMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const top = new THREE.Mesh(new THREE.OctahedronGeometry(0.18), topMat); top.position.copy(apex); G.add(top);
 
+    yield;
     // --- lamp: kale peer met gloed en (niet op minimaal) een lichtkegel over de dj ---
     const peer = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), new THREE.MeshBasicMaterial({ color: 0xfff2dd })); peer.position.set(0, LAMP_Y, 0); G.add(peer);
     const peerGloed = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex('gloed', 64, 64, tekenGloed), color: 0xffc890, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
@@ -252,6 +257,7 @@
     const lamp = ctx.licht(0xffb070, 2.4, 11, 0, LAMP_Y - 0.08, 0);
     const tegen = Z === 0 ? ctx.licht(NEON.getHex(), 1.3, 10, W / 2 - 1.2, 2.8, 0) : null;  // gekleurd tegenlicht op de ruggen
 
+    yield;
     // --- draaiende platen, mixerknopjes, crossfader, monitorringen ---
     const plaatTex = tex('plaat', 256, 256, tekenPlaat), platen = [];
     for (const [dx, kleur] of [[-0.5, NEON.getHex()], [0.5, 0x22e0ff]]) {
@@ -285,6 +291,7 @@
     const deurMat = additief(0xffffff);
     G.add(new THREE.Mesh(samen(deur), deurMat));
 
+    yield;
     // --- neon: kelder-naam op de linkerwand, knipperend LIVE rechts, BLOODLINE op de tafel ---
     const bord = ctx.neon('DEEP BOILER', neonCss, 4.6, 1.15);
     if (bord) { bord.position.set(-W / 2 + 0.06, 3.25, 0); bord.rotation.y = Math.PI / 2; }
@@ -316,6 +323,7 @@
       waas.push({ sp, a: rr(0, RONDE), r: rr(2.2, 4.2), y: rr(2.7, 3.9), v: rr(0.03, 0.07) * (R() < 0.5 ? -1 : 1) });
     }
 
+    yield;
     // --- publiek: 3D-figuren in de binnenste kring (vrij van het looppad en de wachtplek) ---
     const kand = [], a0 = R() * RONDE, NK = 18;
     for (let i = 0; i < NK; i++) {
@@ -355,6 +363,7 @@
       telefoons.push({ sp, mat: sp.material, sx: sp.scale.x, sy: sp.scale.y, basis: rr(0.7, 1), flits: 0 });
     }
 
+    yield;
     // --- achtergrondpubliek in de buitenste kringen: 3D-menigte van club/publiek.js, kijkt naar de piramide ---
     // rand van de neonkleur (piramide + lamp) vanuit het midden, tegenlicht van de muurvegen erachter
     const plekken = [], NS = window.clubPubliek && clubPubliek.maak ? clubPubliek.aantal(48) : 0;
