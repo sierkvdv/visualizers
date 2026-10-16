@@ -1404,9 +1404,9 @@ function recolorMat(src, full) {  // full: alles herkleuren (mensen); anders all
   return m;
 }
 // elk gegenereerd figuur hooguit 3 keer in de zaal (anders zie je kopieën)
-const MAX_COPIES = 4;  // herkleurd en gespiegeld, dus geen herkenbare kopieën
+const MAX_COPIES = 6;  // herkleurd en gespiegeld, dus geen herkenbare kopieën (6 sinds Sierk een volle vloer wilde, 17-10)
 const SEXY = /burlesque|showgirl/;
-const maxOf = M => M.keep ? 2 : SEXY.test(M.file) ? 6 : MAX_COPIES;  // de twee danseressen elk 6x, steeds anders gekleurd
+const maxOf = M => M.keep ? 2 : SEXY.test(M.file) ? 8 : MAX_COPIES;  // de twee danseressen elk 8x, steeds anders gekleurd
 const leastUsed = list => { const ms = list.filter(M => (M.used || 0) < maxOf(M)); if (!ms.length) return null; const lo = Math.min(...ms.map(M => M.used || 0)); return pick(ms.filter(M => (M.used || 0) === lo)); };
 const freeModel = type => leastUsed(MODELS[type] || []);
 const allModels = () => [].concat(...Object.values(MODELS));

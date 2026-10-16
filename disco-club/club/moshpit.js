@@ -905,9 +905,12 @@
           if (!ZAAL) { ZAAL = maakZaal(); if (ZAAL) { startOpen(ZAAL, tel); if (magCamZaal()) knipZaal(); } }
           if (!KAMER) probeerKamer(tel, null);
         }
-      } else if (cyclus && cyclus.D == null && cyclus.sinds !== null) {  // opbouw voorbij zonder drop: de kring gaat weer dicht
-        for (const A of [ZAAL, KAMER]) if (A && A.D == null) sluitArena(A, 'geen drop');
-        cyclus = null;
+      } else if (cyclus && cyclus.D == null && cyclus.sinds !== null) {
+        // opbouw voorbij zonder herkende drop (live-sets: de lichtregie mist de drop vaak): komt de bas terug, dan is dát de drop
+        // en barst de pit los; gaat het naar een break, dan gaat de kring weer dicht
+        const open = [ZAAL, KAMER].some(A => A && A.D == null);
+        if (st === 'groove' && open && cyclus.pit) { noteer('drop uit groove'); drop(Math.ceil(tb)); }
+        else { for (const A of [ZAAL, KAMER]) if (A && A.D == null) sluitArena(A, 'geen drop'); cyclus = null; }
       }
       // de loper kwam pas na de drop ver genoeg de kamer in: tot 2 tellen na de drop nog instappen
       if (opTel && cyclus && cyclus.pit && cyclus.D != null && !KAMER && tb - cyclus.D < 2.5) probeerKamer(tel, cyclus.D);
