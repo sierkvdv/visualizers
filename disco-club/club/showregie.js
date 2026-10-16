@@ -1,16 +1,16 @@
-// Showregie: zaal 1 is het hoofdpodium. Uitstapjes naar de diepte (trip naar zaal 2, het doolhof) komen alleen via deze regie:
-// in de break of het begin van de opbouw ('we gaan dieper in de break'), en zonder breaks af en toe; de drop knalt altijd in zaal 1.
+// Showregie: zaal 1 en het doolhof wisselen elkaar af; sinds de ledkamers (16-10) is het doolhof de hoofdzaak (~60%), rondjes van 3-5
+// kamers, de drop knalt in de kamer zelf. Uitstapjes beginnen in de break of de opbouw ('we gaan dieper'), en zonder breaks toch regelmatig.
 // Alleen in 'auto'. Wrapt startShot (ná doolhof/kern.js): 'auto' wordt hier gekozen, dus de verplichte trip (TRIP_ELKE) en de
-// 50%-doorloop trip -> doolhof van de kern komen niet meer aan bod. Tegoed: per seconde zaal 1 0,55 s diepte (hooguit ~35% buiten).
+// 50%-doorloop trip -> doolhof van de kern komen niet meer aan bod. Tegoed: per seconde zaal 1 1,5 s diepte (~60% buiten); in het doolhof blijft hij ook op de drop (de kamers hebben hun eigen drop-show).
 // Testen: showRegie.toestand(), showRegie.dieper('trip'|'doolhof'), showRegie.log.
 (() => {
   'use strict';
   if (typeof SHOTS === 'undefined' || typeof startShot !== 'function' || typeof clubHooks === 'undefined') return;
 
-  const OPWARM = 45;                                   // s na het laden: alleen zaal 1
-  const RENTE = 0.55, MAX_TEGOED = 90, ROOD = 15;      // tegoed per s zaal 1 (hooguit ~35% buiten); spaarplafond; hooguit 15 s rood
-  const MIN_BREAK = 16, MIN_GROOVE = 30, MIN_DOOR = 30; // tegoed nodig: uitstap in de break, zonder breaks, na de trip door naar het doolhof
-  const RUST_BREAK = 35, RUST_GROOVE = 75;             // s zaal 1 tussen twee uitstapjes (Sierk zag de gangen te weinig)
+  const OPWARM = 30;                                   // s na het laden: alleen zaal 1
+  const RENTE = 1.5, MAX_TEGOED = 240, ROOD = 40;      // tegoed per s zaal 1 (~60% buiten: de kamers zijn nu de show); spaarplafond; hooguit 40 s rood
+  const MIN_BREAK = 45, MIN_GROOVE = 60, MIN_DOOR = 45;  // genoeg tegoed voor een echt rondje kamers // tegoed nodig: uitstap in de break, zonder breaks, na de trip door naar het doolhof
+  const RUST_BREAK = 30, RUST_GROOVE = 45;             // s zaal 1 tussen twee uitstapjes (Sierk: te veel zaal 1, de kamers zijn het mooist)
   const ZONDER_BREAK = 60;                             // zo lang geen break gezien = muziek zonder secties (echte muziek: breaks vaak niet herkend)
   const BUITEN = new Set(['trip', 'doolhof']);
   const TERUG = ['rondje', 'kraan', 'voorlangs', 'dj']; // terug in de club: wijd over de zaal of de dj
@@ -43,7 +43,7 @@
   }
   function terugShot() { const k = TERUG.filter(k => SHOTS[k] && !(shot && shot.kind === k)); return k.length ? een(k) : loting(); }
   const dropShot = () => (SHOTS.drop ? 'drop' : SHOTS.kraan ? 'kraan' : terugShot());  // kraan omhoog als er geen drop-shot is
-  const doelVoor = () => (tegoed >= 85 ? 2 : 1);     // kamers in het doolhof
+  const doelVoor = () => (tegoed >= 180 ? 5 : tegoed >= 120 ? 4 : 3);  // kamers per rondje: lang genoeg om erin te zitten
 
   // mag er nu een uitstapje beginnen? { soort, reden, doel } of null
   function wilDieper() {
@@ -56,7 +56,7 @@
     if (!reden) return null;
     // om en om trip en doolhof (de eerste keer de trip: iemand loopt van de club naar binnen); in de break kapt de drop het af,
     // zonder breaks loopt het doolhof tot het eind van een kamer: dan genoeg tegoed nodig
-    const naarDoolhof = SHOTS.doolhof && nUit % 3 !== 0 && (reden === 'break' || tegoed >= MIN_DOOR + 5);  // trip, doolhof, doolhof, trip, ...
+    const naarDoolhof = SHOTS.doolhof && nUit % 4 !== 0 && (reden === 'break' || tegoed >= MIN_DOOR + 5);  // trip, dan 3x doolhof, ...
     const soort = naarDoolhof ? 'doolhof' : SHOTS.trip ? 'trip' : SHOTS.doolhof ? 'doolhof' : null;
     return soort ? { kind: soort, reden, doel: soort === 'doolhof' ? doelVoor() : 0 } : null;
   }
@@ -144,12 +144,11 @@
     const nieuweDrop = !!R && st === 'drop' && R.dropBeat !== dropGezien;
     if (nieuweDrop) dropGezien = R.dropBeat;
     if (!auto) return;
-    if (nieuweDrop && (uit || weg)) { knip(dropShot(), { drop: true, waarom: 'drop' }); return; }
+    if (nieuweDrop && !uit && weg) { knip(dropShot(), { drop: true, waarom: 'drop' }); return; }  // in een uitstapje knalt de drop in de kamer zelf
     if (uit) {
       if (st === 'break' || st === 'opbouw') uit.brk = true;
       if (!opTel) return;
       if (tegoed < -ROOD) knip(terugShot(), { waarom: 'tegoed op' });
-      else if (uit.brk && st === 'groove' && beatPos - uit.b0 >= 8) knip(terugShot(), { waarom: 'break voorbij' });  // de bas is terug zonder drop
       return;
     }
     // dieper in de break: op de tel knippen; een vers momentshot (boer, solo, paar) eerst laten staan
