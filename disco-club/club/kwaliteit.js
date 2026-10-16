@@ -1,6 +1,9 @@
 // Kwaliteitsstanden zodat de club ook op telefoons en trage computers loopt; 'hoog' is precies de kern zoals hij was.
-//  hoog   - alles elk beeld (spiegelvloer, bol-opname elke 3e, schaduwen, feedback, bloom)
-//  midden - bol-opname 1 op 6, spiegelvloer 256 px, schaduwen 1 op 10, bloom op halve resolutie, max ~2 megapixel
+//  hoog   - alles elk beeld (spiegelvloer, bol-opname 2 zijden per beeld = elke zijde elk 3e beeld, schaduwen, feedback, bloom)
+//  midden - zelfde zaal, goedkoper getekend (MacBook 2018): spiegelvloer 256 px om het andere beeld,
+//           bol-opname 1 zijde per 2 beelden (in de beelden zonder spiegel, zonder figuren), schaduwkaarten om de beurt (per lamp elk 4e beeld),
+//           bloom op halve resolutie, max ~2 megapixel; is de gpu te traag (beeldtijd hoog maar weinig werk op de cpu) dan in stapjes
+//           tot 0,8 megapixel. Intel-gpu's (laptops) starten hier en gaan niet naar hoog.
 //  laag   - glimmende donkere vloer (lampen + bol-opname als envMap) i.p.v. de echte spiegel, geen bol-opname/schaduwen/feedback/bloom, ~1 megapixel, minder figuren,
 //           minder rook, kleinere texturen (telefoon), figuren buiten beeld niet tekenen
 //  minimaal - laag + alleen de twee hoofdspots aan (tv: elke lamp kost per pixel op elk figuur; testronde Mali-G52 6 -> 25 fps)
@@ -18,16 +21,20 @@
   const TVK = Object.assign({ lambert: true, minder: false, bundels: true }, S.tv || {});
   const minder = () => KW.stand === 'minimaal' && TVK.minder;
   if (!KEUZES.includes(S.kwaliteit)) S.kwaliteit = 'auto';
-  const PLAFOND = MOBIEL ? 'midden' : 'hoog';  // de bewaker gaat op mobiel nooit hoger
+  // laptop-gpu (MacBook 2018: Intel UHD 630 / Iris Plus 655): start in midden en blijft daar (Intel Arc telt niet mee)
+  const GPU = (() => { try { const gl = renderer.getContext(), d = gl.getExtension('WEBGL_debug_renderer_info'); return d ? String(gl.getParameter(d.UNMASKED_RENDERER_WEBGL)) : ''; } catch (e) { return ''; } })();
+  const ZWAK = !MOBIEL && /Intel|Iris|UHD Graphics|HD Graphics/i.test(GPU) && !/\bArc\b/i.test(GPU);
+  const PLAFOND = MOBIEL || ZWAK ? 'midden' : 'hoog';  // de bewaker gaat op mobiel en laptop-gpu nooit hoger
   const BODEM = MOBIEL ? 'minimaal' : 'midden';     // en op de pc nooit lager: de spiegelvloer blijft (laag kan nog met de hand)
   const PR_HOOG = PR;  // zoals de kern hem bij de start uitrekende
   const BUDGET = [1e6, 7e5, 5e5, 3e5];  // laag/minimaal: pixels; de bewaker kan nog drie stapjes zakken (tv: 0,5 MP = scherm, 0,3 MP = 730x410)
-  let budget = 0;
+  const MBUDGET = [2e6, 1.5e6, 1.1e6, 8e5];  // midden: pixels; omlaag als de gpu het niet trekt (zie bewaak)
+  let budget = 0, mbudget = 0;
 
   function prVoor(s) {
     if (s === 'hoog') return PR_HOOG;
     const opp = innerWidth * innerHeight;
-    if (s === 'midden') return Math.min(PR_HOOG, Math.sqrt(2e6 / opp));
+    if (s === 'midden') return Math.min(PR_HOOG, Math.sqrt(MBUDGET[mbudget] / opp));
     return Math.min(window.devicePixelRatio || 1, 1, Math.sqrt(BUDGET[budget] / opp));
   }
   // bloom op een fractie van de beeldmaat (hoog: 1 = ongewijzigd)
@@ -202,8 +209,10 @@
     lampen(false);  // eerst terug zoals het was, daarna zetten de standen hun eigen lampen
     const was = KW.stand, mini = s === 'minimaal', laag = s === 'laag' || mini, midden = s === 'midden';
     KW.stand = s;
-    KW.schaduw = laag ? 0 : midden ? 10 : 1;
-    KW.bol = laag ? 0 : midden ? 6 : 3;
+    KW.schaduw = laag ? 0 : midden ? 4 : 1;  // per lamp om de hoeveel beelden (de twee lampen om de beurt)
+    KW.bol = laag ? 0 : midden ? 12 : 3;     // beelden per volle bol-ronde van 6 zijden (hoog 2 zijden per beeld, midden 1 per 2 beelden)
+    KW.spiegelElke = midden ? 2 : 1;         // midden: spiegel om het andere beeld, de bol in de beelden ertussen
+    KW.bolFiguren = !midden;                 // midden: bol-opname zonder figuren (paal/robots spiegelen dan alleen de zaal)
     KW.imag = laag ? 12 : midden ? 6 : 3;
     KW.spiegel = !laag;
     mirror.visible = !laag;
@@ -247,15 +256,25 @@
     if (ms - venster.t0 < 3000) return;
     const gem = venster.iv / venster.n, gemWerk = venster.werk / venster.n, telt = venster.iv;  // telt: zonder de overgeslagen lange beelden
     venster = null;
-    if (gem > 40) { goed = 0; omlaag(); }
+    // pc/laptop in midden (de bodem): alleen minder pixels als de gpu de rem is. Bij een cpu-hapering (ander programma bezig) hielp dat
+    // niet en bleef de pc daarna minutenlang op 0,8 MP hangen (wachtOp verdubbelt per stap). Mobiel zakt wel gewoon verder.
+    if (gem > 40) { goed = 0; if (!(KW.stand === 'midden' && !MOBIEL && gemWerk >= gem * 0.6)) omlaag(); }
+    // midden en de gpu is de rem (beelden gemist terwijl de cpu per beeld weinig doet): eerst minder pixels, de stand blijft
+    else if (KW.stand === 'midden' && gem > 22 && gemWerk < gem * 0.6 && mbudget < MBUDGET.length - 1) { goed = 0; minderPixels(); }
     // omhoog: geen beelden gemist (bij 60 Hz is de tussentijd altijd ~16,7 ms) én het werk per beeld ruim onder 16 ms
     else if (gem < 18 && gemWerk < 10) { goed += telt; if (goed >= wachtOp) { goed = 0; omhoog(); } }
     else goed = 0;
+  }
+  function minderPixels() {
+    mbudget++; PR = prVoor('midden'); resize();
+    wachtOp = Math.min(wachtOp * 2, 120000);
+    rustTot = performance.now() + 2000;
   }
   function omlaag() {
     const i = STANDEN.indexOf(KW.stand);
     if (i > STANDEN.indexOf(BODEM)) zetStand(STANDEN[i - 1]);
     else if (isLaag() && budget < BUDGET.length - 1) { budget++; PR = prVoor('laag'); resize(); }
+    else if (KW.stand === 'midden' && mbudget < MBUDGET.length - 1) return minderPixels();  // pc: niet onder midden, wel minder pixels
     else return;
     wachtOp = Math.min(wachtOp * 2, 120000);  // niet heen en weer blijven springen
     rustTot = performance.now() + 2000;
@@ -263,6 +282,7 @@
   function omhoog() {
     const i = STANDEN.indexOf(KW.stand);
     if (isLaag() && budget > 0) { budget--; PR = prVoor('laag'); resize(); }
+    else if (KW.stand === 'midden' && mbudget > 0) { mbudget--; PR = prVoor('midden'); resize(); }
     else if (i < STANDEN.indexOf(PLAFOND)) zetStand(STANDEN[i + 1]);
     else return;
     rustTot = performance.now() + 2000;
@@ -271,7 +291,7 @@
     if (!KEUZES.includes(k)) return;
     S.kwaliteit = k; save();
     bewaker = k === 'auto';
-    budget = 0; goed = 0; venster = null; wachtOp = 15000;
+    budget = 0; mbudget = 0; goed = 0; venster = null; wachtOp = 15000;
     zetStand(bewaker ? KW.stand : k);
   }
 
@@ -347,7 +367,7 @@
   });
 
   // --- start ---
-  const start = S.kwaliteit === 'auto' ? (TV ? 'minimaal' : MOBIEL ? 'laag' : 'hoog') : S.kwaliteit;
+  const start = S.kwaliteit === 'auto' ? (TV ? 'minimaal' : MOBIEL ? 'laag' : ZWAK ? 'midden' : 'hoog') : S.kwaliteit;
   zetStand(start);
   for (const M of allModels()) verklein(M.scene);  // al binnen vóór dit script (zelden)
   if (slug) verklein(slug.root);

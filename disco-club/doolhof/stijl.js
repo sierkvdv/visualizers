@@ -9,8 +9,9 @@
 // kamer (groep.userData.dhBus) richten rigs en shows op onze dj, en volgen onze lagen hun blackout en stroboscoop.
 // Alles leeft op de muziek: beat, pulse, energy, banden en clubRegie.stand (break dimt en ademt, opbouw versnelt tot
 // stroboscoop, drop flitst, bundels slaan open en iedereen juicht). De camera knipt op de maat en op de drop.
-// Prestatie: wanden/vloer onverlicht, statisch spul samengevoegd (Lambert, kleur per hoekpunt), ledlijnen, bundels,
-// silhouetten en paddenstoelen elk één InstancedMesh, hooguit 2 lamp-handvatten; ctx.zwaar schaalt alles wat telt.
+// Prestatie: wanden/vloer onverlicht, statisch spul samengevoegd (Lambert, kleur per hoekpunt), ledlijnen, bundels en
+// paddenstoelen elk één InstancedMesh, het achtergrondpubliek één draw call (club/publiek.js: 3D-menigte die zelf op de
+// muziek beweegt), hooguit 2 lamp-handvatten; ctx.zwaar schaalt alles wat telt.
 (() => {
   'use strict';
   const DH = window.doolhof;
@@ -58,7 +59,6 @@
   function schud(r, a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
   const _p = new THREE.Vector3(), _s = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _m = new THREE.Matrix4(), _c = new THREE.Color();
   const ZAS = new THREE.Vector3(0, 0, 1), NEER = new THREE.Vector3(0, -1, 0), WIT = new THREE.Color(1, 1, 1), HSL = {};
-  const NUL = new THREE.Matrix4().makeScale(0, 0, 0);
   const mat4 = (x, y, z, sx, sy, sz, rx = 0, ry = 0, rz = 0) => new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz)), _s.set(sx, sy, sz));
   function staafM(a, b, dik, dik2) {  // eenheidsdoos van a naar b
     const v = _w.subVectors(b, a), len = v.length() || 1e-3;
@@ -81,14 +81,9 @@
     ico: houd(new THREE.IcosahedronGeometry(1, 0)),
     kegel: houd(new THREE.ConeGeometry(1, 1, 7)),
   };
-  VORM.sil = [0, 1, 2, 3].map(c => {  // silhouet per pose: vlak met de voeten in de oorsprong, eigen kwart van het doek
-    const g = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0), uv = g.attributes.uv;
-    for (let i = 0; i < uv.count; i++) uv.setX(i, (c + uv.getX(i)) / 4);
-    return houd(g);
-  });
   const DOEK = {};
   const DOEKMAAT = { beton: [512, 512, 1], marmer: [512, 512, 1], raster: [512, 512, 1], golven: [512, 512, 1], mos: [512, 512, 1], glans: [512, 512, 1], rots: [512, 512, 1],
-    paneel: [512, 512, 1], fluweel: [512, 512, 1], golfplaat: [256, 256, 1], speaker: [256, 256, 0], plaat: [256, 256, 0], gloed: [64, 64, 0], bundel: [16, 128, 0], silhouet: [512, 256, 0] };
+    paneel: [512, 512, 1], fluweel: [512, 512, 1], golfplaat: [256, 256, 1], speaker: [256, 256, 0], plaat: [256, 256, 0], gloed: [64, 64, 0], bundel: [16, 128, 0] };
   function doek(naam) {
     if (!DOEK[naam]) {
       const [w, h, herhaal] = DOEKMAAT[naam], t = canvasTexture(w, h, TEKEN[naam]);
@@ -235,29 +230,7 @@
       const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
       g.fillStyle = gr; g.fillRect(0, 0, w, h);
     },
-    silhouet(g) {  // vier poses (armen neer, beide omhoog, één omhoog, telefoon omhoog); lichte rand = tegenlicht, donkere vulling
-      g.clearRect(0, 0, 512, 256);
-      const neer = s => [s * 26, 76, s * 34, 115, s * 36, 150], op = s => [s * 26, 76, s * 40, 42, s * 32, 10];
-      const armen = [[neer(-1), neer(1)], [op(-1), op(1)], [op(-1), neer(1)], [neer(-1), [26, 76, 42, 48, 22, 14]]];
-      for (let c = 0; c < 4; c++) {
-        const cx = c * 128 + 64;
-        for (const rand of [5, 0]) {
-          const gr = g.createLinearGradient(0, 29, 0, 256);
-          if (rand) { gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.55, '#8a8a8a'); gr.addColorStop(1, '#1c1c1c'); }
-          else { gr.addColorStop(0, '#262124'); gr.addColorStop(1, '#060506'); }
-          g.fillStyle = g.strokeStyle = gr; g.lineCap = g.lineJoin = 'round';
-          const lijn = (p, lw) => { g.lineWidth = lw + rand; g.beginPath(); g.moveTo(cx + p[0], p[1]); for (let i = 2; i < p.length; i += 2) g.lineTo(cx + p[i], p[i + 1]); g.stroke(); };
-          lijn([-9, 150, -12, 200, -14, 247], 17); lijn([9, 150, 12, 200, 14, 247], 17);
-          g.lineWidth = rand || 1; g.beginPath(); g.moveTo(cx - 29, 72); g.lineTo(cx + 29, 72); g.lineTo(cx + 23, 155); g.lineTo(cx - 23, 155); g.closePath(); g.fill(); if (rand) g.stroke();
-          lijn([0, 50, 0, 72], 12);
-          g.beginPath(); g.arc(cx, 44, 15 + rand / 2, 0, RONDE); g.fill();
-          lijn(armen[c][0], 13); lijn(armen[c][1], 13);
-        }
-        if (c === 3) { g.fillStyle = '#ffffff'; g.shadowColor = '#ffffff'; g.shadowBlur = 10; g.fillRect(cx + 15, 4, 14, 22); g.shadowBlur = 0; }  // telefoonscherm
-      }
-    },
   };
-  const SIL_H = 256 / 227 * 1.75;
   {  // doeken in rustige tijd na het laden tekenen, één per keer (anders hapert de bouw van de eerste kamers)
     const mis = new Set();
     const stap = wacht => {
@@ -265,7 +238,7 @@
       if (n) setTimeout(() => { try { doek(n); } catch (e) { mis.add(n); console.error('doolhof stijl: doek ' + n, e); } stap(350); }, wacht);
     };
     stap(9000);
-  }  // doekhoogte voor een figuur van 1,75 m (kruin op 29 px)
+  }
 
   // --- muurschilderingen: tinten (voor het palet), drukte (druk = gedimd en geen extra muurwerk), spiegelen bij herhalen ---
   const SCHILD = {
@@ -758,67 +731,28 @@
       gekozen.push(p);
     }
     for (const p of gekozen) if (!plaats(p, p.groepje && r() < 0.45 ? 'staan' : kiesRol(B, p))) break;
-    // silhouetten: de rest van de kandidaten en de massa-zones (goedkoop: één InstancedMesh per pose)
-    const maxSil = [40, 26, 14][Z], sil = [], bezet = B.figs.map(f => f.p);
+    // achtergrondpubliek: de rest van de kandidaten en de massa-zones (3D-menigte, één draw call; aantal per kwaliteitsstand)
+    const maxPub = window.clubPubliek && clubPubliek.maak ? clubPubliek.aantal(48) : 0, pub = [], bezet = B.figs.map(f => f.p);
     const pool = kand.filter(p => !gekozen.includes(p)).concat(...(A.massa || []).map(z => kandidaten(r, z, 0.78).filter(p => B.vrij(p.x, p.z, -0.25))));
     schud(r, pool);
     for (const p of pool) {
-      if (sil.length >= maxSil) break;
-      if (sil.some(q => afst(p, q) < 0.62) || bezet.some(q => q && afst(p, q) < 0.85)) continue;
-      sil.push(p);
+      if (pub.length >= maxPub) break;
+      if (pub.some(q => afst(p, q) < 0.58) || bezet.some(q => q && afst(p, q) < 0.8)) continue;
+      pub.push(p);
     }
-    maakSilhouetten(B, sil);
+    maakPubliek(B, pub);
   }
-  function maakSilhouetten(B, lijst) {
-    if (!lijst.length) return;
-    const { r, P, G } = B, SOORTEN = [[0, 1], [0, 1], [0, 2], [2, 1], [3, 3]], aantal = [0, 0, 0, 0];
-    const sil = lijst.map(p => {
-      const [p0, p1] = kies(r, SOORTEN), sh = SIL_H * tussen(r, 0.9, 1.08), ver = klem((p.ver || afst(p, B.focus)) / 9);
-      const s = { x: p.x, y: p.y || 0, z: p.z, sh, sw: sh / 2, p0, p1, ph: r(), drempel: tussen(r, 0.45, 0.95), op: false, slot: [-1, -1, -1, -1],
-        kleur: (r() < 0.6 ? P.a : P.b).clone().lerp(P.c, 0.15).multiplyScalar(0.55 - 0.25 * ver) };
-      for (const q of new Set([p0, p1])) s.slot[q] = aantal[q]++;
-      return s;
-    });
-    const mat = new THREE.MeshBasicMaterial({ map: doek('silhouet'), alphaTest: 0.5, side: THREE.DoubleSide });
-    const mesh = [0, 1, 2, 3].map(c => {
-      if (!aantal[c]) return null;
-      const m = new THREE.InstancedMesh(VORM.sil[c], mat, aantal[c]); m.frustumCulled = false;
-      for (let i = 0; i < aantal[c]; i++) m.setMatrixAt(i, NUL);
-      G.add(m); return m;
-    });
-    for (const s of sil) for (let c = 0; c < 4; c++) if (s.slot[c] >= 0) mesh[c].setColorAt(s.slot[c], s.kleur);
-    const M4 = new THREE.Matrix4(), PP = new THREE.Vector3(), SS = new THREE.Vector3(), Q = new THREE.Quaternion(), E = new THREE.Euler();
-    // dichtbij is een silhouet een kartonnen bord dat het beeld vult, steil van boven een plat vlak: dan is het weg (met wat speling,
-    // anders knippert het op de grens; wegzakken liet armen uit de vloer steken). Gerekend op de camera van het vorige beeld én
-    // het doel van de regisseur (bij een knip anders één beeld een reuzenbord)
-    const camDoel = new THREE.Vector3();
-    let doelGeldig = false, lb = null, lL = null, vorigeTel = -1;
-    const teDicht = (s, c, m) => {
-      const dh = Math.hypot(c.x - s.x, c.z - s.z), hoog = c.y - s.y - 1.0;
-      return dh < 4.2 + m || hoog / Math.max(dh, 0.1) > 0.62 - m * 0.25;
-    };
-    function zetSil() {
-      const cam = B.camLokaal, b = lb;
-      for (const s of sil) {
-        const act = s.op ? s.p1 : s.p0, rust = s.op ? s.p0 : s.p1;
-        if (rust !== act) mesh[rust].setMatrixAt(s.slot[rust], NUL);
-        const m = s.weg ? 0.35 : 0;
-        s.weg = teDicht(s, cam, m) || (doelGeldig && teDicht(s, camDoel, m));
-        if (s.weg) { mesh[act].setMatrixAt(s.slot[act], NUL); continue; }
-        const bob = 0.05 * Math.pow(Math.abs(Math.sin(Math.PI * (b.pos + s.ph))), 2) * (0.6 + b.energy);
-        Q.setFromEuler(E.set(0, Math.atan2(cam.x - s.x, cam.z - s.z), 0.05 * Math.sin(Math.PI * (b.pos * 0.5 + s.ph))));  // draait naar de camera
-        mesh[act].setMatrixAt(s.slot[act], M4.compose(PP.set(s.x, s.y + bob, s.z), Q, SS.set(s.sw, s.sh, 1)));
-      }
-      for (const m of mesh) if (m) m.instanceMatrix.needsUpdate = true;
-    }
-    B.silCam = p => { if (!lb) return; camDoel.copy(p); doelGeldig = true; zetSil(); };  // vanuit cam(): het doel van dit beeld
-    B.updates.push((dt, now, b, L) => {
-      const tel = Math.floor(b.pos);
-      if (tel !== vorigeTel) { vorigeTel = tel; const allen = L.stand === 'drop' && L.dropKleur; for (const s of sil) s.op = allen || b.energy > s.drempel; }
-      mat.color.setScalar(0.75 + 0.5 * b.pulse * L.k + L.flits * 0.6);
-      lb = b; lL = L; doelGeldig = false;
-      zetSil();
-    });
+  // 3D-menigte (club/publiek.js): kijkt naar de dj, rand van tegenlicht in kleur a (vanaf de dj) en b (van achteren/boven);
+  // deinen, knikken, handen omhoog en telefoons doet de shader zelf. Hier alleen het lichtniveau van de kamer (break dimt,
+  // blackout van een show, stroboscoop/drop-flits) en in de eerste 8 tellen van de drop iedereen de handen omhoog.
+  function maakPubliek(B, lijst) {
+    if (!lijst.length || !window.clubPubliek || !clubPubliek.maak) return;
+    const { r, P, G } = B, F = B.focus;
+    const h = clubPubliek.maak(G, { plekken: lijst.map(p => ({ x: p.x, y: p.y || 0, z: p.z, face: p.face })), vast: true, rnd: r, dicht: 1.2,
+      kleuren: { a: P.a, b: P.b, vul: P.donker }, licht: { x: F.x, y: F.y + 1.4, z: F.z } });
+    if (!h) return;
+    B.publiek = h;
+    B.updates.push((dt, now, b, L) => { h.helder = 0.45 + 0.6 * L.k; h.flits = L.flits; h.armen = L.dropKleur ? 1 : 0; });
   }
 
   // --- licht- en showlagen ---
@@ -1393,7 +1327,7 @@
     A.focus = V(0, 2.2, za);
     A.route = [[0, -d / 2], [s * 2.3, za - 3.4], [s * 2.95, za], [s * 2.3, za + 3.4], [0, d / 2]].map(([x, z]) => ({ x, z }));
     A.zones3d = [{ soort: 'rijen', c: { x: 0, z: za }, u: [0, -1], d0: 3.0, d1: za + d / 2 - 2.6, breed: cx - 0.9, klem: { x0: -cx + 0.7, x1: cx - 0.7, z0: -d / 2, z1: za - 2.2 } }];
-    const laan = -s * (cx + 1.2);  // camerabaan achter de zuilen aan de kant van -s: daar geen silhouetten
+    const laan = -s * (cx + 1.2);  // camerabaan achter de zuilen aan de kant van -s: daar geen publiek
     A.massa = [{ soort: 'vlak', x0: s > 0 ? cx + 0.7 : -w / 2 + 0.8, x1: s > 0 ? w / 2 - 0.8 : -cx - 0.7, z0: -d / 2 + 2.5, z1: d / 2 - 2.5, kijk: { x: 0, z: za } },
       { soort: 'rijen', c: { x: 0, z: za }, u: [0, -1], d0: 3.0, d1: za + d / 2 - 2.4, breed: cx - 0.6 }];
     A.opstellingen = { rijen: 1, kring: 0.7 };
@@ -1711,7 +1645,7 @@
     const r = ctx.rnd, Z = Math.max(0, Math.min(2, ctx.zwaar | 0)), G = ctx.groep, b0 = ctx.beat() || {}, reg = regie();
     const sf = kiesSfeer(r, archNaam, reg.stand), S = SFEER[sf], schild = kiesSchild(r, sf, Z), P = maakPalet(r, sf, schild);
     const B = { ctx, r, Z, G, sf, S, schild, P, energie: klem(S.energie * 0.55 + (b0.energy || 0) * 0.45 + (reg.stand === 'drop' ? 0.15 : 0)),
-      vast: [], obst: [], figs: [], updates: [], onderdelen: [], camLokaal: new THREE.Vector3(), d2: 8 };
+      vast: [], obst: [], figs: [], updates: [], onderdelen: [], d2: 8 };
     B.M = materialen(B);
     B.focus = V(0, 1.6, 0);
     B.net = maakNet(B);
@@ -1780,12 +1714,7 @@
       camDefs.lijst = camDefs.lijst.filter(k => k.naam !== 'schouder');
       if (!camDefs.held || camDefs.held.naam === 'schouder') camDefs.held = camDefs.lijst.find(k => k.naam === 'laag') || camDefs.lijst[0];
     }
-    const regieCam = regisseur(B, A, camDefs.lijst, camDefs.held), camHier = new THREE.Vector3();
-    const cam = (t, loper, c) => {  // silhouetten nog eens zetten met het doel van dit beeld (zie maakSilhouetten)
-      const u = regieCam(t, loper, c);
-      if (B.silCam && u && u.pos) { camHier.copy(u.pos); G.worldToLocal(camHier); B.silCam(camHier); }
-      return u;
-    };
+    const cam = regisseur(B, A, camDefs.lijst, camDefs.held);
     onthoud(GEHEUGEN.sfeer, sf, 3); onthoud(GEHEUGEN.schild, schild, 3);
     const stand = () => regie().stand || 'groove';
     let figKapot = false;
@@ -1793,7 +1722,6 @@
       dt = Math.min(dt || 0, 0.1);
       const b = ctx.beat(), L = B.L;
       L.stap(dt, b);
-      if (typeof camera !== 'undefined') { B.camLokaal.copy(camera.position); G.worldToLocal(B.camLokaal); }
       B.M.muur.color.copy(B.M.muurKleur).multiplyScalar(0.55 + 0.38 * L.k + 0.12 * b.pulse * L.k).lerp(WIT, L.flits * 0.3);
       if (B.M.vloerNaam === 'raster' || B.M.vloerNaam === 'golven' || B.M.vloerNaam === 'mos') B.M.vloer.color.copy(B.M.vloerKleur).multiplyScalar(0.5 + 0.5 * b.pulse * L.k + 0.3 * L.k);
       B.net.update(L, b);
@@ -1819,7 +1747,7 @@
       // InstancedMesh: de kern gooit geometrie en materiaal weg, de buffers van de instanties gaan pas weg met dispose()
       G.traverse(x => { if (x.isInstancedMesh && x.dispose) x.dispose(); else if (x.isPoints && x.geometry) x.geometry.dispose(); });
     }
-    const kamer = { maat: { w: A.w, d: A.d, h: A.h }, route: A.route, blijf: S.blijf, cam, update, opruimen,
+    const kamer = { maat: { w: A.w, d: A.d, h: A.h }, route: A.route, blijf: S.blijf, cam, update, opruimen, publiek: B.publiek || null,
       stijl: { arch: archNaam, sfeer: sf, schild, palet: [css(P.a), css(P.b), css(P.c), css(P.donker)], opstelling: B.opstelling, onderdelen: B.onderdelen.map(o => o.soort + '/' + o.naam), figuren: B.figs.length + 1 } };
     DH.laatsteStijl = kamer.stijl;
     if (DH.stijl && DH.stijl.debug) DH.stijl.laatste = B;  // alleen voor de proef: de hele bouwcontext

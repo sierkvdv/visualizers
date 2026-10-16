@@ -1,8 +1,8 @@
 // --- Doolhof-kamer 'boiler': Boiler Room-kelder met een neonpiramide in het midden ---
 // Rauwe bakstenen kelder met kale buizen en kabels; in het midden een glazen piramide met gloeiende randen en scanringen,
 // daarin de dj op een verhoging achter twee draaitafels en een mixer, één kale hete lamp boven zijn hoofd.
-// Publiek in een kring van 360 graden: 3D-figuren vooraan, silhouetten erachter (handen omhoog bij hoge energie),
-// telefoons die oplichten en flitsen. Camera: laag over de schouder van de dj de kring in, af en toe een totaal van boven.
+// Publiek in een kring van 360 graden: 3D-figuren vooraan, daarachter een 3D-menigte van club/publiek.js (één draw call,
+// deint op de muziek, handen omhoog in de drop, telefoons die oplichten en flitsen). Camera: laag over de schouder van de dj de kring in, af en toe een totaal van boven.
 // Licht: één lamp boven de dj (+ in hoog een gekleurd tegenlicht); al het andere is onverlicht (basic/additief).
 (() => {
   if (!window.doolhof) { console.warn('boiler: window.doolhof ontbreekt'); return; }
@@ -16,8 +16,6 @@
   const ROUTE = [[0, -7], [0, -6.2], [-2, -5.4], [-4.4, -3.3], [-4.7, 0], [-4.4, 3.3], [-2, 5.4], [0, 6.2], [0, 7]].map(([x, z]) => ({ x, z }));
   const WACHT = ROUTE[4];
   const Z1 = new THREE.Vector3(0, 0, 1);
-  // silhouet: 256 px hoog, persoon van kruin (29) tot voeten (256) = 1,75 m
-  const SIL_H = 256 / 227 * 1.75, TEL_X = 22 / 128, TEL_Y = 1 - 14 / 256;  // plek van de telefoonhand in pose 3
 
   // --- gedeelde doeken: één keer tekenen, per kamer een eigen texture (die mag de kern opruimen) ---
   const doeken = {};
@@ -65,29 +63,6 @@
       g.stroke();
     }
     korrel(g, w, h, 28);
-  };
-  // silhouetten van het publiek: 4 poses naast elkaar (armen neer, beide omhoog, één omhoog, telefoon omhoog)
-  // eerst een lichte rand (tegenlicht), dan de donkere vulling eroverheen
-  const tekenSilhouet = (g) => {
-    g.clearRect(0, 0, 512, 256);
-    const neer = s => [s * 26, 76, s * 34, 115, s * 36, 150];
-    const op = s => [s * 26, 76, s * 40, 42, s * 32, 10];
-    const armen = [[neer(-1), neer(1)], [op(-1), op(1)], [op(-1), neer(1)], [neer(-1), [26, 76, 42, 48, 22, 14]]];
-    for (let c = 0; c < 4; c++) {
-      const cx = c * 128 + 64;
-      for (const rand of [5, 0]) {
-        const gr = g.createLinearGradient(0, 29, 0, 256);
-        if (rand) { gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.55, '#8a8a8a'); gr.addColorStop(1, '#1c1c1c'); }
-        else { gr.addColorStop(0, '#2a2224'); gr.addColorStop(1, '#060506'); }
-        g.fillStyle = g.strokeStyle = gr; g.lineCap = g.lineJoin = 'round';
-        const lijn = (p, lw) => { g.lineWidth = lw + rand; g.beginPath(); g.moveTo(cx + p[0], p[1]); for (let i = 2; i < p.length; i += 2) g.lineTo(cx + p[i], p[i + 1]); g.stroke(); };
-        lijn([-9, 150, -12, 200, -14, 247], 17); lijn([9, 150, 12, 200, 14, 247], 17);  // benen
-        g.lineWidth = rand || 1; g.beginPath(); g.moveTo(cx - 29, 72); g.lineTo(cx + 29, 72); g.lineTo(cx + 23, 155); g.lineTo(cx - 23, 155); g.closePath(); g.fill(); if (rand) g.stroke();
-        lijn([0, 50, 0, 72], 12);  // nek
-        g.beginPath(); g.arc(cx, 44, 15 + rand / 2, 0, RONDE); g.fill();
-        lijn(armen[c][0], 13); lijn(armen[c][1], 13);
-      }
-    }
   };
   // telefoonscherm met een zachte gloed eromheen
   const tekenTelefoon = (g, w, h) => {
@@ -181,7 +156,6 @@
     // kleur van deze kelder: meestal oranje, soms rood, roze of (zelden) cyaan
     const hr = R(), HUE = hr < 0.5 ? 0.065 : hr < 0.75 ? 0.0 : hr < 0.9 ? 0.93 : 0.53;
     const NEON = new THREE.Color().setHSL(HUE, 1, 0.55), neonCss = '#' + NEON.getHexString();
-    const C = new THREE.Color();
     const bronnen = [];  // losse bron-geometrieën: na het samenvoegen weggooien
     const bron = g => (bronnen.push(g), g);
     const bx = bron(new THREE.BoxGeometry(1, 1, 1)), cy = bron(new THREE.CylinderGeometry(1, 1, 1, 12));
@@ -381,76 +355,23 @@
       telefoons.push({ sp, mat: sp.material, sx: sp.scale.x, sy: sp.scale.y, basis: rr(0.7, 1), flits: 0 });
     }
 
-    // --- silhouetten in de buitenste kringen: goedkoop, 4 instanced meshes (één per pose) ---
-    // soort: [rustpose, pose bij hoge energie]; pose 3 = telefoon omhoog (blijft omhoog)
-    const SOORTEN = [[0, 1], [0, 1], [0, 2], [2, 1], [3, 3]];
-    const sil = [], NS = [36, 22, 12][Z];
-    for (let poging = 0; sil.length < NS && poging < 700; poging++) {
-      const off = rr(1.55, 3.6), p = ringPunt(R() * RONDE, off);
+    // --- achtergrondpubliek in de buitenste kringen: 3D-menigte van club/publiek.js, kijkt naar de piramide ---
+    // rand van de neonkleur (piramide + lamp) vanuit het midden, tegenlicht van de muurvegen erachter
+    const plekken = [], NS = window.clubPubliek && clubPubliek.maak ? clubPubliek.aantal(48) : 0;
+    for (let poging = 0; plekken.length < NS && poging < 900; poging++) {
+      const off = rr(1.45, 3.7), p = ringPunt(R() * RONDE, off);
       if (Math.abs(p.x) > W / 2 - 0.45 || Math.abs(p.z) > D / 2 - 0.45) continue;
       if (Math.abs(p.x) < 1.7 && Math.abs(p.z) > D / 2 - 1.8) continue;  // deuren vrij
       if (routeAfstand(p) < 0.75 || afst(p, WACHT) < 1.1) continue;
-      if (sil.some(s => afst(s, p) < 0.52) || gekozen.some(f => afst(f, p) < 0.75)) continue;
-      const [p0, p1] = SOORTEN[Math.floor(R() * SOORTEN.length)], sh = SIL_H * rr(0.9, 1.08), licht = 1 - (off - 1.55) / 2.05 * 0.5;
-      sil.push({ x: p.x, z: p.z, face: Math.atan2(-p.x, -p.z) + rr(-0.3, 0.3), sh, sw: sh / 2, p0, p1, ph: R(), drempel: rr(0.5, 0.95), op: false,
-        kleur: new THREE.Color().setHSL((HUE + rr(-0.03, 0.03) + 1) % 1, 0.85, 0.42 * licht), slot: [-1, -1, -1, -1], tel: -1 });
+      if (plekken.some(s => afst(s, p) < 0.5) || gekozen.some(f => afst(f, p) < 0.72)) continue;
+      plekken.push({ x: p.x, z: p.z, face: Math.atan2(-p.x, -p.z) + rr(-0.3, 0.3) });
     }
-    const silMat = new THREE.MeshBasicMaterial({ map: tex('silhouet', 512, 256, tekenSilhouet), alphaTest: 0.5, side: THREE.DoubleSide });
-    const aantal = [0, 0, 0, 0];
-    let nTelSil = 0;
-    for (const s of sil) { for (const p of new Set([s.p0, s.p1])) s.slot[p] = aantal[p]++; if (s.p0 === 3) s.tel = nTelSil++; }
-    const NUL = new THREE.Matrix4().makeScale(0, 0, 0);
-    const silMesh = [0, 1, 2, 3].map(c => {
-      if (!aantal[c]) return null;
-      const geo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0), uv = geo.attributes.uv;
-      for (let i = 0; i < uv.count; i++) uv.setX(i, (c + uv.getX(i)) / 4);
-      const m = new THREE.InstancedMesh(geo, silMat, aantal[c]);
-      m.frustumCulled = false;
-      for (let i = 0; i < aantal[c]; i++) m.setMatrixAt(i, NUL);
-      G.add(m); return m;
-    });
-    for (const s of sil) for (let c = 0; c < 4; c++) if (s.slot[c] >= 0) silMesh[c].setColorAt(s.slot[c], s.kleur);
-    let telSil = null;
-    if (nTelSil) {
-      telSil = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.2, 0.3), additief(0xffffff, { map: telTex, side: THREE.DoubleSide }), nTelSil);
-      telSil.frustumCulled = false;
-      for (let i = 0; i < nTelSil; i++) { telSil.setMatrixAt(i, NUL); telSil.setColorAt(i, C.setRGB(0.8, 0.85, 1)); }
-      G.add(telSil);
-    }
-    const telFlits = new Float32Array(nTelSil), telBasis = Float32Array.from({ length: nTelSil }, () => rr(0.6, 1));
+    const publiek = NS ? clubPubliek.maak(G, { plekken, vast: true, rnd: R, telefoons: 0.16, licht: { x: 0, y: 2.4, z: 0 },
+      kleuren: { a: NEON.clone().lerp(new THREE.Color(0xffc890), 0.35), b: NEON, vul: NEON.clone().multiplyScalar(0.08) } }) : null;
 
     for (const g of bronnen) g.dispose();
 
     // --- elk beeld ---
-    const M4 = new THREE.Matrix4(), P = new THREE.Vector3(), P2 = new THREE.Vector3(), S = new THREE.Vector3(), EEN = new THREE.Vector3(1, 1, 1), Q = new THREE.Quaternion(), E = new THREE.Euler();
-    let vorigeTel = -1;
-    // silhouetten: dichtbij een kartonnen bord, steil van boven (totaal) een plat vlak: dan zijn ze weg (met speling tegen knipperen).
-    // Gerekend op de camera van het vorige beeld én het doel van cam() (bij een knip anders één beeld een reuzenbord)
-    const camNu = new THREE.Vector3(), camDoel = new THREE.Vector3();
-    let doelGeldig = false, silPos = 0, silEn = 0;
-    const teDicht = (s, c, m) => {  // ook: van opzij gezien (ze kijken naar de piramide) is een silhouet een dun streepje
-      const dx = c.x - s.x, dz = c.z - s.z, dh = Math.hypot(dx, dz), hoog = c.y - 1.0;
-      return dh < 3.8 + m || hoog / Math.max(dh, 0.1) > 0.55 - m * 0.25 || Math.abs(dx * Math.sin(s.face) + dz * Math.cos(s.face)) < (0.5 + m * 0.3) * dh;
-    };
-    function zetSil() {
-      for (const s of sil) {
-        const act = s.op ? s.p1 : s.p0, rust = s.op ? s.p0 : s.p1;
-        if (rust !== act) silMesh[rust].setMatrixAt(s.slot[rust], NUL);
-        const m = s.weg ? 0.35 : 0;
-        s.weg = teDicht(s, camNu, m) || (doelGeldig && teDicht(s, camDoel, m));
-        if (s.weg) { silMesh[act].setMatrixAt(s.slot[act], NUL); if (s.tel >= 0) telSil.setMatrixAt(s.tel, NUL); continue; }
-        const bob = 0.05 * Math.pow(Math.abs(Math.sin(Math.PI * (silPos + s.ph))), 2) * (0.6 + silEn);
-        Q.setFromEuler(E.set(0, s.face, 0.05 * Math.sin(Math.PI * (silPos * 0.5 + s.ph))));
-        P.set(s.x, bob, s.z);
-        silMesh[act].setMatrixAt(s.slot[act], M4.compose(P, Q, S.set(s.sw, s.sh, 1)));
-        if (s.tel >= 0) {
-          P2.set(TEL_X * s.sw, TEL_Y * s.sh, 0.04).applyQuaternion(Q).add(P);
-          telSil.setMatrixAt(s.tel, M4.compose(P2, Q, EEN));
-        }
-      }
-      for (const m of silMesh) if (m) m.instanceMatrix.needsUpdate = true;
-      if (telSil) telSil.instanceMatrix.needsUpdate = true;
-    }
     function update(dt, now) {
       const b = ctx.beat() || {}, pu = b.pulse || 0, bas = b.bas || 0, en = b.energy || 0, pos = b.pos || 0;
       dt = Math.min(dt || 0, 0.1);
@@ -488,22 +409,9 @@
         w.sp.material.color.setHSL(HUE, 0.9, 0.5).multiplyScalar(0.09 + 0.1 * pu);
         w.sp.material.rotation += dt * 0.02;
       }
-      // silhouetten: deinen op de tel; bij hoge energie gaan de handen omhoog (alleen op een nieuwe tel wisselen)
-      const tel = Math.floor(pos);
-      if (tel !== vorigeTel) { vorigeTel = tel; for (const s of sil) s.op = en > s.drempel; }
-      silMat.color.setScalar(0.75 + 0.5 * pu);
-      camNu.copy(camera.position); G.worldToLocal(camNu); doelGeldig = false; silPos = pos; silEn = en;
-      zetSil();
-      // telefoons: zacht flakkerend scherm, af en toe een flits
-      if (telSil) {
-        for (let i = 0; i < nTelSil; i++) {
-          if (telFlits[i] > 0) telFlits[i] -= dt; else if (Math.random() < dt * 0.12) telFlits[i] = 0.08;
-          const k = telFlits[i] > 0 ? 3.2 : telBasis[i] * (0.85 + 0.15 * Math.sin(now * 3 + i));
-          telSil.setColorAt(i, C.setRGB(0.8 * k, 0.86 * k, k));
-        }
-        telSil.instanceMatrix.needsUpdate = true;
-        telSil.instanceColor.needsUpdate = true;
-      }
+      // achtergrondpubliek: beweegt zelf op de muziek (shader); hier alleen het licht van de kelder (lamp klopt op de tel)
+      if (publiek) publiek.helder = 0.85 + 0.3 * pu;
+      // telefoons van de 3D-figuren: zacht flakkerend scherm, af en toe een flits
       for (const t of telefoons) {
         if (t.flits > 0) t.flits -= dt; else if (Math.random() < dt * 0.1) t.flits = 0.08;
         const k = t.flits > 0 ? 3 : t.basis * (0.85 + 0.15 * Math.sin(now * 2.5 + t.basis * 9));
@@ -584,17 +492,17 @@
       }
       uit.pos.copy(camP); G.localToWorld(uit.pos);
       uit.look.copy(camL); G.localToWorld(uit.look);
-      camDoel.copy(camP); doelGeldig = true; zetSil();
       return uit;
     }
 
     function opruimen() {
+      if (publiek) publiek.opruimen();
       for (const t of telefoons) { if (t.sp.parent) t.sp.parent.remove(t.sp); t.mat.dispose(); }
       telefoons.length = 0;
       telTex.dispose();
     }
 
-    return { maat: { w: W, d: D, h: H }, route: ROUTE.map(p => ({ x: p.x, z: p.z })), blijf: BLIJF, cam, update, opruimen };
+    return { maat: { w: W, d: D, h: H }, route: ROUTE.map(p => ({ x: p.x, z: p.z })), blijf: BLIJF, cam, update, opruimen, publiek };
   }
 
   doolhof.registreer('boiler', { gewicht: 1.5, maak });

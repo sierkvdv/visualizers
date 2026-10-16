@@ -112,15 +112,19 @@ function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } 
 
 // Kwaliteit: club/kwaliteit.js kiest hoog/midden/laag en zet KW; deze beginwaarden zijn 'hoog' (zoals altijd)
 const MOBIEL = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
-const KW = { stand: 'hoog', schaduw: 1, bol: 3, spiegel: true, imag: 3 };  // schaduw/bol/imag: om de hoeveel beelden (0 = nooit)
+const KW = { stand: 'hoog', schaduw: 1, bol: 3, spiegel: true, imag: 3, spiegelElke: 1, bolFiguren: true };  // schaduw/bol/imag/spiegelElke: om de hoeveel beelden (0 = nooit)
 
 // --- Scène ---
 // Telefoons: botstanden als uniforms i.p.v. een float-textuur per figuur. Die textuur gaat elke render opnieuw naar de GPU
 // (43 figuren x spiegel/bol = ~100 uploads per beeld); op iPhone-Safari is dat traag. three r128 kiest dit alleen bij het
 // aanmaken (vertexTextures), dus de context meldt dan even 0 vertex-textuureenheden. Antialias kan ook alleen hier.
+// Met nabewerking tekent de composer de zaal in eigen buffers en krijgt het canvas alleen het eindbeeld (FXAA zit in de grade):
+// dan geen MSAA, diepte of stencil op het canvas (scheelt de gpu geheugen en bandbreedte, beeld blijft gelijk).
+// high-performance: op een MacBook Pro 15" met twee gpu's de Radeon i.p.v. de Intel.
+const NABEWERKING = !!(THREE.EffectComposer && THREE.UnrealBloomPass);
 const renderer = (() => {
-  if (!MOBIEL) return new THREE.WebGLRenderer({ antialias: true });
-  const cv = document.createElement('canvas'), attrs = { alpha: false, depth: true, stencil: true, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' };
+  if (!MOBIEL) return new THREE.WebGLRenderer({ antialias: !NABEWERKING, depth: !NABEWERKING, stencil: !NABEWERKING, powerPreference: 'high-performance' });
+  const cv = document.createElement('canvas'), attrs = { alpha: false, depth: !NABEWERKING, stencil: !NABEWERKING, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' };
   const ctx = cv.getContext('webgl2', attrs) || cv.getContext('webgl', attrs);
   if (!ctx) return new THREE.WebGLRenderer({ antialias: false });
   const gp = ctx.getParameter;
@@ -138,7 +142,7 @@ scene.fog = new THREE.FogExp2(0x05030a, 0.021);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.2, 100);  // near niet lager: vloerlagen liggen millimeters uit elkaar
 
 let composer = null, bloom = null, grade = null, feedback = null;
-if (THREE.EffectComposer && THREE.UnrealBloomPass) {
+if (NABEWERKING) {
   composer = new THREE.EffectComposer(renderer);
   composer.addPass(new THREE.RenderPass(scene, camera));
   // Visuele feedback: het vorige beeld blijft, iets gezoomd en gedraaid, als spoor hangen. Ook het spiegeleffect zit hierin.
@@ -312,6 +316,7 @@ if (THREE.Reflector) {
      for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) base += texture2D(tDiffuse, ruv + vec2(float(i), float(j)) * 0.0045);
      base /= 25.0;`);
   mirror.material.needsUpdate = true;
+  mirror.getRenderTarget().texture.generateMipmaps = false;  // minFilter Linear: mipmaps worden nooit gebruikt, dus ook niet elk beeld maken
 }
 else mirror = new THREE.Mesh(new THREE.PlaneGeometry(ROOM * 2, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x08080c, roughness: 0.6 }));
 mirror.rotation.x = -Math.PI / 2;
@@ -430,11 +435,11 @@ const fd = new THREE.Vector3(), fn = new THREE.Vector3(), fu = new THREE.Vector3
 function updateFlecks(angle, bright) {
   for (let i = 0; i < FLECKS; i++) {
     fd.copy(fleckDir[i]).applyAxisAngle(yAxis, angle);
-    let t = 1e9;  // dichtstbijzijnde vlak van de zaal langs de straal
-    const hit = (dist, nx, ny, nz) => { if (dist > 0 && dist < t) { t = dist; fn.set(nx, ny, nz); } };
-    if (fd.x !== 0) hit(((fd.x > 0 ? ROOM : -ROOM) - ballPos.x) / fd.x, fd.x > 0 ? -1 : 1, 0, 0);
-    if (fd.z !== 0) hit(((fd.z > 0 ? ROOM : -ROOM) - ballPos.z) / fd.z, 0, 0, fd.z > 0 ? -1 : 1);
-    if (fd.y !== 0) hit(((fd.y > 0 ? CEIL : 0.03) - ballPos.y) / fd.y, 0, fd.y > 0 ? -1 : 1, 0);
+    // dichtstbijzijnde vlak van de zaal langs de straal (zonder hulpfunctie per vlekje: die gaf ~4 MB afval per seconde = vaker GC-haperingen)
+    let t = 1e9, d;
+    if (fd.x !== 0 && (d = ((fd.x > 0 ? ROOM : -ROOM) - ballPos.x) / fd.x) > 0 && d < t) { t = d; fn.set(fd.x > 0 ? -1 : 1, 0, 0); }
+    if (fd.z !== 0 && (d = ((fd.z > 0 ? ROOM : -ROOM) - ballPos.z) / fd.z) > 0 && d < t) { t = d; fn.set(0, 0, fd.z > 0 ? -1 : 1); }
+    if (fd.y !== 0 && (d = ((fd.y > 0 ? CEIL : 0.03) - ballPos.y) / fd.y) > 0 && d < t) { t = d; fn.set(0, fd.y > 0 ? -1 : 1, 0); }
     const cosI = Math.max(0.22, Math.abs(fd.dot(fn))), size = 0.045 + 0.011 * t;
     fu.copy(fd).addScaledVector(fn, -fd.dot(fn));  // richting waarin het vlekje uitrekt bij schuine inval
     if (fu.lengthSq() < 1e-6) fu.set(fn.y ? 1 : 0, 0, fn.y ? 0 : 1);
@@ -484,6 +489,7 @@ for (let i = 0; i < 4; i++) {
     light.shadow.bias = -0.0008;
     light.shadow.camera.near = 1;
     light.shadow.camera.far = 22;
+    light.shadow.autoUpdate = false;  // teken() kiest per beeld welke schaduwkaart vernieuwd wordt (KW.schaduw)
   }
   scene.add(light, light.target);
   const beam = makeBeam(1.5, 9.5);
@@ -2316,6 +2322,7 @@ function frame(nowMs) {
   // de eerste rAF-tijd kan net vóór `last` liggen; een negatieve dt zou beatPos negatief maken
   const now = nowMs / 1000, dt = Math.max(0, Math.min(0.1, (nowMs - last) / 1000));
   last = nowMs;
+  renderer.info.reset();  // losse renders in de hooks (ledwand, doolhof) krijgen een eigen render-frame: botten van dit beeld (zie teken)
   if (renderer.domElement.width !== Math.floor(innerWidth * PR) || renderer.domElement.height !== Math.floor(innerHeight * PR)) resize();  // venster veranderd zonder resize-event
   analyse(dt, now);
   const [bass, mid, treble] = bands.map(b => b.v);
@@ -2461,17 +2468,125 @@ function frame(nowMs) {
 
   updateCamera(now);
 
-  if (KW.schaduw && frameNo % KW.schaduw === 0) renderer.shadowMap.needsUpdate = true;  // hoog: elk beeld
-  // de bol weerspiegelt de zaal: elke derde frame (KW.bol) de rondom-opname verversen (zonder bol en spiegelvloer in beeld)
-  if (KW.bol && frameNo % KW.bol === 0) {
-    ball.visible = false; mirror.visible = false;
-    cubeCam.update(renderer, scene);
-    ball.visible = true; mirror.visible = KW.spiegel;
-  }
-  frameNo++;
-  if (composer) composer.render(); else renderer.render(scene, camera);
+  teken();
   meters.forEach((el, i) => el.style.height = (2 + bands[i].v * 22) + 'px');
   requestAnimationFrame(frame);
+}
+
+// --- Tekenen: in hoog hetzelfde beeld als altijd, alleen minder dubbel werk ---
+// - matrices één keer per beeld: three deed scene.updateMatrixWorld bij elke render-aanroep opnieuw (spiegel, bolzijden, hoofd: ~0,55 ms per keer)
+// - één 'render-frame' per beeld voor three (info.autoReset uit): botten (skeleton.update + float-textuur naar de gpu) en geometrie-controles
+//   één keer per beeld i.p.v. per pass (waren 114-161 uploads per beeld)
+// - bol-opname in stukjes: KW.bol = beelden per volle ronde van 6 zijden, dus 6/KW.bol zijden per beeld (hoog 3: 2 per beeld, elke zijde nog
+//   steeds elke 3 beelden vers, maar zonder het piekje van 6 renders in één beeld). Zaal 2 en wat ver weg staat (doolhof) gaan in de bol
+//   even uit: achter de voorwand of voorbij het verre vlak van de bol-camera, dus niet te zien. Figuren blijven erin (de paal, plassen en
+//   bekertjes spiegelen de bol-opname ook; zonder figuren scheelde het met de culling van club/optimaliseer.js nog maar ~0,2 ms per beeld).
+// - spiegel alleen als de vloer van zaal 1 in het kijkveld ligt, bol alleen met de camera in zaal 1 (anders ziet niemand ze); spiegel-opname
+//   als eigen render vóór het hoofdbeeld (zie spiegelOpname)
+// - schaduwkaarten per lamp om de beurt: KW.schaduw = om de hoeveel beelden per lamp (hoog 1 = elk beeld allebei)
+// - KW.spiegelElke: spiegel-opname om de hoeveel beelden (hoog 1); daartussen blijft de vorige liggen. KW.bolFiguren false: bol zonder figuren
+renderer.info.autoReset = false;
+const zicht = new THREE.Frustum(), zichtM = new THREE.Matrix4();
+const vloerDoos = new THREE.Box3(new THREE.Vector3(-ROOM, -0.05, -ROOM), new THREE.Vector3(ROOM, 0.1, ROOM));
+const schaduwLampen = spots.filter((p, i) => i % 2 === 0).map(p => p.light);
+let bolTegoed = 0, bolZijde = 0, spiegelTel = 0, lijstN = -1, lijstTel = 0;
+const bolUit = [], bolKaalUit = [], spiegelUit = [], was = [];
+// Lampen blijven in elke pass aan: een ander aantal lampen geeft three andere shaders (hercompileren / wisselen per pass).
+// Een groep met een lamp erin gaat dus niet als geheel uit, alleen de delen zonder lamp.
+function zonderLamp(o, uit) {
+  let lamp = false;
+  o.traverse(x => { if (x.isLight) lamp = true; });
+  if (!lamp) uit.push(o);
+  else if (!o.isLight) for (const c of o.children) zonderLamp(c, uit);
+  return uit;
+}
+// bol en spiegel: geen zaal 2 (achter de voorwand); bol ook niet wat verder dan 60 m staat (doolhof; verder dan het verre vlak van de
+// bol-camera). Vast decor blijft erin: dat voegt club/optimaliseer.js samen, en een verborgen deel haalt zo'n samenvoeging uit elkaar.
+// bolKaal (KW.bolFiguren false, midden): ook zonder figuren; scheelt vooral het doorlopen van alle botten per zijde.
+function lijsten() {
+  bolUit.length = 0; bolKaalUit.length = 0; spiegelUit.length = 0;
+  zonderLamp(zone2, spiegelUit);
+  for (const c of scene.children) {
+    if (c === zone2 || c.isLight || c.isSprite) continue;
+    if (Math.abs(c.position.x) > 60 || Math.abs(c.position.z) > 60) { zonderLamp(c, bolUit); continue; }
+    let fig = false;
+    c.traverse(o => { if (o.isSkinnedMesh) fig = true; });
+    if (fig) zonderLamp(c, bolKaalUit);
+  }
+  bolUit.push(...spiegelUit);
+  bolKaalUit.push(...bolUit);
+  lijstN = scene.children.length + zone2.children.length;
+}
+function bijLijsten() { if (scene.children.length + zone2.children.length !== lijstN ? lijstTel++ % 10 === 0 : lijstTel++ % 300 === 0) lijsten(); }
+function uitZetten(lijst) { for (let i = 0; i < lijst.length; i++) { was[i] = lijst[i].visible; lijst[i].visible = false; } }
+function terugZetten(lijst) { for (let i = 0; i < lijst.length; i++) lijst[i].visible = was[i]; }
+function bolOpname(zijden) {
+  bijLijsten();
+  const uit = KW.bolFiguren === false ? bolKaalUit : bolUit;
+  uitZetten(uit);
+  const bv = ball.visible, mv = mirror.visible, prev = renderer.getRenderTarget(), mip = envRT.texture.generateMipmaps;
+  ball.visible = false; mirror.visible = false;
+  try {
+    for (let k = 0; k < zijden; k++) {
+      envRT.texture.generateMipmaps = mip && bolZijde === 5;  // mipmaps één keer per ronde, na de laatste zijde (zoals cubeCam.update)
+      renderer.setRenderTarget(envRT, bolZijde);
+      renderer.render(scene, cubeCam.children[bolZijde]);
+      bolZijde = (bolZijde + 1) % 6;
+    }
+  } finally {
+    envRT.texture.generateMipmaps = mip;
+    renderer.setRenderTarget(prev);
+    ball.visible = bv; mirror.visible = mv;
+    terugZetten(uit);
+  }
+}
+// Spiegel-opname bovenaan in teken(), niet genest vanuit de hoofdrender (Reflector.onBeforeRender): three geeft elke render-diepte eigen
+// lampgegevens met een eigen versienummer, dus genest zocht elk belicht materiaal twee keer per beeld zijn shader opnieuw op (getProgram).
+const spiegelKern = mirror.isReflector ? mirror.onBeforeRender : null;
+if (spiegelKern) mirror.onBeforeRender = function () {};
+function spiegelOpname() {  // true als er deze keer een opname is gemaakt
+  if (!spiegelKern || !mirror.visible) return false;
+  if (KW.spiegelElke > 1 && spiegelTel++ % KW.spiegelElke) return false;  // tussendoor blijft de vorige opname liggen
+  bijLijsten();
+  if (!zone2.visible) spiegelKern.call(mirror, renderer, scene, camera);
+  else { uitZetten(spiegelUit); try { spiegelKern.call(mirror, renderer, scene, camera); } finally { terugZetten(spiegelUit); } }  // zaal 2 ligt achter de voorwand, nooit in de vloer te zien
+  return true;
+}
+function teken() {
+  renderer.info.reset();
+  scene.updateMatrixWorld();
+  camera.updateMatrixWorld();
+  scene.autoUpdate = false;  // alleen binnen dit blok: losse renders elders (ledwand, doolhof) werken hun matrices zelf bij
+  // spiegel, hoofdbeeld en bolzijden zijn samen één beeld: wie aan scene.onBefore/AfterRender hangt (club/optimaliseer.js) ziet één
+  // buitenste render en de losse renders hierbinnen als genest (daar doet hij zijn controles niet nog eens)
+  scene.onBeforeRender(renderer, scene, camera, null);
+  const mv = mirror.visible;
+  try {
+    zicht.setFromProjectionMatrix(zichtM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const p = camera.position, inZaal1 = Math.abs(p.x) < ROOM + 0.5 && Math.abs(p.z) < ROOM + 0.5;
+    if (mv && !zicht.intersectsBox(vloerDoos)) mirror.visible = false;
+    // schaduw: per lamp om de beurt; wil iemand anders meteen een nieuwe kaart (needsUpdate), dan allebei
+    const per = KW.schaduw, alles = renderer.shadowMap.needsUpdate;
+    schaduwLampen.forEach((l, i) => {
+      if (alles || (per && (frameNo + Math.floor(i * per / schaduwLampen.length)) % per === 0)) { l.shadow.needsUpdate = true; renderer.shadowMap.needsUpdate = true; }
+    });
+    if (per && frameNo % per === 0) renderer.shadowMap.needsUpdate = true;  // overige lampen met schaduw (autoUpdate)
+    frameNo++;
+    const spiegelNu = spiegelOpname();
+    if (composer) composer.render(); else renderer.render(scene, camera);
+    // bol: 6/KW.bol zijden per beeld, ook als de bol zelf niet in beeld is (robots, aliens, palen, leer en bekertjes spiegelen de opname ook);
+    // buiten zaal 1 niet (daar gebruikt niets hem). Spiegel niet elk beeld (midden): de bol in de beelden zonder spiegel-opname, dan kost
+    // elk beeld ongeveer even veel.
+    if (KW.bol && inZaal1) {
+      bolTegoed = Math.min(6, bolTegoed + 6 / KW.bol);
+      const n = Math.floor(bolTegoed);
+      if (n > 0 && !(spiegelNu && KW.spiegelElke > 1)) { bolTegoed -= n; bolOpname(n); }
+    }
+  } finally {
+    scene.autoUpdate = true;
+    mirror.visible = mv;
+    scene.onAfterRender(renderer, scene, camera);
+  }
 }
 
 // --- UI ---
@@ -2546,6 +2661,8 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="club/rommel.js"></script>
 <script src="club/dansgevoel.js"></script>
 <script src="club/kwaliteit.js"></script>
+<script src="club/optimaliseer.js"></script>
+<script src="club/publiek.js"></script>
 <script src="doolhof/kern.js"></script>
 <script src="doolhof/gangen.js"></script>
 <script src="doolhof/boiler.js"></script>
@@ -2553,6 +2670,7 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="doolhof/onderdelen.js"></script>
 <script src="doolhof/stijl.js"></script>
 <script src="club/showregie.js"></script>
+<script src="club/voorwarm.js"></script>
 <script src="club/diag.js"></script>
 </body>
 </html>
