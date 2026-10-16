@@ -1,21 +1,307 @@
-// --- Doolhof-kamer 'boiler': Boiler Room-kelder met een neonpiramide in het midden ---
-// Rauwe bakstenen kelder met kale buizen en kabels; in het midden een glazen piramide met gloeiende randen en scanringen,
-// daarin de dj op een verhoging achter twee draaitafels en een mixer, één kale hete lamp boven zijn hoofd.
-// Publiek in een kring van 360 graden: 3D-figuren vooraan, daarachter een 3D-menigte van club/publiek.js (één draw call,
-// deint op de muziek, handen omhoog in de drop, telefoons die oplichten en flitsen). Camera: laag over de schouder van de dj de kring in, af en toe een totaal van boven.
-// Licht: één lamp boven de dj (+ in hoog een gekleurd tegenlicht); al het andere is onverlicht (basic/additief).
+// --- Doolhof-kamer 'boiler': Boiler Room-kelder met een neonpiramide in het midden, als lichtshow ---
+// Donkere kelder (bakstenen en beton zakken weg in het zwart); de piramide is de enige grote lichtbron: lichtlijnen langs de ribben
+// die op de tel van de voet naar de top lopen, bundels die van de top omhoog en over het publiek zwaaien, scanringen en een gloeiende top.
+// Daarin de dj op een verhoging achter twee draaitafels, één kale hete lamp boven zijn hoofd. Publiek in een kring van 360 graden:
+// 3D-figuren vooraan, daarachter een 3D-menigte van club/publiek.js (silhouetten met een rand van piramidelicht), telefoons als
+// lichtpuntjes (meer in de break), strobe in de drop. Camera: over de schouder van de dj de kring in, vanuit het publiek tegen de
+// piramide in (silhouetten tegen de bundels), af en toe een totaal.
+// Bovenaan staat het gedeelde lichtshow-gereedschap (doolhof.lichtshow), ook gebruikt door mix.js (laadt na dit bestand).
 (() => {
   if (!window.doolhof) { console.warn('boiler: window.doolhof ontbreekt'); return; }
   const RONDE = Math.PI * 2;
-  const W = 14, D = 14, H = 4.5;                 // kamer: vloer x/z -7..7, plafond 4,5
+
+  // ======================= Lichtshow-gereedschap (doolhof.lichtshow), gedeeld met mix.js =======================
+  // Diepzwart als basis; licht is de hoofdrol in 2-3 verzadigde kleuren die per maat/sectie wisselen, wit alleen als flits.
+  // Geen echte lampen: elke soort licht is één draw call (InstancedMesh of Points) en vloer/muren krijgen het showvlak-materiaal
+  // (textuur in het donker, opgelicht waar een bundel raakt en door de strobe). Testen: doolhof.lichtshow.forceer = { stand, opb }.
+  const LS = window.doolhof.lichtshow = { forceer: null };
+  const klem01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
+  const getal = v => (typeof v === 'number' && isFinite(v) ? v : typeof v === 'boolean' ? (v ? 1 : 0) : NaN);
+  const houdVast = x => { x.userData = x.userData || {}; x.userData.doolhofHouden = true; return x; };  // gedeeld: de kern gooit het niet weg
+
+  // --- stand van de show: één keer per beeld (alle kamers lezen hetzelfde object). Bron: doolhof.show (kern) als die er is,
+  // anders window.clubRegie + de tel. stand groove|break|opbouw|drop, k = tellen sinds het begin van de sectie, opb 0..1,
+  // drop 1 -> 0 over 16 tellen, knal = de klap van de drop, flits = strobe nu (0..1), niv = lichtniveau, tempo = snelheid van de bewegingen ---
+  const ST = { stand: 'groove', k: 0, opb: 0, drop: 0, knal: 0, flits: 0, donker: 0, niv: 0.8, tempo: 1, pos: 0, tel: 0, fase: 0, kick: 0, bas: 0, mid: 0, hoog: 0, en: 0, kleurTel: 0, wissel: false, dPos: 0 };
+  let stVorig = '', stSinds = 0, stPos = NaN, stKleur = -1;
+  LS.stand = b => {
+    b = b || {};
+    const pos = +b.pos || 0;
+    if (pos === stPos) return ST;  // al bijgewerkt dit beeld
+    ST.dPos = isFinite(stPos) ? Math.max(0, Math.min(1, pos - stPos)) : 0; stPos = pos;
+    const R = window.clubRegie || {}, B = window.doolhof.show || null, F = LS.forceer;
+    let stand = (F && F.stand) || (B && typeof B.stand === 'string' && B.stand) || R.stand || 'groove';
+    if (stand !== 'break' && stand !== 'opbouw' && stand !== 'drop') stand = 'groove';
+    if (stand !== stVorig) {
+      stVorig = stand;
+      stSinds = !F && stand === 'drop' && R.stand === 'drop' && R.dropBeat >= 0 ? R.dropBeat : !F && stand === R.stand && isFinite(R.sinds) ? R.sinds : pos;
+      if (stSinds > pos) stSinds = pos;
+    }
+    const k = pos - stSinds, fase = pos - Math.floor(pos), en = b.energy || 0;
+    let opb = 0, drop = 0, knal = 0;
+    if (stand === 'opbouw') {
+      const bo = B ? getal(B.opbouw) : NaN;
+      opb = klem01(F && F.opb != null ? F.opb : isFinite(bo) ? bo : Math.max(k, R.opbouwTel || 0) / 16);
+    }
+    if (stand === 'drop') {
+      const bd = B ? getal(B.drop) : NaN;
+      drop = klem01(isFinite(bd) && !F ? bd : 1 - k / 16);
+      knal = Math.exp(-k * 2.2);
+    }
+    // eigen strobe (zonder show-bus, of bij forceer): opbouw = aanloop (1, 2, 4 flitsen per tel), drop = klap + de eerste 4 tellen
+    // elke tel, daarna op de 1 van de maat; groove = een kort salvo aan het eind van elke 8 maten als er energie is.
+    let fl = 0;
+    if (stand === 'opbouw') {
+      const n = opb < 0.5 ? 1 : opb < 0.8 ? 2 : 4;
+      fl = (pos * n) % 1 < 0.26 ? (opb < 0.5 ? 0.5 * opb : 0.45 + 0.55 * opb) : 0;
+    } else if (stand === 'drop') {
+      if (k < 4) fl = fase < 0.16 ? 1 : 0;
+      else if (k < 16 && Math.floor(pos) % 4 === 0) fl = fase < 0.1 ? 0.75 : 0;
+      fl = Math.max(fl, knal);
+    } else if (stand === 'groove' && en > 0.55 && Math.floor(pos) % 32 === 31) fl = (pos * 4) % 1 < 0.25 ? 0.6 : 0;
+    // de kern (show-bus) bepaalt de strobe als hij die doorgeeft: alle kamers en gangen flitsen tegelijk (en nooit met de strobe uit)
+    const bf = B ? getal(B.flits) : NaN;
+    if (isFinite(bf) && !F) fl = klem01(bf);
+    else if (!F && typeof S !== 'undefined' && S && S.strobe === 'uit') fl = 0;
+    // blackout van de bus: de stand zit al in niv (break ~0,8 donker); alleen wat daar bovenop komt dimt nog verder
+    const bb = B ? getal(B.blackout) : NaN, verwacht = stand === 'break' ? 0.8 : stand === 'opbouw' ? 0.8 * (1 - opb) : 0;
+    const donker = isFinite(bb) && !F ? klem01(bb - verwacht) : 0;
+    const niv = stand === 'break' ? 0.3 : stand === 'opbouw' ? 0.35 + 0.65 * opb : stand === 'drop' ? 1 + 0.35 * drop : 0.72 + 0.28 * en;
+    Object.assign(ST, { stand, k, opb, drop, knal, flits: fl * (1 - donker), donker, niv: niv * (1 - donker), pos, tel: Math.floor(pos), fase,
+      tempo: stand === 'break' ? 0.3 : stand === 'opbouw' ? 0.6 + 1.6 * opb : stand === 'drop' ? 1.7 : 1,
+      kick: b.pulse || 0, bas: b.bas || 0, mid: b.mid || 0, hoog: b.hoog || 0, en });
+    // kleurwissel: groove per maat, opbouw steeds sneller, drop elke tel, break per 4 maten
+    const kt = stand === 'drop' ? Math.floor(pos) : stand === 'opbouw' ? Math.floor(pos / (opb < 0.5 ? 4 : opb < 0.85 ? 2 : 1)) : stand === 'break' ? Math.floor(pos / 16) : Math.floor(pos / 4);
+    ST.wissel = kt !== stKleur; stKleur = kt; ST.kleurTel = kt;
+    return ST;
+  };
+  // kleur i van het palet van de kamer op dit moment (draait mee met kleurTel)
+  LS.kleur = (pal, i) => { const n = pal.length; return pal[(((ST.kleurTel + (i | 0)) % n) + n) % n]; };
+
+  // --- gedeelde texturen en vormen ---
+  let gloedDoek = null;
+  const gloedTex = houdVast(new THREE.Texture());
+  LS.gloed = () => {  // zachte stip met een hete kern (punten, flares)
+    if (!gloedDoek) {
+      gloedDoek = document.createElement('canvas'); gloedDoek.width = gloedDoek.height = 64;
+      const g = gloedDoek.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.12, 'rgba(255,255,255,0.85)'); gr.addColorStop(0.35, 'rgba(255,255,255,0.22)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+      gloedTex.image = gloedDoek; gloedTex.needsUpdate = true;
+    }
+    return gloedTex;
+  };
+  const witTex = houdVast(new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)); witTex.needsUpdate = true;
+  // bundel: afgeknotte kegel langs +z van 0 (bron, 6% van de eindbreedte) tot 1; laser/lijn: balkje langs +z van 0 tot 1
+  const bundelGeo = houdVast((() => { const g = new THREE.CylinderGeometry(0.06, 1, 1, 18, 1, true); g.translate(0, -0.5, 0); g.rotateX(-Math.PI / 2); return g; })());
+  const lijnGeo = houdVast(new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5));
+  const ZAS = new THREE.Vector3(0, 0, 1), lsM = new THREE.Matrix4(), lsQ = new THREE.Quaternion(), lsS = new THREE.Vector3(), lsC = new THREE.Color(), NUL = new THREE.Matrix4().makeScale(0, 0, 0);
+
+  // --- bundels: volumetrische lichtkegels (zachte randen, fel bij de bron, uitdovend), één InstancedMesh, kleur per bundel (mag > 1:
+  // dan wordt de kern bij de bron wit-heet) ---
+  const BUNDEL_VS = `
+    uniform float uTijd; varying vec3 vK, vN, vV; varying float vL, vA;
+    void main() {
+      vec4 p = vec4(position, 1.0); mat3 m = mat3(1.0);
+      #ifdef USE_INSTANCING
+        p = instanceMatrix * p; m = mat3(instanceMatrix);
+      #endif
+      vec3 s2 = vec3(dot(m[0], m[0]), dot(m[1], m[1]), dot(m[2], m[2])) + 1e-6;
+      vec4 mv = modelViewMatrix * p;
+      vN = normalize(normalMatrix * (m * (normal / s2))); vV = normalize(-mv.xyz);
+      vL = position.z; vA = uv.x;
+      #ifdef USE_INSTANCING_COLOR
+        vK = instanceColor;
+      #else
+        vK = vec3(1.0);
+      #endif
+      gl_Position = projectionMatrix * mv;
+    }`;
+  const BUNDEL_FS = `
+    uniform float uTijd, uSterk; varying vec3 vK, vN, vV; varying float vL, vA;
+    void main() {
+      float rand = pow(abs(dot(normalize(vN), normalize(vV))), 1.3);
+      float lengte = pow(1.0 - vL, 1.7) * 0.92 + 0.08 * (1.0 - vL);
+      float stof = 0.8 + 0.2 * sin(vA * 69.1 + uTijd * 1.3 + vL * 5.0) * sin(vA * 23.7 - uTijd * 0.7);
+      vec3 c = vK * (rand * lengte * stof * uSterk);
+      c += vec3(dot(c, vec3(0.33))) * 0.8 * pow(1.0 - vL, 12.0);  // hete kern bij de lens
+      gl_FragColor = vec4(c, 1.0);
+    }`;
+  LS.bundels = (parent, n, sterk = 0.65) => {
+    const mat = new THREE.ShaderMaterial({ uniforms: { uTijd: { value: 0 }, uSterk: { value: sterk } }, vertexShader: BUNDEL_VS, fragmentShader: BUNDEL_FS,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    const mesh = new THREE.InstancedMesh(bundelGeo, mat, Math.max(1, n));
+    for (let i = 0; i < mesh.count; i++) { mesh.setMatrixAt(i, NUL); mesh.setColorAt(i, lsC.setRGB(0, 0, 0)); }
+    mesh.frustumCulled = false; mesh.renderOrder = 6; parent.add(mesh);
+    return {
+      mesh, mat, n,
+      // bundel i: bron p, richting dir (eenheid), lengte, straal aan het eind, kleur x k
+      zet(i, p, dir, len, rad, kleur, k) {
+        if (i >= n) return;
+        if (!(k > 0.002) || !(len > 0.01)) { mesh.setMatrixAt(i, NUL); return; }
+        lsM.compose(p, lsQ.setFromUnitVectors(ZAS, dir), lsS.set(rad, rad, len)); mesh.setMatrixAt(i, lsM);
+        mesh.setColorAt(i, lsC.copy(kleur).multiplyScalar(k));
+      },
+      uit(i) { if (i < n) mesh.setMatrixAt(i, NUL); },
+      klaar(t) { mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true; mat.uniforms.uTijd.value = t || 0; },
+    };
+  };
+  // --- lijnen: lasers en ledlijnen (kern + zachte gloed eromheen), één InstancedMesh ---
+  LS.lijnen = (parent, n, gloed = true, gloedMaat = 6, wit = 0.25) => {  // wit: hoeveel de kern naar wit trekt (laser ja, ledstrip nauwelijks)
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const tot = Math.max(1, n * (gloed ? 2 : 1)), mesh = new THREE.InstancedMesh(lijnGeo, mat, tot);
+    for (let i = 0; i < tot; i++) { mesh.setMatrixAt(i, NUL); mesh.setColorAt(i, lsC.setRGB(0, 0, 0)); }
+    mesh.frustumCulled = false; mesh.renderOrder = 7; parent.add(mesh);
+    return {
+      mesh, mat, n,
+      zet(i, p, dir, len, kleur, k, dik = 0.014) {
+        if (i >= n) return;
+        if (!(k > 0.002) || !(len > 0.01)) { mesh.setMatrixAt(i, NUL); if (gloed) mesh.setMatrixAt(n + i, NUL); return; }
+        lsQ.setFromUnitVectors(ZAS, dir);
+        lsM.compose(p, lsQ, lsS.set(dik, dik, len)); mesh.setMatrixAt(i, lsM);
+        mesh.setColorAt(i, lsC.copy(kleur).multiplyScalar(k).addScalar(wit * k));  // kern iets witter
+        if (gloed) { lsM.compose(p, lsQ, lsS.set(dik * gloedMaat, dik * gloedMaat, len)); mesh.setMatrixAt(n + i, lsM); mesh.setColorAt(n + i, lsC.copy(kleur).multiplyScalar(0.16 * k)); }
+      },
+      uit(i) { if (i < n) { mesh.setMatrixAt(i, NUL); if (gloed) mesh.setMatrixAt(n + i, NUL); } },
+      klaar() { mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true; },
+    };
+  };
+  // --- punten: lenzen, flares, ledpixels, telefoons (Points met kleur per punt; zwart = uit) ---
+  LS.punten = (parent, n, maat, map) => {
+    const pos = new Float32Array(n * 3), kl = new Float32Array(n * 3), geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(kl, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: maat, map: map || LS.gloed(), vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    pts.frustumCulled = false; pts.renderOrder = 8; parent.add(pts);
+    return {
+      pts, n, pos,
+      zet(i, x, y, z, kleur, k) { if (i >= n) return; pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z; kl[i * 3] = kleur.r * k; kl[i * 3 + 1] = kleur.g * k; kl[i * 3 + 2] = kleur.b * k; },
+      plek(i, x, y, z) { pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z; },
+      kleur(i, kleur, k) { kl[i * 3] = kleur.r * k; kl[i * 3 + 1] = kleur.g * k; kl[i * 3 + 2] = kleur.b * k; },
+      klaar() { geo.attributes.position.needsUpdate = true; geo.attributes.color.needsUpdate = true; },
+    };
+  };
+
+  // --- showvlak: vloer, muren en plafond in het donker; licht alleen waar een lichtvlek valt (bundel die raakt, lamp, vuur) en bij
+  // een flits. Lichtvlekken in kamermaten (spots.zet), de shader rekent in wereldmaten. Alle vlakken van een kamer delen de uniforms ---
+  const VLAK_VS = `uniform vec2 uRep; varying vec2 vUv; varying vec3 vW;
+    void main() { vUv = uv * uRep; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`;
+  const VLAK_FS = n => `#define NS ${n}
+    uniform sampler2D map; uniform vec3 uKleur, uVul, uFlits; uniform vec4 uSpot[NS]; uniform vec3 uSpotK[NS]; varying vec2 vUv; varying vec3 vW;
+    void main() {
+      vec3 t = texture2D(map, vUv).rgb * uKleur, l = uVul + uFlits;
+      for (int i = 0; i < NS; i++) {
+        vec3 d = vW - uSpot[i].xyz; float f = max(0.0, 1.0 - dot(d, d) / (uSpot[i].w * uSpot[i].w + 1e-4));
+        l += uSpotK[i] * (f * f + 1.5 * pow(f, 10.0));
+      }
+      gl_FragColor = vec4(t * l, 1.0);
+    }`;
+  LS.spots = (ctx, n) => {
+    n = n || (ctx.zwaar === 2 ? 4 : 8);
+    const P = Array.from({ length: n }, () => new THREE.Vector4(0, -999, 0, 0.01)), K = Array.from({ length: n }, () => new THREE.Vector3());
+    const U = { uSpot: { value: P }, uSpotK: { value: K }, uVul: { value: new THREE.Vector3(0.015, 0.015, 0.018) }, uFlits: { value: new THREE.Vector3() } };
+    const g = ctx.groep, v = new THREE.Vector3(), fs = VLAK_FS(n);
+    let i0 = 0;
+    return {
+      n, U,
+      begin() { i0 = 0; for (const k of K) k.set(0, 0, 0); g.updateWorldMatrix(true, false); },
+      zet(x, y, z, r, kleur, k) {  // lichtvlek: midden (kamermaten), straal, kleur x k
+        if (i0 >= n || !(k > 0.003)) return;
+        v.set(x, y, z).applyMatrix4(g.matrixWorld); P[i0].set(v.x, v.y, v.z, r); K[i0].set(kleur.r * k, kleur.g * k, kleur.b * k); i0++;
+      },
+      vul(kleur, k) { U.uVul.value.set(0.006 + kleur.r * k, 0.006 + kleur.g * k, 0.008 + kleur.b * k); },  // heel zacht gekleurd strooilicht
+      flits(kleur, k) { U.uFlits.value.set(kleur.r * k, kleur.g * k, kleur.b * k); },
+      // materiaal voor een vlak: textuur (herhaling uit map.repeat), tint
+      mat(map, kleur) {
+        const t = map || witTex;
+        return new THREE.ShaderMaterial({ uniforms: { map: { value: t }, uRep: { value: t.repeat }, uKleur: { value: new THREE.Color(kleur == null ? 0xffffff : kleur) },
+          uSpot: U.uSpot, uSpotK: U.uSpotK, uVul: U.uVul, uFlits: U.uFlits }, vertexShader: VLAK_VS, fragmentShader: fs, side: THREE.DoubleSide });
+      },
+    };
+  };
+
+  // afstand van o langs v tot de binnenkant van een kamer (w x d x h, vloer op 0)
+  LS.raak = (o, v, w, d, h) => {
+    const e = 0.03; let t = 60;
+    if (v.x > 1e-5) t = Math.min(t, (w / 2 - e - o.x) / v.x); else if (v.x < -1e-5) t = Math.min(t, (-w / 2 + e - o.x) / v.x);
+    if (v.y > 1e-5) t = Math.min(t, (h - e - o.y) / v.y); else if (v.y < -1e-5) t = Math.min(t, (e - o.y) / v.y);
+    if (v.z > 1e-5) t = Math.min(t, (d / 2 - e - o.z) / v.z); else if (v.z < -1e-5) t = Math.min(t, (-d / 2 + e - o.z) / v.z);
+    return Math.max(0.05, t);
+  };
+  // camera in kamermaten (vorig beeld)
+  LS.camLokaal = (ctx, out) => { out.copy(camera.position); ctx.groep.updateWorldMatrix(true, false); return ctx.groep.worldToLocal(out); };
+
+  // --- moving heads: koppen op vaste plekken die op de tel van formatie wisselen; zet bundels, lenzen (punten) en de lichtvlekken
+  // waar ze raken. o: { bundels, spots, punten, maat {w,d,h}, plekken [[x,y,z]], focus {x,y,z}, pal [Color], spreid (rad), patronen,
+  // eerste (index in bundels/punten), vlek (sterkte van de lichtvlek), omhoog (staan op de vloer: bundels omhoog) } ---
+  const PATRONEN = ['waaier', 'kruis', 'zwaai', 'cirkel', 'midden', 'publiek'];
+  LS.koppen = (ctx, o) => {
+    const n = o.plekken.length, M = o.maat, i0 = o.eerste || 0, pal = o.pal, spreid = o.spreid || 0.06;
+    const pat = (o.patronen || PATRONEN).filter(p => PATRONEN.includes(p) || p === 'omhoog');
+    const patG = pat.filter(p => p !== 'publiek').length ? pat.filter(p => p !== 'publiek') : ['waaier'];  // 'publiek' alleen op de klap van de drop
+    const kop = o.plekken.map(([x, y, z], i) => ({ p: new THREE.Vector3(x, y, z), dir: new THREE.Vector3(0, -1, 0), doel: new THREE.Vector3(), i }));
+    const cam = new THREE.Vector3(), T = new THREE.Vector3(), eind = new THREE.Vector3(), focus = new THREE.Vector3();
+    let ph = Math.random() * 6.28, patroon = pat[0], patVorig = '', camT = -1;
+    const kies = s => {
+      if (s.stand === 'break') return 'midden';
+      if (s.stand === 'opbouw') return s.opb < 0.55 ? 'zwaai' : 'midden';
+      if (s.stand === 'drop') return s.k < 4 ? (pat.includes('publiek') ? 'publiek' : 'waaier') : patG[Math.floor(s.pos / 4) % patG.length];
+      return patG[Math.floor(s.pos / 8) % patG.length];
+    };
+    return {
+      kop,
+      update(s, dt, now) {
+        patroon = kies(s);
+        if (patroon !== patVorig) { patVorig = patroon; }
+        ph += s.dPos * Math.PI / 4 * s.tempo;  // een hele zwaai per 2 maten (groove), sneller in opbouw/drop
+        if (patroon === 'publiek' && now - camT > 0.25) { LS.camLokaal(ctx, cam); camT = now; }
+        if (o.focus) focus.set(o.focus.x, o.focus.y || 0, o.focus.z);
+        const snel = s.stand === 'drop' ? 10 : s.stand === 'break' ? 1.2 : s.stand === 'opbouw' ? 3 + 6 * s.opb : 4;
+        const kBreak = Math.floor(s.pos / 16) % n;
+        for (const h of kop) {
+          const i = h.i, u = n > 1 ? i / (n - 1) - 0.5 : 0;
+          // doelpunt per patroon (kamermaten)
+          switch (patroon) {
+            case 'waaier': T.set(u * M.w * 0.9 * (0.75 + 0.25 * Math.sin(ph)), o.omhoog ? M.h : 0, (o.omhoog ? h.p.z : 0) + M.d * 0.3 * Math.sin(ph * 0.5 + u)); break;
+            case 'kruis': T.set(-h.p.x * 0.9, o.omhoog ? M.h : 0, -h.p.z * 0.5 + M.d * 0.25 * Math.sin(ph + i)); break;
+            case 'zwaai': T.set(h.p.x + Math.sin(ph) * M.w * 0.45, o.omhoog ? M.h : 0, h.p.z + Math.cos(ph * 0.7) * M.d * 0.2); break;
+            case 'cirkel': { const a = ph * 1.5 + i * 6.283 / n; T.set(focus.x + Math.cos(a) * 2.6, o.omhoog ? M.h : 0, focus.z + Math.sin(a) * 2.6); break; }
+            case 'publiek': T.set(cam.x + (i % 2 ? 1 : -1) * (0.9 + 1.4 * Math.abs(u)), cam.y + 0.8 + 0.3 * Math.sin(ph * 2 + i), cam.z); break;  // vlak langs de camera: de bundels komen op je af
+            case 'omhoog': T.set(h.p.x + Math.sin(ph + i) * 2.5, M.h, h.p.z + Math.cos(ph * 0.8 + i) * 2.5); break;
+            default: T.set(focus.x + 0.35 * Math.sin(ph + i * 2), focus.y || 0, focus.z + 0.35 * Math.cos(ph + i * 2));  // midden
+          }
+          h.doel.subVectors(T, h.p); if (h.doel.lengthSq() < 1e-4) h.doel.set(0, -1, 0); h.doel.normalize();
+          h.dir.lerp(h.doel, 1 - Math.exp(-snel * dt)).normalize();
+          // sterkte en kleur per stand
+          let k, kl;
+          if (s.stand === 'break') { k = i === kBreak ? 0.5 + 0.15 * Math.sin(now * 0.9) : 0; kl = pal[pal.length - 1]; }
+          else if (s.stand === 'opbouw') {
+            const loop = Math.floor(s.pos * (s.opb < 0.5 ? 1 : 2)) % n;  // looplicht: één kop per tel, later twee per tel
+            k = (s.opb < 0.7 ? (i === loop ? 1 : 0.2) : 1) * (0.35 + 0.75 * s.opb); kl = LS.kleur(pal, i % 2);
+          } else if (s.stand === 'drop') { k = (1.15 + 0.8 * s.knal) * (s.k < 4 ? 0.45 + 0.55 * Math.exp(-s.fase * 5) : 0.8 + 0.3 * s.kick); kl = LS.kleur(pal, i); }
+          else { k = (0.7 + 0.4 * (i % 2 ? s.kick : 1 - s.fase)) * (0.75 + 0.25 * s.en); kl = LS.kleur(pal, i % 2); }
+          k *= o.sterk || 1;
+          if (s.flits > 0.5) { kl = WIT_SHOW; k = Math.max(k, 1.4 * s.flits); }
+          const len = LS.raak(h.p, h.dir, M.w, M.d, M.h), rad = 0.05 + len * spreid;
+          o.bundels.zet(i0 + i, h.p, h.dir, len, rad, kl, k);
+          if (o.punten) o.punten.zet(i0 + i, h.p.x, h.p.y, h.p.z, kl, Math.min(2.5, 0.4 + 1.4 * k));
+          if (o.spots && k > 0.02) { eind.copy(h.p).addScaledVector(h.dir, len); o.spots.zet(eind.x, eind.y, eind.z, rad * 1.5 + 0.35, kl, (o.vlek || 0.55) * Math.min(1.4, k)); }
+        }
+      },
+    };
+  };
+  const WIT_SHOW = new THREE.Color(1, 1, 1);
+  LS.wit = WIT_SHOW;
+
+  // ======================= de boiler-kamer =======================
+  const W = 14, D = 14, H = 6.2;                 // kamer: vloer x/z -7..7, plafond 6,2 (ruimte voor de bundels boven het publiek)
   const B = 2.6, PH = 4.0;                       // piramide: halve basis (5,2 m breed), hoogte
   const DAIS = 0.3, DJZ = 0.15, TZ = -0.45;      // verhoging, plek van de dj (kijkt naar -z), midden van de tafel
   const LAMP_Y = 3.1;                            // kale lamp boven de dj, hangt aan de top
-  const BLIJF = 20, T_IN = 2.8, CYCLUS = 11.5, SCHOUDER = 8;  // camera: binnenkomst, dan steeds 8 s schouder + 3,5 s totaal
+  // camera: binnenkomst, dan steeds 6,5 s schouder + 5,5 s tegenlicht (vanuit het publiek) + 3,5 s totaal
+  const BLIJF = 20, T_IN = 2.8, SCHOUDER = 6.5, TEGEN = 5.5, CYCLUS = 15.5;
   // looppad: ingang -> links om de piramide door het publiek -> uitgang; het middelste punt is de wachtplek
   const ROUTE = [[0, -7], [0, -6.2], [-2, -5.4], [-4.4, -3.3], [-4.7, 0], [-4.4, 3.3], [-2, 5.4], [0, 6.2], [0, 7]].map(([x, z]) => ({ x, z }));
   const WACHT = ROUTE[4];
-  const Z1 = new THREE.Vector3(0, 0, 1);
 
   // --- gedeelde doeken: één keer tekenen, per kamer een eigen texture (die mag de kern opruimen) ---
   const doeken = {};
@@ -76,10 +362,6 @@
     gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = gr; g.fillRect(0, 0, w, h);
   };
-  const tekenBundel = (g, w, h) => {
-    const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = gr; g.fillRect(0, 0, w, h);
-  };
   // glas: onderin iets voller, met scanlijnen
   const tekenGlas = (g, w, h) => {
     const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, 'rgba(255,255,255,0.06)'); gr.addColorStop(1, 'rgba(255,255,255,0.3)');
@@ -101,12 +383,6 @@
   // --- geometrie samenvoegen: veel statische stukjes in één draw call ---
   const _p = new THREE.Vector3(), _s = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
   const mat4 = (x, y, z, sx, sy, sz, rx = 0, ry = 0, rz = 0) => new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz)), _s.set(sx, sy, sz));
-  // balk van a naar b (eenheidsdoos langs z uitgerekt)
-  function staaf(a, b, dik) {
-    const v = _p.subVectors(b, a), len = v.length();
-    _q.setFromUnitVectors(Z1, v.divideScalar(len));
-    return new THREE.Matrix4().compose(_s.addVectors(a, b).multiplyScalar(0.5), _q, new THREE.Vector3(dik, dik, len));
-  }
   function samen(delen, metKleur) {  // delen: [[geometrie, Matrix4, kleur?], ...]
     const pos = [], nor = [], uv = [], kl = [];
     const nm = new THREE.Matrix3(), v = new THREE.Vector3(), c = new THREE.Color();
@@ -157,14 +433,18 @@
     // kleur van deze kelder: meestal oranje, soms rood, roze of (zelden) cyaan
     const hr = R(), HUE = hr < 0.5 ? 0.065 : hr < 0.75 ? 0.0 : hr < 0.9 ? 0.93 : 0.53;
     const NEON = new THREE.Color().setHSL(HUE, 1, 0.55), neonCss = '#' + NEON.getHexString();
+    // palet: de kelderkleur, een felle tegenkleur en een diepe kleur voor de break
+    const [ACC, DIEP] = HUE === 0.065 ? [0.93, 0.62] : HUE === 0.0 ? [0.53, 0.76] : HUE === 0.93 ? [0.5, 0.7] : [0.93, 0.67];
+    const PAL = [NEON.clone(), new THREE.Color().setHSL(ACC, 1, 0.55), new THREE.Color().setHSL(DIEP, 1, 0.5)];
     const bronnen = [];  // losse bron-geometrieën: na het samenvoegen weggooien
     const bron = g => (bronnen.push(g), g);
     const bx = bron(new THREE.BoxGeometry(1, 1, 1)), cy = bron(new THREE.CylinderGeometry(1, 1, 1, 12));
 
-    // --- kelder: bakstenen muren, betonvloer, laag betonplafond ---
-    const muur = new THREE.MeshBasicMaterial({ map: tex('steen', 512, 512, tekenSteen, W / 2.4, H / 2.4), color: 0x8f807a });
-    const vloer = new THREE.MeshBasicMaterial({ map: tex('beton', 512, 512, tekenBeton, W / 4, D / 4), color: 0x77706a });
-    const plafond = new THREE.MeshBasicMaterial({ map: tex('beton', 512, 512, tekenBeton, W / 4, D / 4), color: 0x3a3634 });
+    // --- kelder: bakstenen muren, betonvloer en -plafond; in het donker, alleen opgelicht waar de show ze raakt ---
+    const spots = LS.spots(ctx);
+    const muur = spots.mat(tex('steen', 512, 512, tekenSteen, W / 2.4, H / 2.4), 0x9a8a82);
+    const vloer = spots.mat(tex('beton', 512, 512, tekenBeton, W / 4, D / 4), 0x8a847e);
+    const plafond = spots.mat(tex('beton', 512, 512, tekenBeton, W / 4, D / 4), 0x4a4644);
     ctx.doos({ w: W, d: D, h: H, vloer, muur, plafond });
 
     yield;
@@ -212,20 +492,17 @@
     G.add(new THREE.Mesh(samen(vast, true), new THREE.MeshLambertMaterial({ vertexColors: true })));
 
     yield;
-    // --- de piramide: gloeiende randen, glas, scanringen en een draaiende top ---
+    // --- de piramide: lichtlijnen langs de ribben (stukjes die op de tel van de voet naar de top lopen), glas, scanringen, top ---
     const hoek = [[-B, -B], [B, -B], [B, B], [-B, B]].map(([x, z]) => new THREE.Vector3(x, 0, z)), apex = new THREE.Vector3(0, PH, 0);
-    const randen = (dik, y0) => {
-      const l = [];
-      for (let i = 0; i < 4; i++) {
-        const a = hoek[i].clone().setY(y0), b = hoek[(i + 1) % 4].clone().setY(y0);
-        l.push([bx, staaf(a, b, dik)], [bx, staaf(hoek[i], apex, dik)]);
-      }
-      return samen(l);
-    };
-    const kernMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    G.add(new THREE.Mesh(randen(Z < 2 ? 0.035 : 0.05, 0.02), kernMat));
-    const gloedMat = Z < 2 ? additief(0xffffff) : null;
-    if (gloedMat) G.add(new THREE.Mesh(randen(0.13, 0.065), gloedMat));
+    const NSCH = [14, 10, 8][Z], NVOET = [8, 6, 4][Z], stukken = [];  // stukken: { p, dir, len, u (0 voet .. 1 top), rib, voet }
+    for (let r = 0; r < 4; r++) {
+      const a = hoek[r], dA = new THREE.Vector3().subVectors(apex, a), L = dA.length(); dA.normalize();
+      for (let j = 0; j < NSCH; j++) stukken.push({ p: a.clone().addScaledVector(dA, (j / NSCH) * L + 0.015), dir: dA, len: L / NSCH - 0.03, u: (j + 0.5) / NSCH, rib: r, voet: false });
+      const b = hoek[(r + 1) % 4], dB = new THREE.Vector3().subVectors(b, a), LB = dB.length(); dB.normalize();
+      for (let j = 0; j < NVOET; j++) stukken.push({ p: a.clone().addScaledVector(dB, (j / NVOET) * LB + 0.015).setY(0.03), dir: dB, len: LB / NVOET - 0.03, u: 0, v: (j + 0.5) / NVOET, rib: r, voet: true });
+    }
+    const ribben = LS.lijnen(G, stukken.length, Z < 2, 2.2);  // smalle gloed: in het schoudershot staat de camera vlak bij de ribben
+    const ribDik = Z < 2 ? 0.032 : 0.05;
     let glasMat = null;
     if (Z < 2) {
       const pos = [], uv = [];
@@ -248,14 +525,13 @@
     const peer = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), new THREE.MeshBasicMaterial({ color: 0xfff2dd })); peer.position.set(0, LAMP_Y, 0); G.add(peer);
     const peerGloed = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex('gloed', 64, 64, tekenGloed), color: 0xffc890, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
     peerGloed.position.copy(peer.position); peerGloed.scale.setScalar(0.9); G.add(peerGloed);
-    let bundelMat = null;
-    if (Z < 2) {
-      bundelMat = additief(0xffd6a0, { map: tex('bundel', 4, 128, tekenBundel), opacity: 0.12, side: THREE.DoubleSide });
-      const kegel = new THREE.Mesh(new THREE.ConeGeometry(0.95, LAMP_Y - DAIS, 20, 1, true), bundelMat);
-      kegel.position.set(0, (LAMP_Y + DAIS) / 2, 0); G.add(kegel);
-    }
+    // bundels: van de top omhoog en over het publiek (NTOP), plus de kegel van de kale lamp over de dj
+    const NTOP = [6, 4, 3][Z], bundels = LS.bundels(G, NTOP + 1), TOPP = new THREE.Vector3(0, PH + 0.08, 0);
+    const koppen = Array.from({ length: NTOP }, (_, i) => ({ dir: new THREE.Vector3(0, 1, 0), doel: new THREE.Vector3(), i }));
+    const LAMPP = new THREE.Vector3(0, LAMP_Y - 0.05, 0), NEERV = new THREE.Vector3(0, -1, 0), WARM = new THREE.Color(1, 0.62, 0.3);
+    const flares = LS.punten(G, 2, 0.9);  // de top en de lamp
     const lamp = ctx.licht(0xffb070, 2.4, 11, 0, LAMP_Y - 0.08, 0);
-    const tegen = Z === 0 ? ctx.licht(NEON.getHex(), 1.3, 10, W / 2 - 1.2, 2.8, 0) : null;  // gekleurd tegenlicht op de ruggen
+    const tegen = ctx.licht(NEON.getHex(), 1.0, 9, 0, 3.7, 0);  // piramidelicht vanuit de top op de binnenste kring
 
     yield;
     // --- draaiende platen, mixerknopjes, crossfader, monitorringen ---
@@ -300,27 +576,13 @@
     const naam = ctx.neon('BLOODLINE', '#ff1f3d', 1.2, 0.3);
     if (naam) { naam.position.set(0, DAIS + 0.5, TZ - 0.29); naam.rotation.y = Math.PI; }
 
-    // --- nep-licht: gloed op de vloer rond de piramide en vegen op de muren (geen echte lampen) ---
-    const gloedTex = tex('gloed', 64, 64, tekenGloed);
-    const poelMat = additief(0x000000, { map: gloedTex });
-    const poel = new THREE.Mesh(new THREE.PlaneGeometry(11, 11), poelMat); poel.rotation.x = -Math.PI / 2; poel.position.y = 0.012; G.add(poel);
-    let wasMat = null;
-    const nWas = [8, 4, 0][Z];
-    if (nWas) {
-      const vlak = bron(new THREE.PlaneGeometry(1, 1)), was = [];
-      const plekken = [[-W / 2 + 0.04, -3.6, Math.PI / 2], [W / 2 - 0.04, 3.6, -Math.PI / 2], [4.2, -D / 2 + 0.04, 0], [-4.2, D / 2 - 0.04, Math.PI],
-        [-W / 2 + 0.04, 3.6, Math.PI / 2], [W / 2 - 0.04, -3.6, -Math.PI / 2], [-4.2, -D / 2 + 0.04, 0], [4.2, D / 2 - 0.04, Math.PI]];
-      for (let i = 0; i < nWas; i++) { const [x, z, ry] = plekken[i]; was.push([vlak, mat4(x, 1.5, z, 4.6, 3.0, 1, 0, ry, 0)]); }
-      wasMat = additief(0x000000, { map: gloedTex });
-      G.add(new THREE.Mesh(samen(was), wasMat));
-    }
-    // waas onder het plafond, gekleurd door de piramide
-    const waas = [];
+    // waas onder het plafond: vangt het licht van de bundels (de lichtvlekken op muren en vloer komen uit spots, zie update)
+    const waas = [], waasTex = [];
     for (let i = 0; i < [6, 3, 0][Z]; i++) {
-      const bronTex = typeof smokeTex !== 'undefined' && smokeTex[i % 3] && smokeTex[i % 3].image ? new THREE.CanvasTexture(smokeTex[i % 3].image) : tex('gloed', 64, 64, tekenGloed);
+      const bronTex = waasTex[i % 3] || (waasTex[i % 3] = typeof smokeTex !== 'undefined' && smokeTex[i % 3] && smokeTex[i % 3].image ? new THREE.CanvasTexture(smokeTex[i % 3].image) : tex('gloed', 64, 64, tekenGloed));
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: bronTex, color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, rotation: rr(0, RONDE) }));
       sp.scale.setScalar(rr(3, 4.2)); G.add(sp);
-      waas.push({ sp, a: rr(0, RONDE), r: rr(2.2, 4.2), y: rr(2.7, 3.9), v: rr(0.03, 0.07) * (R() < 0.5 ? -1 : 1) });
+      waas.push({ sp, a: rr(0, RONDE), r: rr(2.4, 5.2), y: rr(3.6, 5.4), v: rr(0.03, 0.07) * (R() < 0.5 ? -1 : 1) });
     }
 
     yield;
@@ -376,50 +638,126 @@
       plekken.push({ x: p.x, z: p.z, face: Math.atan2(-p.x, -p.z) + rr(-0.3, 0.3) });
     }
     const publiek = NS ? clubPubliek.maak(G, { plekken, vast: true, rnd: R, telefoons: 0.16, licht: { x: 0, y: 2.4, z: 0 },
-      kleuren: { a: NEON.clone().lerp(new THREE.Color(0xffc890), 0.35), b: NEON, vul: NEON.clone().multiplyScalar(0.08) } }) : null;
+      kleuren: { a: NEON, b: PAL[1], vul: PAL[2].clone().multiplyScalar(0.03) } }) : null;
+
+    // telefoons boven de menigte: lichtpuntjes (meer in de break: het aanstekermoment), flitsjes van foto's in de drop
+    const NTEL = Math.min(plekken.length, [40, 26, 14][Z]), telPunten = NTEL ? LS.punten(G, NTEL, 0.11) : null, tels = [];
+    for (let i = 0; i < NTEL; i++) {
+      const p = plekken[Math.floor(i * plekken.length / NTEL)], a = Math.atan2(-p.x, -p.z);
+      telPunten.plek(i, p.x + Math.sin(a) * 0.25 + rr(-0.15, 0.15), rr(1.9, 2.3), p.z + Math.cos(a) * 0.25 + rr(-0.15, 0.15));
+      tels.push({ drempel: R(), fase: R() * 10, flits: 0 });
+    }
+    const TELK = new THREE.Color(0.7, 0.82, 1);
 
     for (const g of bronnen) g.dispose();
 
-    // --- elk beeld ---
+    // --- elk beeld: de show ---
+    const E = new THREE.Vector3();
+    let ph = R() * RONDE;
     function update(dt, now) {
-      const b = ctx.beat() || {}, pu = b.pulse || 0, bas = b.bas || 0, en = b.energy || 0, pos = b.pos || 0;
+      const s = LS.stand(ctx.beat()), pos = s.pos, pu = s.kick, stand = s.stand;
       dt = Math.min(dt || 0, 0.1);
-      // piramide: randen kloppen op de tel; elke 8e maat even de complementaire kleur
-      const hk = (Math.floor(pos / 4) % 8 === 7 ? HUE + 0.5 : HUE) % 1;
-      kernMat.color.setHSL(hk, 0.7, 0.72).multiplyScalar(0.55 + 0.75 * pu + 0.25 * en);
-      if (gloedMat) gloedMat.color.setHSL(hk, 1, 0.5).multiplyScalar(0.18 + 0.5 * pu);
-      if (glasMat) glasMat.color.setHSL(HUE, 1, 0.5).multiplyScalar(0.1 + 0.14 * pu);
+      const A = LS.kleur(PAL, 0), Bk = LS.kleur(PAL, 1), C = PAL[2], wit = s.flits > 0.5;
+      spots.begin();
+      // gloed van de piramide op de vloer en de onderkant van de muren, de lichtpoel van de kale lamp om de dj
+      spots.zet(0, 0.4, 0, 7.6, stand === 'break' ? C : A, (0.05 + 0.1 * pu) * s.niv);
+      const lampK = stand === 'break' ? 0.55 : stand === 'drop' ? 0.25 : 0.32 + 0.12 * pu;
+      spots.zet(0, DAIS, 0, 1.4, WARM, lampK);
+
+      // --- ribben: groove = op elke tel loopt het licht van de voet naar de top; opbouw = steeds meer lopers per tel;
+      // drop = alles aan, kleurwissel op elke tel, de eerste 4 tellen strobe; break = diep en bijna uit, één langzame loper ---
+      const nRun = stand === 'opbouw' ? (s.opb < 0.5 ? 1 : s.opb < 0.8 ? 2 : 4) : stand === 'break' ? 0.25 : 1;
+      const run = ((pos * nRun) % 1) * 1.25 - 0.1;
+      for (let i = 0; i < stukken.length; i++) {
+        const st = stukken[i];
+        let k, c;
+        if (stand === 'break') {
+          const d = st.u - run;
+          k = 0.1 + 0.05 * Math.sin(now * 1.2 + st.rib) + (st.voet ? 0 : 0.9 * Math.exp(-d * d * 60)); c = C;
+        } else if (stand === 'drop') {
+          const aan = s.k < 4 || (st.rib + s.tel) % 2 === 0 ? 1 : 0.35;
+          k = (0.9 + 0.7 * s.knal + 0.4 * pu) * aan; c = (st.rib + s.tel) % 2 ? Bk : A;
+        } else {
+          const d = st.u - run, loper = st.voet ? (stand === 'opbouw' ? 0.25 : pu) : Math.exp(-d * d * 40);
+          k = (stand === 'opbouw' ? 0.15 + 0.35 * s.opb : 0.26 + 0.12 * s.en) + (stand === 'opbouw' ? 0.6 + 0.8 * s.opb : 1.1) * loper;
+          c = stand === 'opbouw' ? A : st.rib % 2 ? Bk : A;
+        }
+        if (wit) { c = LS.wit; k = Math.max(k, 1.0 * s.flits); }
+        ribben.zet(i, st.p, st.dir, st.len, c, k, ribDik);
+      }
+      ribben.klaar();
+
+      // --- bundels uit de top: kroon (draaiend, schuin omhoog), golf, laag over het publiek, zuil (recht omhoog) ---
+      ph += s.dPos * Math.PI / 8 * s.tempo;  // groove: de kroon draait een rondje per 4 maten
+      const vorm = stand === 'break' ? 'zuil' : stand === 'opbouw' ? (s.opb < 0.6 ? 'kroon' : 'zuil')
+        : stand === 'drop' ? (s.k < 4 ? 'publiek' : ['kroon', 'golf', 'publiek', 'kroon'][Math.floor(pos / 4) % 4])
+          : ['kroon', 'golf', 'publiek', 'zuil'][Math.floor(pos / 16) % 4];
+      const snel = stand === 'drop' ? 9 : stand === 'break' ? 1 : 3 + 4 * s.opb;
+      for (const h of koppen) {
+        const i = h.i, a = ph + i * RONDE / NTOP;
+        const e = vorm === 'zuil' ? 1.22 + 0.12 * Math.sin(ph * 2 + i) : vorm === 'golf' ? 0.45 + 0.4 * Math.sin(ph * 3 + i * 1.7)
+          : vorm === 'publiek' ? -0.08 + 0.12 * Math.sin(pos * Math.PI / 2 + i) : 0.55 + 0.1 * Math.sin(ph);
+        h.doel.set(Math.cos(a) * Math.cos(e), Math.sin(e), Math.sin(a) * Math.cos(e));
+        h.dir.lerp(h.doel, 1 - Math.exp(-snel * dt)).normalize();
+        let k, c;
+        if (stand === 'break') { k = i === 0 ? 0.55 + 0.15 * Math.sin(now * 0.8) : 0; c = C; }
+        else if (stand === 'opbouw') { const loop = Math.floor(pos * (s.opb < 0.5 ? 1 : 2)) % NTOP; k = (s.opb < 0.7 ? (i === loop ? 1 : 0.15) : 1) * (0.4 + 0.8 * s.opb); c = i % 2 ? Bk : A; }
+        else if (stand === 'drop') { k = (1.2 + 0.8 * s.knal) * (s.k < 4 ? 0.5 + 0.5 * Math.exp(-s.fase * 5) : 0.85 + 0.3 * pu); c = (i + s.tel) % 2 ? Bk : A; }
+        else { k = (0.6 + 0.4 * (i % 2 ? pu : 1 - s.fase)) * (0.75 + 0.25 * s.en); c = i % 2 ? Bk : A; }
+        if (wit) { c = LS.wit; k = Math.max(k, 1.4 * s.flits); }
+        const len = LS.raak(TOPP, h.dir, W, D, H), rad = 0.05 + len * 0.055;
+        bundels.zet(i, TOPP, h.dir, len, rad, c, k);
+        if (k > 0.02) { E.copy(TOPP).addScaledVector(h.dir, len); spots.zet(E.x, E.y, E.z, rad * 1.6 + 0.45, c, 0.6 * Math.min(1.4, k)); }
+      }
+      bundels.zet(NTOP, LAMPP, NEERV, LAMP_Y - DAIS - 0.05, 0.85, WARM, lampK * 0.8);  // de kegel van de kale lamp
+      bundels.klaar(now);
+      flares.zet(0, 0, PH + 0.06, 0, stand === 'break' ? C : wit ? LS.wit : A, (1 + 1.2 * pu) * Math.max(0.35, s.niv));
+      flares.zet(1, LAMPP.x, LAMP_Y, LAMPP.z, WARM, 0.5 + 0.6 * lampK);
+      flares.klaar();
+      spots.vul(stand === 'break' ? C : A, 0.012 * s.niv);
+      spots.flits(LS.wit, s.flits * 0.25);
+
+      // piramide: glas, scanringen, top
+      if (glasMat) glasMat.color.copy(stand === 'break' ? C : A).multiplyScalar((0.04 + 0.1 * pu) * s.niv);
       ringen.forEach((r, i) => {
-        const u = ((pos / 8 + i / ringen.length) % 1 + 1) % 1, y = u * PH * 0.97, s = B * (1 - y / PH) + 0.02;
-        r.position.y = y; r.scale.set(s, 1, s);
-        r.material.color.setHSL(HUE, 1, 0.6).multiplyScalar(Math.sin(Math.PI * u) * (0.45 + 0.9 * pu));
+        const u = ((pos / (stand === 'drop' ? 4 : 8) + i / ringen.length) % 1 + 1) % 1, y = u * PH * 0.97, sc = B * (1 - y / PH) + 0.02;
+        r.position.y = y; r.scale.set(sc, 1, sc);
+        r.material.color.copy(stand === 'break' ? C : Bk).multiplyScalar(Math.sin(Math.PI * u) * (0.35 + 0.8 * pu) * s.niv);
       });
-      top.rotation.y += dt * 0.9; top.scale.setScalar(1 + 0.25 * pu);
-      topMat.color.setHSL(HUE, 0.6, 0.75).multiplyScalar(0.7 + 0.8 * pu);
-      // lamp en nep-licht
-      if (lamp) lamp.intensity = 2.4 * (0.8 + 0.35 * pu);
-      if (tegen) tegen.intensity = 1.3 * (0.5 + 0.9 * bas);
+      top.rotation.y += dt * (0.6 + 1.5 * s.tempo); top.scale.setScalar(1 + 0.25 * pu);
+      topMat.color.copy(stand === 'break' ? C : A).multiplyScalar((0.8 + 0.8 * pu) * Math.max(0.4, s.niv));
+      // lampen (figuren): de kale lamp warm, het piramidelicht in de kleur van de tel, wit bij een flits
+      if (lamp) lamp.intensity = 1.0 * (0.8 + 0.3 * pu);
+      if (tegen) { if (wit) { tegen.color.setRGB(1, 1, 1); tegen.intensity = 3 * s.flits; } else { tegen.color.copy(A); tegen.intensity = (0.3 + 0.8 * pu) * s.niv; } }
       peerGloed.scale.setScalar(0.9 * (1 + 0.35 * pu));
-      if (bundelMat) bundelMat.opacity = 0.09 + 0.08 * pu;
-      poelMat.color.setRGB(1, 0.62, 0.32).multiplyScalar(0.22 + 0.25 * pu);
-      if (wasMat) wasMat.color.setHSL(HUE, 0.9, 0.5).multiplyScalar(0.16 + 0.28 * pu + 0.12 * bas);
-      ledMat.color.setHSL(HUE, 1, 0.55).multiplyScalar(0.6 + 0.8 * pu);
-      deurMat.color.setHSL(HUE, 1, 0.5).multiplyScalar(0.5 + 0.3 * pu);
-      monMat.color.setHSL(HUE, 1, 0.6).multiplyScalar(0.4 + bas);
-      knopMat.color.setHSL((HUE + 0.5) % 1, 0.7, 0.45 + 0.25 * pu);
+      ledMat.color.copy(A).multiplyScalar((0.4 + 0.8 * pu) * s.niv);
+      deurMat.color.copy(Bk).multiplyScalar(0.25 + 0.2 * pu);
+      monMat.color.copy(A).multiplyScalar((0.3 + 0.8 * s.bas) * s.niv);
+      knopMat.color.copy(Bk).multiplyScalar(0.4 + 0.4 * pu);
       if (live) live.visible = (now % 1.5) < 1.05;
       // draaitafels: 33 toeren, crossfader schuift op de tel
       for (const p of platen) p.rotation.z -= dt * 3.49;
       xfader.position.x = 0.07 * Math.sin(pos * Math.PI * 0.5);
-      // waas drijft langzaam rond
+      // waas drijft langzaam rond en vangt het licht van de bundels
       for (const w of waas) {
         w.a += dt * w.v;
         w.sp.position.set(Math.cos(w.a) * w.r, w.y + 0.12 * Math.sin(now * 0.3 + w.r), Math.sin(w.a) * w.r);
-        w.sp.material.color.setHSL(HUE, 0.9, 0.5).multiplyScalar(0.09 + 0.1 * pu);
+        w.sp.material.color.copy(wit ? LS.wit : A).multiplyScalar((0.05 + 0.1 * pu) * s.niv + 0.25 * s.flits);
         w.sp.material.rotation += dt * 0.02;
       }
-      // achtergrondpubliek: beweegt zelf op de muziek (shader); hier alleen het licht van de kelder (lamp klopt op de tel)
-      if (publiek) publiek.helder = 0.85 + 0.3 * pu;
+      // achtergrondpubliek: silhouetten met een rand van piramidelicht (a) en bundellicht (b), flitst mee met de strobe
+      if (publiek) publiek.zet({ a: stand === 'break' ? C : A, b: Bk, helder: 0.25 + 0.25 * s.niv, flits: s.flits * 0.6, rand: 0.6 + 0.7 * s.niv });
+      // telefoons boven de menigte
+      if (telPunten) {
+        const deel = stand === 'break' ? 0.75 : stand === 'opbouw' ? 0.3 + 0.45 * s.opb : stand === 'drop' ? 0.5 : 0.22, kans = stand === 'drop' ? 0.25 : 0.03;
+        for (let i = 0; i < NTEL; i++) {
+          const t = tels[i];
+          if (t.flits > 0) t.flits -= dt; else if (Math.random() < dt * kans) t.flits = 0.07;
+          const k = t.drempel < deel ? (t.flits > 0 ? 3 : 0.5 + 0.12 * Math.sin(now * 2 + t.fase)) : 0;
+          telPunten.kleur(i, TELK, k);
+        }
+        telPunten.klaar();
+      }
       // telefoons van de 3D-figuren: zacht flakkerend scherm, af en toe een flits
       for (const t of telefoons) {
         if (t.flits > 0) t.flits -= dt; else if (Math.random() < dt * 0.1) t.flits = 0.08;
@@ -431,7 +769,7 @@
 
     // --- camera ---
     // in: achter de loper aan naar binnen; schouder: laag over de schouder van de dj de kring in, langzaam zwaaiend;
-    // totaal: hoog uit een hoek op de piramide; uit (na BLIJF): achter de loper aan naar de uitgang
+    // tegen: vanuit het publiek tegen de piramide in; totaal: hoog uit een hoek op de piramide; uit (na BLIJF): achter de loper aan naar de uitgang
     const camP = new THREE.Vector3(), camL = new THREE.Vector3(), lp = new THREE.Vector3(), vA = new THREE.Vector3(), vB = new THREE.Vector3(), richting = new THREE.Vector3(0, 0, 1);
     const uit = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: 62 };
     const zwaaiFase = rr(0, RONDE);
@@ -472,7 +810,7 @@
       let fase, k = 0, ts = 0;
       if (t < T_IN) fase = 'in';
       else if (t >= BLIJF) fase = 'uit';
-      else { k = Math.floor((t - T_IN) / CYCLUS); ts = t - T_IN - k * CYCLUS; fase = ts < SCHOUDER ? 'schouder' : 'totaal'; }
+      else { k = Math.floor((t - T_IN) / CYCLUS); ts = t - T_IN - k * CYCLUS; fase = ts < SCHOUDER ? 'schouder' : ts < SCHOUDER + TEGEN ? 'tegen' : 'totaal'; }
       const nieuw = fase !== vorigeFase || k !== vorigeK; vorigeFase = fase; vorigeK = k;
       if (fase === 'in' || fase === 'uit') {
         if (loperLokaal(loper, lp)) {
@@ -491,12 +829,18 @@
         // R0/zij: 0,85 m achter en 0,58 m naast hem (verder kan niet: glas van de piramide), dj aan de rand van het beeld i.p.v. zijn rug ervoor
         const th = 1.55 * Math.sin(ts * 0.19 + k * 2.4 + zwaaiFase), s = Math.sin(th), c = Math.cos(th), R0 = 0.85, zij = 0.58;
         camP.set(s * R0 + c * zij, CAMY + 0.04 * Math.sin(t * 0.8), DJZ + c * R0 - s * zij);
-        camL.set(-s * 6 - c * zij * 0.8 + 0.03 * Math.sin(t * 1.7), 1.1 + 0.02 * Math.sin(t * 2.3), DJZ - c * 6 + s * zij * 0.8);  // beetje handheld
-        uit.fov = 64;
+        camL.set(-s * 6 - c * zij * 0.8 + 0.03 * Math.sin(t * 1.7), 1.75 + 0.02 * Math.sin(t * 2.3), DJZ - c * 6 + s * zij * 0.8);  // beetje handheld, iets omhoog: de bundels boven de kring
+        uit.fov = 66;
+      } else if (fase === 'tegen') {
+        // vanuit het publiek (rechterhelft, het looppad ligt links) tegen de piramide in: silhouetten tegen de ribben en bundels
+        const a = (k % 2 ? 0.75 : -0.75) + (k % 2 ? -1 : 1) * (ts - SCHOUDER) * 0.06, r = 5.5 - 0.15 * (ts - SCHOUDER);
+        camP.set(Math.cos(a) * r, 1.3 + 0.05 * Math.sin(t * 0.9), Math.sin(a) * r);
+        camL.set(0, 2.5 + 0.2 * Math.sin(t * 0.37), 0);
+        uit.fov = 62;
       } else {
-        const kant = k % 2 ? -1 : 1, a = kant * Math.PI / 4 - kant * (ts - SCHOUDER) * 0.05;
-        camP.set(Math.cos(a) * 7.3, H - 0.42, Math.sin(a) * 7.3);
-        camL.set(0, 0.7, 0);
+        const kant = k % 2 ? -1 : 1, a = kant * Math.PI / 4 - kant * (ts - SCHOUDER - TEGEN) * 0.05;
+        camP.set(Math.cos(a) * 7.2, H - 1.1, Math.sin(a) * 7.2);
+        camL.set(0, 1.5, 0);
         uit.fov = 70;
       }
       uit.pos.copy(camP); G.localToWorld(uit.pos);

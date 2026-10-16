@@ -8,6 +8,9 @@
 // figuren alleen via ctx.figuur. Gedeelde texturen en vormen hebben userData.doolhofHouden (de kern ruimt ze nooit op).
 // De bus van de kamer (ctx.groep.userData.dhBus) verbindt de onderdelen: shows zetten dim (blackout) en flits (stroboscoop),
 // middenstukken zetten focus (waar de dj staat) en midden (plek + hoogste punt), zodat rigs en shows daar rekening mee houden.
+// Lichtshow: de show-bus van de kern (window.doolhof.show) stuurt mee: stand en opbouw-voortgang (volger), in drop en break de
+// kleuren van de show (volger(P) zet het palet P elk beeld om), blackout en stroboscoop (busLicht). Constructie is een donker
+// silhouet (vastMesh gedempt), schilderingen en vloeren zijn donker tot de show ze raakt; bundels vervagen vlak voor de camera.
 (() => {
   'use strict';
   const DH = window.doolhof = window.doolhof || {};
@@ -144,11 +147,19 @@
       default: return { romp: new THREE.Color(0x151517), rand: new THREE.Color(0x3c3c40), metaal: new THREE.Color(0x5a5a60) };  // rauw: zwart staal, beton
     }
   }
-  // volger: zachte gewichten voor groove/opbouw/drop/break, opbouw-voortgang (0..1 over 16 tellen), klap van de drop, tellen
-  function volger() {
-    const v = { st: 'groove', brk: 0, opb: 0, drp: 0, hit: 0, en: 0.5, groove: 1, tel: 0, nieuw: false, fr: 0, dp: 0, vorig: null, opbStart: 0 };
+  // show-bus van de kern (doolhof/kern.js: stand, opbouw, drop, flits, kleur(i), blackout); alleen lezen
+  const showNu = () => { const s = DH.show; return s && typeof s === 'object' && typeof s.stand === 'string' && typeof s.kleur === 'function' ? s : null; };
+  // volger: zachte gewichten voor groove/opbouw/drop/break, opbouw-voortgang (0..1 over 16 tellen), klap van de drop, tellen.
+  // Met een palet P: in de drop en de break krijgt P de kleuren van de show (die wisselen op de tel), anders die van de kamer.
+  function volger(P) {
+    const P0 = P ? { a: P.a.clone(), b: P.b.clone(), c: P.c.clone() } : null;
+    const v = { st: 'groove', brk: 0, opb: 0, drp: 0, hit: 0, en: 0.5, groove: 1, tel: 0, nieuw: false, fr: 0, dp: 0, vorig: null, opbStart: 0, P };
     v.stap = (dt, b, stand) => {
-      const R = window.clubRegie || {}, st = stand || R.stand || 'groove', eerste = v.vorig == null;
+      const R = window.clubRegie || {}, sh = showNu(), st = (sh && sh.stand) || stand || R.stand || 'groove', eerste = v.vorig == null;
+      if (P) {
+        if (sh && (st === 'drop' || st === 'break')) { sh.kleur(0, P.a); sh.kleur(1, P.b); sh.kleur(2, P.c); }
+        else { P.a.copy(P0.a); P.b.copy(P0.b); P.c.copy(P0.c); }
+      }
       if (st !== v.st || eerste) {
         // klap alleen bij een echte, verse drop (niet als de kamer midden in een drop begint)
         if (st === 'drop') v.hit = R.dropBeat != null && R.dropBeat >= 0 ? Math.exp(-Math.max(0, b.pos - R.dropBeat) * 0.5) : (eerste ? 0 : 1);
@@ -158,7 +169,7 @@
       const k = eerste ? 1 : Math.min(1, dt * 2.5);  // eerste beeld: meteen in de stand van nu
       v.brk = naar(v.brk, st === 'break' ? 1 : 0, k);
       v.drp = naar(v.drp, st === 'drop' ? 1 : 0, eerste ? 1 : Math.min(1, dt * 9));  // de drop komt hard binnen
-      v.opb = st === 'opbouw' ? klem((b.pos - v.opbStart) / 16) : naar(v.opb, 0, eerste ? 1 : Math.min(1, dt * 6));
+      v.opb = st === 'opbouw' ? (sh ? sh.opbouw : klem((b.pos - v.opbStart) / 16)) : naar(v.opb, 0, eerste ? 1 : Math.min(1, dt * 6));
       v.hit *= Math.exp(-dt * 1.5);
       v.en = naar(v.en, klem(b.energy), Math.min(1, dt * 2));
       v.groove = klem(1 - v.brk - v.drp - v.opb);
@@ -176,8 +187,8 @@
 
   // --- bus van de kamer ---
   function bus(ctx) { const u = ctx.groep.userData; return u.dhBus || (u.dhBus = { shows: [], focus: null, midden: null, dim: 0, flits: 0, helder: 1 }); }
-  function busLicht(ctx) {  // samengevat over alle shows van de kamer: dim, flits en helder (= 1 - 0,85 dim)
-    const B = bus(ctx); let dim = 0, flits = 0;
+  function busLicht(ctx) {  // samengevat over alle shows van de kamer en de show-bus: dim, flits en helder (= 1 - 0,85 dim)
+    const B = bus(ctx), sh = showNu(); let dim = sh ? 0.45 * sh.blackout : 0, flits = sh ? 0.6 * sh.flits * (sh.stand === 'opbouw' ? 0.3 + 0.7 * sh.opbouw * sh.opbouw : 1) : 0;
     for (const s of B.shows) { if (s.dim > dim) dim = s.dim; if (s.flits > flits) flits = s.flits; }
     B.dim = dim; B.flits = flits; B.helder = 1 - 0.85 * dim; return B;
   }
@@ -202,7 +213,7 @@
         if (N) n.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); else n.set(0, 1, 0);
         nor.push(n.x, n.y, n.z);
         uv.push(U ? U.getX(i) : 0, U ? U.getY(i) : 0);
-        if (opt.kleur) { const k = (x && x.kl) || opt.kleur, s = x && x.vlak ? 1 : schaduw(n); col.push(k.r * s, k.g * s, k.b * s); }
+        if (opt.kleur) { const k = (x && x.kl) || opt.kleur, s = (x && x.vlak ? 1 : schaduw(n)) * (opt.dof || 1); col.push(k.r * s, k.g * s, k.b * s); }
         if (opt.gloed) { ak.push((x && x.k) || 0); ag.push(x && x.w != null ? x.w : 1, (x && x.h) || 0); }
         if (opt.u) au.push(opt.u(v, x));
       }
@@ -214,11 +225,12 @@
     if (opt.u) out.setAttribute('aU', F(au, 1));
     return out;
   }
-  // vaste delen: onverlicht met ingebakken schaduw; materiaal.color dimt mee met de show
+  // vaste delen: onverlicht met ingebakken schaduw, gedempt (lichtshow: constructie is een donker silhouet, het licht doet het werk);
+  // materiaal.color dimt mee met de show
   function vastMesh(parent, delen, kleur) {
     if (!delen.length) return null;
     const m = new THREE.MeshBasicMaterial({ vertexColors: true });
-    parent.add(new THREE.Mesh(samen(delen, { kleur: kleur || new THREE.Color(0x202024) }), m));
+    parent.add(new THREE.Mesh(samen(delen, { kleur: kleur || new THREE.Color(0x202024), dof: 0.45 }), m));
     return m;
   }
 
@@ -265,6 +277,7 @@ void main() { gl_FragColor = vec4(vC * vF * uMaster, 1.0); }`;
     }, extra || {});
   }
   function muZet(u, now, b, v, L) {
+    if (v.P) { u.uA.value.copy(v.P.a); u.uB.value.copy(v.P.b); u.uC.value.copy(v.P.c); }  // kleuren van nu (zie volger)
     u.uT.value = now % 3600; u.uPos.value = ((b.pos % 64) + 64) % 64; u.uPulse.value = b.pulse; u.uBas.value = b.bas; u.uMid.value = b.mid; u.uHoog.value = b.hoog;
     u.uEn.value = v.en; u.uBrk.value = v.brk; u.uOpb.value = v.opb; u.uDrp.value = v.drp; u.uHit.value = v.hit; u.uDim.value = L.dim; u.uFlits.value = L.flits;
   }
@@ -296,7 +309,7 @@ void main() {
   vC = instanceColor;
 #endif
   vec4 mv = modelViewMatrix * lp;
-  vF = abs(dot(normalize(normalMatrix * n), normalize(-mv.xyz)));
+  vF = abs(dot(normalize(normalMatrix * n), normalize(-mv.xyz))) * smoothstep(0.5, 2.6, length(mv.xyz));  // vlak voor de lens: weg
   vT = uv.y;
   gl_Position = projectionMatrix * mv;
 }`;
@@ -438,7 +451,7 @@ void main() {
     if (Z < 2) { logo = ctx.neon(kies(r, ['DEEP SAMSO', 'BLOODLINE', 'SAMSO']), hex(P.c), 1.3, 0.325); logo.position.set(px, top + 0.46, pz - 0.25 - 0.32); logo.rotation.y = Math.PI; }
     const L1 = ctx.licht(P.a.clone().lerp(WIT, 0.55), 1.4, 9, px, top + 2.6, pz - 1.0);
     middenMeld(ctx, px, pz, R, top + HP + 0.3);
-    const v = volger(), kTrap = [], kWit = P.a.clone().lerp(WIT, 0.6);
+    const v = volger(P), kTrap = [], kWit = P.a.clone().lerp(WIT, 0.6);
     for (let i = 0; i < N; i++) kTrap.push(P.a.clone().lerp(P.b, N > 1 ? i / (N - 1) : 0));
     let ch = 0;
     return { focus: { x: px, y: top + 1.6, z: pz + 0.3 }, dj,
@@ -525,7 +538,7 @@ void main() {
     const zDJ = -h + 0.87, dj = djZet(ctx, px, HV + 0.1, pz + zDJ);  // vlak achter de tafel
     const L1 = ctx.licht(P.b.clone().lerp(WIT, 0.5), 1.2, 7, px, HV + S - 0.35, pz + zDJ - 0.4);
     middenMeld(ctx, px, pz, R, HV + S + 0.2);
-    const v = volger(); let bobB = 0;
+    const v = volger(P); let bobB = 0;
     return { focus: { x: px, y: HV + 1.65, z: pz + zDJ }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -578,7 +591,7 @@ void main() {
     const dj = djZet(ctx, px, PH, pz + 0.25);
     const L1 = ctx.licht(P.a.clone().lerp(WIT, 0.5), 1.3, 8, px, CY + 1.6, pz - 0.8);
     middenMeld(ctx, px, pz, R, CY + Math.max(...ringen.map(q => q.Ri * Math.sin(q.tmax))) + 0.2);
-    const v = volger(); let rond = 0;
+    const v = volger(P); let rond = 0;
     return { focus: { x: px, y: PH + 1.55, z: pz + 0.25 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -645,7 +658,7 @@ void main() {
     const dj = djZet(ctx, px, YE, pz + 0.3);
     const L1 = ctx.licht(P.a.clone().lerp(WIT, 0.5), 1.3, 8, px, YE + 2.4, pz - 1.0);
     middenMeld(ctx, px, pz, R, YE + 2.0);
-    const v = volger(); let hoek = 0, w = 0.15, rond = 0;
+    const v = volger(P); let hoek = 0, w = 0.15, rond = 0;
     return { focus: { x: px, y: YE + 1.55, z: pz + 0.3 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -727,7 +740,7 @@ void main() {
     const dj = djZet(ctx, px, YR, pz - 0.07);
     const L1 = ctx.licht(P.b.clone().lerp(WIT, 0.4), 1.2, 8, px, YB, pz + ZK - 0.6);
     middenMeld(ctx, px, pz, R, YB + HH + 0.1);
-    const v = volger(), kHelder = new THREE.Color(); let open = 0;
+    const v = volger(P), kHelder = new THREE.Color(); let open = 0;
     return { focus: { x: px, y: YR + 1.55, z: pz - 0.07 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -777,7 +790,7 @@ void main() {
     const dj = djZet(ctx, px, YD, pz + ZDJ);
     const L1 = ctx.licht(P.c.clone().lerp(WIT, 0.6), 1.2, 8, px, Math.min(3.0, M.h - 0.4), pz + ZDJ - 1.5);
     middenMeld(ctx, px, pz, R, Math.min(M.h - 0.3, 3.8) + 0.1);
-    const v = volger(), kOpb = new THREE.Color(), kGrad = []; let golf = 0;
+    const v = volger(P), kOpb = new THREE.Color(), kGrad = []; let golf = 0;
     for (let k = 0; k < N; k++) kGrad.push(P.a.clone().lerp(P.b, N > 1 ? k / (N - 1) : 0));
     return { focus: { x: px, y: YD + 1.55, z: pz + ZDJ }, dj,
       update(dt, now, b, stand) {
@@ -831,7 +844,7 @@ void main() {
     if (Z === 0 && RK >= 1.7) { const s = r() < 0.5 ? -1 : 1, d = ctx.figuur({ x: px + s * 0.95, z: pz + 0.5, face: Math.PI + s * 0.5, rol: 'dans' }); if (d) d.yOff = PH; }
     const L1 = ctx.licht(P.a.clone().lerp(WIT, 0.5), 1.3, 7, px, HK - 0.3, pz - 0.4);
     middenMeld(ctx, px, pz, R, HK + KH + 0.1);
-    const v = volger(); let rond = 0;
+    const v = volger(P); let rond = 0;
     return { focus: { x: px, y: PH + 1.55, z: pz + 0.25 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -887,7 +900,7 @@ void main() {
     }
     const romp = inst(g, GEO.blok, new THREE.MeshBasicMaterial({ color: 0x141416 }), n, false), lens = inst(g, GEO.schijf, plusMap(gloedTex()), n);
     const bm = bundelMat([0.42, 0.36, 0.3][Z], 1.4, 1), bs = inst(g, GEO.kegel, bm, n), vlek = Z < 2 ? inst(g, GEO.schijf, vlekMat(), n) : null;
-    const v = volger(), kk = new THREE.Color(), kWit = P.b.clone().lerp(WIT, 0.6), KL = [P.a, P.b, P.c], bp = V(0, 0, 0), raak = V(0, 0, 0);
+    const v = volger(P), kk = new THREE.Color(), kWit = P.b.clone().lerp(WIT, 0.6), KL = [P.a, P.b, P.c], bp = V(0, 0, 0), raak = V(0, 0, 0);
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits, f = focusVan(ctx), t2 = now * (1.6 + 0.8 * v.en);
@@ -915,6 +928,44 @@ void main() {
       opruimen() { weg(romp, lens, bs, vlek); } };
   } });
 
+  // ----- 1b. Scanners: een rij smalle, scherpe bundels aan een balk onder het plafond (lengteas van de kamer); golf in de groove,
+  // samentrekken naar de dj en versnellen in de opbouw, kruisvuur op de tel in de drop, uit in de break -----
+  reg('plafond', 'scanners', { gewicht: 1.2, maak(ctx, stijl, plek) {
+    const Z = ctx.zwaar, P = palet(stijl), M = maatVan(stijl, plek), g = new THREE.Group(); ctx.groep.add(g);
+    const n = [14, 10, 6][Z], lang = M.d >= M.w, Lb = Math.max(3, (lang ? M.d : M.w) - 3.4), Y = M.h - 0.32;
+    const as = lang ? V(0, 0, 1) : V(1, 0, 0), zij = lang ? V(1, 0, 0) : V(0, 0, 1), koppen = [], vast = [];
+    for (let i = 0; i < n; i++) { const f = n > 1 ? i / (n - 1) - 0.5 : 0; koppen.push({ p: as.clone().multiplyScalar(f * Lb).setY(Y - 0.16), f, i, dir: V(0, -1, 0) }); }
+    vast.push([GEO.doos, mat(0, Y, 0, lang ? 0.22 : Lb + 0.5, 0.07, lang ? Lb + 0.5 : 0.22)]);
+    for (const k of koppen) vast.push([GEO.doos, mat(k.p.x, Y - 0.06, k.p.z, 0.16, 0.12, 0.16)]);
+    for (const e of [-0.5, 0.5]) { const q = as.clone().multiplyScalar(e * Lb); vast.push([GEO.cz, staaf(V(q.x, Y, q.z), V(q.x, M.h, q.z), 0.025)]); }
+    vastMesh(g, vast, new THREE.Color(0x1c1c20));
+    const bs = inst(g, GEO.kegel, bundelMat([0.55, 0.5, 0.42][Z], 2.2, 1), n), lens = inst(g, GEO.schijf, plusMap(gloedTex()), n), vlek = Z < 2 ? inst(g, GEO.schijf, vlekMat(), n) : null;
+    const v = volger(P), kk = new THREE.Color(), doel = V(0, 0, 0), raak = V(0, 0, 0), KL = [P.a, P.b, P.c];
+    let t = 0;
+    return {
+      update(dt, now, b, stand) {
+        v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits, f = focusVan(ctx);
+        t += dt * (1 + 4 * v.opb + 1.5 * v.drp);
+        for (const k of koppen) {
+          // kanteling naar de zijkant (al) en langs de balk (be) per stand
+          const om = v.tel % 2 ? 1 : -1, golf = Math.sin(b.pos * Math.PI / 4 + k.f * Math.PI * 2);
+          const al = meng(v, 0.55 * golf, 0.7 * Math.sin(t * 1.3 + k.i * 0.5) * (1 - 0.6 * v.opb), (k.i % 2 ? 1 : -1) * om * 0.65, 0), be = meng(v, 0.22 * k.f, -0.6 * k.f * v.opb, 0.9 * k.f * (v.fr < 0.5 ? 1 : -0.4), 0);
+          doel.set(0, -1, 0).addScaledVector(zij, Math.tan(al)).addScaledVector(as, Math.tan(be)).normalize();
+          if (v.opb > 0.01) { _w.set(f.x - k.p.x, Math.max(0.2, f.y - 1.2) - k.p.y, f.z - k.p.z).normalize(); doel.lerp(_w, 0.5 * v.opb * (v.opb / Math.max(0.001, v.opb + v.groove + v.drp + v.brk))).normalize(); }
+          k.dir.lerp(doel, Math.min(1, dt * (3 + 9 * v.drp + 4 * v.opb))).normalize();
+          const len = uitDoos(k.p, k.dir, M), vl = RAAK.vlak;
+          mengKl(kk, v, KL[k.i % 2], KL[(k.i % 2) + 1], KL[(k.i + v.tel) % 3], P.b);
+          const sterk = meng(v, (k.i + v.tel) % 2 ? 0.8 + 0.3 * b.pulse : 0.3, 0.2 + 0.85 * v.opb, (0.95 + 0.35 * b.pulse) * (v.fr < 0.5 || k.i % 2 ? 1 : 0.25) + v.hit, 0) * H + 0.4 * F;
+          _q.setFromUnitVectors(ZAS, k.dir);
+          _m.compose(k.p, _q, _s.set(len * 0.022, len * 0.022, len)); bs.setMatrixAt(k.i, _m); bs.setColorAt(k.i, _c.copy(kk).multiplyScalar(sterk));
+          const ls = sterk > 0.02 ? 0.14 : 0; _m.compose(k.p, _q, _s.set(ls, ls, ls)); lens.setMatrixAt(k.i, _m); lens.setColorAt(k.i, _c.copy(kk).lerp(WIT, 0.35).multiplyScalar(1.4 * sterk));
+          if (vlek) vlekZet(vlek, k.i, raak.copy(k.p).addScaledVector(k.dir, len), vl, len * 0.03 + 0.1, kk, 0.6 * sterk);
+        }
+        klaar(bs, lens, vlek);
+      },
+      opruimen() { weg(bs, lens, vlek); } };
+  } });
+
   // ----- 2. Neonbuizen: een veld hangende buizen dat als kinetisch kunstwerk op en neer golft en op de tel oplicht -----
   reg('plafond', 'neonbuizen', { gewicht: 1, maak(ctx, stijl, plek) {
     const r = ctx.rnd, Z = ctx.zwaar, P = palet(stijl), M = maatVan(stijl, plek), g = new THREE.Group(); ctx.groep.add(g);
@@ -930,7 +981,7 @@ void main() {
       dPos = new Float32Array(n * 12); const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.BufferAttribute(dPos, 3).setUsage(THREE.DynamicDrawUsage));
       draad = new THREE.LineSegments(dg, new THREE.LineBasicMaterial({ color: 0x1e1e22 })); draad.frustumCulled = false; g.add(draad);
     }
-    const v = volger(), kk = new THREE.Color(); let gecheckt = false;
+    const v = volger(P), kk = new THREE.Color(); let gecheckt = false;
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -972,10 +1023,10 @@ void main() {
     const glimMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.09, map: gloedTex(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }); if (Z < 2) bol.add(new THREE.Points(gg, glimMat));
     // vlekjes: vaste richtingen vanuit de bol, draaien mee
     const nF = [150, 90, 40][Z], vlek = inst(g, GEO.schijf, vlekMat(), nF), fDir = [];
-    for (let i = 0; i < nF; i++) { fDir.push(V(0, 0, 0).setFromSphericalCoords(1, Math.acos(r() * 1.7 - 1), r() * RONDE)); vlek.setColorAt(i, _c.copy([P.a, P.b, P.c][i % 3]).lerp(WIT, 0.65)); }
+    for (let i = 0; i < nF; i++) { fDir.push(V(0, 0, 0).setFromSphericalCoords(1, Math.acos(r() * 1.7 - 1), r() * RONDE)); vlek.setColorAt(i, _c.copy([P.a, P.b, P.c][i % 3]).lerp(WIT, 0.2)); }  // verzadigd, geen wit confetti
     const nS = Z === 0 ? 24 : 0, stralen = nS ? inst(g, GEO.straal, bundelMat(0.5, 0.8, 0), nS) : null;
     const pin = inst(g, GEO.kegel, bundelMat(0.5, 1.3, 1), 2), pinBron = [V(-(M.w / 2 - 0.6), M.h - 0.15, -(M.d / 2 - 0.8)), V(M.w / 2 - 0.6, M.h - 0.15, M.d / 2 - 0.8)];
-    const v = volger(), kk = new THREE.Color(), KL = [P.a, P.b, P.c], d = V(0, 0, 0), raak = V(0, 0, 0); let hoek = 0, geplaatst = false;
+    const v = volger(P), kk = new THREE.Color(), KL = [P.a, P.b, P.c], d = V(0, 0, 0), raak = V(0, 0, 0); let hoek = 0, geplaatst = false;
     const plaats = () => {  // een hoog middenstuk onder de bol: dan hangt hij ernaast
       const m = bus(ctx).midden;
       if (m && inDeWeg(ctx, 0, 0, pos.y - RB, RB + 0.3)) { const sx = m.x <= 0 ? 1 : -1; pos.set(klem(m.x + sx * (m.r + RB + 0.6), -(M.w / 2 - RB - 1), M.w / 2 - RB - 1), pos.y, klem(m.z - 1, -(M.d / 2 - 2), M.d / 2 - 2)); }
@@ -991,7 +1042,7 @@ void main() {
         for (let i = 0; i < nF; i++) {
           const f = fDir[i]; d.set(f.x * ca + f.z * sa, f.y, -f.x * sa + f.z * ca);
           const t = uitDoos(pos, d, M); _m.compose(raak.copy(pos).addScaledVector(d, t), VLAK_N[RAAK.vlak], _s.setScalar(0.04 + t * 0.011)); vlek.setMatrixAt(i, _m);
-          if (i < nS) { _q.setFromUnitVectors(ZAS, d); _m.compose(pos, _q, _s.set(0.006, 0.006, t)); stralen.setMatrixAt(i, _m); stralen.setColorAt(i, _c.copy(KL[i % 3]).lerp(WIT, 0.6).multiplyScalar(0.25 * sterk)); }
+          if (i < nS) { _q.setFromUnitVectors(ZAS, d); _m.compose(pos, _q, _s.set(0.006, 0.006, t)); stralen.setMatrixAt(i, _m); stralen.setColorAt(i, _c.copy(KL[i % 3]).lerp(WIT, 0.25).multiplyScalar(0.25 * sterk)); }
         }
         vlek.material.color.copy(WIT).lerp(KL[v.tel % 3], 0.6 * v.drp).multiplyScalar(sterk);
         for (let k = 0; k < 2; k++) {
@@ -1019,7 +1070,7 @@ void main() {
     let gloed = null;
     if (Z === 0) { gloed = new THREE.InstancedMesh(GEO.straalG, bundelMat(0.2, 2.5, 0), n); gloed.frustumCulled = false; gloed.instanceMatrix = kern.instanceMatrix; gloed.instanceColor = kern.instanceColor; g.add(gloed); }
     const stip = Z < 2 ? inst(g, GEO.schijf, vlekMat(), n) : null;
-    const v = volger(), kk = new THREE.Color(), d = V(0, 0, 0), raak = V(0, 0, 0);
+    const v = volger(P), kk = new THREE.Color(), d = V(0, 0, 0), raak = V(0, 0, 0);
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -1064,7 +1115,7 @@ void main() {
       kg.attributes.position.needsUpdate = true; klaar(lamp);
     };
     zetVast();
-    const v = volger(), kk = new THREE.Color(), warmDim = warm.clone().multiplyScalar(0.8), rmax = Math.hypot(W / 2, D / 2); let gecheckt = false;
+    const v = volger(P), kk = new THREE.Color(), warmDim = warm.clone().multiplyScalar(0.8), rmax = Math.hypot(W / 2, D / 2); let gecheckt = false;
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -1142,7 +1193,7 @@ void main() {
     if (vlakken.length) g.add(new THREE.Mesh(samen(vlakken), pm));
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
     const wm = plusMap(wasTex()); if (was.length && Z < 2) g.add(new THREE.Mesh(samen(was), wm));
-    const v = volger(), nP = panelen.length, KL = [P.a, P.b, P.c]; let ch = 0;
+    const v = volger(P), nP = panelen.length, KL = [P.a, P.b, P.c]; let ch = 0;
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -1152,7 +1203,7 @@ void main() {
           gm.lev[k] = meng(v, k === kop ? 0.6 + 0.6 * b.pulse : 0.25 + 0.1 * b.pulse, 0.25 + 0.6 * v.opb + (k === kop ? 0.6 : 0), 0.7 + 0.4 * b.pulse * ((k + v.tel) % 2 ? 1 : 0.3) + v.hit, 0.03 + 0.05 * Math.sin(now * 0.9 + k)) * H + F;
           mengKl(gm.kl[k], v, KL[k % 3], WIT, KL[(k + v.tel) % 3], P.b);
         }
-        pm.color.setScalar(meng(v, 0.82 + 0.18 * b.pulse, 0.75 + 0.25 * v.opb, 0.85 + 0.25 * b.pulse, 0.42) * H + 0.6 * F);
+        pm.color.setScalar(meng(v, 0.1 + 0.32 * b.pulse, 0.08 + 0.55 * v.opb, 0.28 + 0.5 * b.pulse, 0.03) * H + 0.45 * F);
         wm.color.copy(KL[v.tel % 3]).multiplyScalar(meng(v, 0.35 + 0.35 * b.bas, 0.3 + 0.5 * v.opb, 0.55 + 0.5 * b.pulse, 0.06) * H);
         if (vm) vm.color.setScalar(H + 0.5 * F);
       } };
@@ -1196,7 +1247,7 @@ void main() {
     g.add(new THREE.Mesh(samen(stroken, { u: (p, x) => x.s }), sm));
     let hm = null;
     if (halos.length) { hm = shader(u, VS_PIXEL, FS_PIXEL, Object.assign({ defines: { HALO: 1 } }, plusOpties)); g.add(new THREE.Mesh(samen(halos, { u: (p, x) => x.s }), hm)); }
-    const v = volger();
+    const v = volger(P);
     return {
       update(dt, now, b, stand) { v.stap(dt, b, stand); muZet(u, now, b, v, busLicht(ctx)); } };
   } });
@@ -1226,7 +1277,7 @@ void main() {
     }
     const vm = vastMesh(g, vast), n = conussen.length;
     const con = inst(g, GEO.schijf, new THREE.MeshBasicMaterial({ map: speakerTex(), color: 0xffffff }), n, false), ring = inst(g, GEO.vlak, plusMap(ringTex()), n);
-    const v = volger(), kk = new THREE.Color(), KL = [P.a, P.b, P.c]; let pomp = 0, rond = 0;
+    const v = volger(P), kk = new THREE.Color(), KL = [P.a, P.b, P.c]; let pomp = 0, rond = 0;
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
@@ -1275,7 +1326,7 @@ void main() {
       const ww = klem(0.42 * tekst.length, 1.3, Math.min(3.4, w.len / per - 0.6)), y = klem(2.1 + r() * 0.9, 1.6 + ww / 8, M.h - 0.35 - ww / 8);
       naast(w, (slot + 0.5) * w.len / per, y, ww, KL[i % 3], tekst);
     }
-    const vm = vastMesh(g, vast), gm = gloedMesh(g, gl), v = volger();
+    const vm = vastMesh(g, vast), gm = gloedMesh(g, gl), v = volger(P);
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits, N = woorden.length;
@@ -1302,7 +1353,7 @@ void main() {
 }`;
   reg('muur', 'buizen', { gewicht: 0.9, maak(ctx, stijl, plek) {
     const r = ctx.rnd, Z = ctx.zwaar, P = palet(stijl), M = maatVan(stijl, plek), sf = sfeerVan(stijl), g = new THREE.Group(); ctx.groep.add(g);
-    const metaal = sf === 'luxe' ? new THREE.Color(0xa8823a) : sf === 'organisch' ? new THREE.Color(0x8a5232) : sf === 'trippy' ? P.a.clone().multiplyScalar(0.35) : new THREE.Color(0x56595f);
+    const metaal = sf === 'luxe' ? new THREE.Color(0xa8823a) : sf === 'organisch' ? new THREE.Color(0x8a5232) : sf === 'trippy' ? P.a.clone().multiplyScalar(0.18) : new THREE.Color(0x56595f);
     const vast = [], glas = [], dz = M.d / 2 - 0.1, yTop = M.h - 0.35;
     const buis = (a, b, rr, kl) => vast.push([GEO.czDicht, staaf(a, b, rr * 2), { kl: kl || metaal }]);
     for (const s of [-1, 1]) {
@@ -1330,7 +1381,7 @@ void main() {
     const vm = vastMesh(g, vast, metaal);
     const pm = shader({ uFase: { value: 0 }, uDicht: { value: 0.5 }, uBasis: { value: 0.15 }, uLev: { value: 1 }, uK1: { value: P.b.clone() }, uK2: { value: P.a.clone() } }, VS_PLASMA, FS_PLASMA, plusOpties);
     g.add(new THREE.Mesh(samen(glas, { u: p => p.z }), pm));
-    const v = volger(); let fase = 0;
+    const v = volger(P); let fase = 0;
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits, u = pm.uniforms;
@@ -1358,7 +1409,7 @@ void main() {
   float h = hash2(cel + 7.13), tel = floor(uPos), fr = fract(uPos);
   vec2 mid = (cel + 0.5) * uTegel; float rho = length(mid), sq = max(abs(mid.x), abs(mid.y));
   float schaak = mod(cel.x + cel.y + tel, 2.0);
-  float g1 = 0.03 + 0.38 * schaak * (0.2 + 0.8 * uPulse) + 0.6 * exp(-kw(rho - fr * 9.0) * 0.6);  // donkere tegels tussen de slagen (anders een fel 70s-schaakbord)
+  float g1 = 0.02 + 0.22 * schaak * (0.15 + 0.85 * uPulse) + 0.45 * exp(-kw(rho - fr * 9.0) * 0.6);  // donkere tegels tussen de slagen (anders een fel 70s-schaakbord)
   float o1 = 0.12 + 0.4 * uOpb + 0.85 * exp(-kw(fract(-uPos * (0.5 + 1.5 * uOpb)) * 9.0 - sq) * 1.2) + step(1.0 - 0.3 * uOpb, hash2(cel + floor(uT * (4.0 + 12.0 * uOpb))));
   float d1 = (0.3 + 0.7 * uPulse) * (0.5 + 0.5 * step(0.5, hash2(cel + tel))) + uHit * 1.2;
   float b1 = 0.04 + 0.16 * (0.5 + 0.5 * sin(uT * 0.7 + h * 6.28)) * step(0.72, h);
@@ -1368,13 +1419,13 @@ void main() {
   float m = max(abs(f.x), abs(f.y));
   float vlak = (1.0 - smoothstep(0.42, 0.5, m)), rand = smoothstep(0.4, 0.43, m) * (1.0 - smoothstep(0.45, 0.48, m));
   float binnen = 0.6 + 0.4 * (1.0 - smoothstep(0.0, 0.5, length(f)));
-  vec3 c = uD * 0.3 + (kol * lev * 0.8 * vlak * binnen + rand * 0.06) * (1.0 - 0.85 * uDim) + uFlits * 0.5 * vlak;
+  vec3 c = uD * 0.2 + (kol * lev * 0.8 * vlak * binnen + rand * 0.04) * (1.0 - 0.85 * uDim) + uFlits * 0.25 * vlak;
   gl_FragColor = vec4(c, 1.0);
 }`;
   reg('vloer', 'ledtegels', { gewicht: 1.1, maak(ctx, stijl, plek) {
     const P = palet(stijl), M = maatVan(stijl, plek), u = mu(P, { uTegel: { value: M.w / Math.max(4, Math.round(M.w / 0.9)) } });
     vloerMesh(ctx, M, u, FS_TEGELS);
-    const v = volger();
+    const v = volger(P);
     return { update(dt, now, b, stand) { v.stap(dt, b, stand); muZet(u, now, b, v, busLicht(ctx)); } };
   } });
 
@@ -1388,14 +1439,15 @@ void main() {
   float v = 0.5 + 0.5 * sin(w.x * 2.0 + w.y * 1.6 + t) + uBas * 0.25 * sin(rho * 3.0 - uT * 6.0) * exp(-rho * 0.12);
   vec3 kol = mix(pal3(v * 0.9 + t * 0.05), uD * 2.0, 0.5 * uBrk);
   float lijn = smoothstep(0.9, 1.0, 1.0 - abs(fract(v * 4.0) - 0.5) * 2.0);
-  float lev = (0.35 + 0.25 * uEn + 0.35 * uPulse * (1.0 - uBrk) + 0.5 * uDrp + 0.3 * uOpb + 0.6 * uHit) * (1.0 - 0.65 * uBrk);
-  vec3 c = mix(uD, kol, 0.75) * lev + lijn * mix(kol, vec3(1.0), 0.5) * (0.2 + 0.5 * uHoog) * (1.0 - 0.6 * uBrk);
-  gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.5, 1.0);
+  float lev = (0.06 + 0.08 * uEn + 0.22 * uPulse * (1.0 - uBrk) + 0.22 * uDrp + 0.16 * uOpb + 0.3 * uHit) * (1.0 - 0.8 * uBrk);
+  float ader = smoothstep(0.55, 1.0, v);  // alleen de toppen van de golven gloeien, de rest is diep donker
+  vec3 c = kol * lev * (0.25 + 0.75 * ader) + lijn * kol * (0.12 + 0.35 * uHoog) * (1.0 - 0.7 * uBrk);
+  gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.2 * ader, 1.0);
 }`;
   reg('vloer', 'vloeibaar', { gewicht: 0.9, past: s => s.sfeer !== 'rauw', maak(ctx, stijl, plek) {
     const P = palet(stijl), M = maatVan(stijl, plek), u = mu(P, { uFase: { value: ctx.rnd() * 50 } });
     vloerMesh(ctx, M, u, FS_VLOEI);
-    const v = volger(); let fase = u.uFase.value;
+    const v = volger(P); let fase = u.uFase.value;
     return { update(dt, now, b, stand) {
       v.stap(dt, b, stand); muZet(u, now, b, v, busLicht(ctx));
       fase += dt * meng(v, 0.35 + 0.3 * v.en, 0.4 + 1.4 * v.opb, 1.3, 0.12); u.uFase.value = fase % 5000;
@@ -1417,13 +1469,13 @@ void main() {
     }
   }
   c += pal3(uPos / 16.0) * exp(-rho * rho * 0.5) * (0.15 + 0.6 * uBas) * (1.0 - 0.5 * uBrk);
-  gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.5, 1.0);
+  gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.2, 1.0);
 }`;
   reg('vloer', 'golven', { gewicht: 1, maak(ctx, stijl, plek) {
     const P = palet(stijl), M = maatVan(stijl, plek), ringen = new Float32Array(8).fill(-1), kleur = new Float32Array(8);
     const u = mu(P, { uRing: { value: ringen }, uRingK: { value: kleur }, uV: { value: 4 }, uCentrum: { value: new THREE.Vector2() } });
     vloerMesh(ctx, M, u, FS_GOLF);
-    const v = volger(); let vorig = null, nr = 0;
+    const v = volger(P); let vorig = null, nr = 0;
     return { update(dt, now, b, stand) {
       v.stap(dt, b, stand); muZet(u, now, b, v, busLicht(ctx));
       const f = focusVan(ctx); u.uCentrum.value.set(f.x, f.z); u.uV.value = 3.5 + 2 * v.drp;
@@ -1447,12 +1499,12 @@ void main() {
   float scan = exp(-kw((vP.y - scanZ) / 0.35)) * (1.0 - uBrk);
   float lev = wGroove() * (0.55 + 0.45 * uPulse) + uOpb * (0.4 + 0.8 * uOpb) + uDrp * (1.0 + 0.4 * uPulse + uHit) + uBrk * 0.15;
   vec3 c = uD * 0.4 + (kx * lx + kz * lz) * lev + mix(uC, vec3(1.0), 0.4) * scan * 0.6;
-  gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.5, 1.0);
+  gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.15, 1.0);
 }`;
   reg('vloer', 'raster', { gewicht: 0.9, past: s => s.sfeer !== 'organisch' && s.sfeer !== 'luxe', maak(ctx, stijl, plek) {
     const P = palet(stijl), M = maatVan(stijl, plek), u = mu(P, { uScroll: { value: 0 }, uCel: { value: 1.0 }, uDiep: { value: M.d } });
     vloerMesh(ctx, M, u, FS_RASTER);
-    const v = volger(); let scroll = 0;
+    const v = volger(P); let scroll = 0;
     return { update(dt, now, b, stand) {
       v.stap(dt, b, stand); muZet(u, now, b, v, busLicht(ctx));
       scroll += v.dp * meng(v, 1, 1 + 3 * v.opb * v.opb, 2, 0.1); u.uScroll.value = scroll % 64;  // cellen per tel, naar de ingang toe
@@ -1486,7 +1538,7 @@ void main() {
     const kl = []; for (let i = 0; i < NL; i++) kl.push(new THREE.Color());
     const u = mu(P, { uL: { value: bron }, uLK: { value: kl }, uCam: { value: V(0, 1.7, -M.d / 2) } });
     vloerMesh(ctx, M, u, FS_NAT.replace('${NL}', NL));
-    const v = volger(), KL = [P.a, P.b, P.c, P.b, P.a, P.c, P.a, WIT];
+    const v = volger(P), KL = [P.a, P.b, P.c, P.b, P.a, P.c, P.a, WIT];
     return { update(dt, now, b, stand) {
       v.stap(dt, b, stand); const L = busLicht(ctx); muZet(u, now, b, v, L);
       camLokaal(ctx, u.uCam.value); u.uCam.value.y = Math.max(0.4, u.uCam.value.y);
@@ -1590,7 +1642,7 @@ void main() {
     const kop = new Float32Array(4), levK = new Float32Array(4);
     const u = mu(P, { uKop: { value: kop }, uLevK: { value: levK }, uStaart: { value: 3 }, uPer: { value: PER }, uBasis: { value: 0 }, uKfase: { value: 0 } });
     const mesh = new THREE.Mesh(geo, shader(u, VS_LOOP, FS_LOOP, plusOpties)); mesh.renderOrder = 2; g.add(mesh);
-    const v = volger(); let pos = 0;
+    const v = volger(P); let pos = 0;
     return { update(dt, now, b, stand) {
       v.stap(dt, b, stand); muZet(u, now, b, v, busLicht(ctx));
       const ronde = meng(v, 8, 8 * Math.pow(16, -v.opb), 2, 24);  // tellen per rondje: in de opbouw van 8 naar een halve
@@ -1614,7 +1666,7 @@ void main() {
     const bs = inst(g, GEO.kegel, bundelMat([0.4, 0.34, 0.28][Z], 1.4, 1), n), vlek = Z === 0 ? inst(g, GEO.schijf, vlekMat(), n) : null;
     spots.forEach((s, i) => { _m.compose(_p.set(s.p.x, 0.15, s.p.z), _q.identity(), _s.set(0.36, 0.3, 0.36)); voet.setMatrixAt(i, _m); });
     klaar(voet);
-    const v = volger(), kk = new THREE.Color(), kWit = P.c.clone().lerp(WIT, 0.5), KL = [P.a, P.b, P.c], doel = V(0, 0, 0), raak = V(0, 0, 0);
+    const v = volger(P), kk = new THREE.Color(), kWit = P.c.clone().lerp(WIT, 0.5), KL = [P.a, P.b, P.c], doel = V(0, 0, 0), raak = V(0, 0, 0);
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits, f = focusVan(ctx);
@@ -1652,7 +1704,7 @@ void main() {
     let gloed = null;
     if (Z === 0) { gloed = new THREE.InstancedMesh(GEO.straalG, bundelMat(0.2, 2.5, 0), n); gloed.frustumCulled = false; gloed.instanceMatrix = kern.instanceMatrix; gloed.instanceColor = kern.instanceColor; g.add(gloed); }
     const stip = Z < 2 ? inst(g, GEO.schijf, vlekMat(), n) : null;
-    const v = volger(), kk = new THREE.Color(), d = V(0, 0, 0), raak = V(0, 0, 0);
+    const v = volger(P), kk = new THREE.Color(), d = V(0, 0, 0), raak = V(0, 0, 0);
     return {
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;

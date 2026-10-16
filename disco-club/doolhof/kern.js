@@ -7,9 +7,33 @@
 // Shot SHOTS.doolhof: een loper loopt van het midden van zaal 2 door de ∞-deur en door 3-5 kamers ('Camera: het doolhof' = eindeloos);
 // in 'auto' kiest club/showregie.js wanneer (in de break: doolhof.direct, meteen de gang vóór kamer 1 in).
 // Test: doolhof.start('boiler'), doolhof.start('boiler', true) (direct) of doolhof.volgende = 'boiler'.
+//
+// LICHT: het doolhof is een lichtshow, geen verlichte ruimte. De kern geeft geen vulverlichting (ambient bijna 0, getint met
+// show.kleur(0), wit bij show.flits): kamers en gangen lichten zelf (emissive/additief/ShaderMaterial, ctx.licht). Bloom staat aan in
+// hoog/midden met de drempel op de felste kleurcomponent (verzadigd rood en blauw gloeien ook op, de luminantie liet ze liggen), plus
+// korte lichtsporen (feedback). In de ∞-gang vloeit dat alles vanuit de stand van zaal 2 in (en bij het opruimen weer terug).
+// SHOW-BUS window.doolhof.show: één object, elk beeld bijgewerkt (vóór de gangen en kamers), alleen lezen. Zo hebben alle kamers en
+// gangen dezelfde show-dynamiek op de tel:
+//   stand     'groove' | 'break' | 'opbouw' | 'drop'  (window.clubRegie van club/lichtregie.js; zonder regie altijd 'groove')
+//   opbouw    0..1  voortgang van de opbouw (0 bij het begin, 1 na 16 tellen); buiten de opbouw 0
+//   drop      0..1  1 op de tel van de drop, klinkt in 16 tellen uit ((1 - tel/16)^2: na 4 tellen 0,56, na 8 0,25); anders 0
+//   flits     0..1  strobe-moment (1 = vol wit), alleen op de tel: opbouw steeds sneller (1-2-4-8 per tel, zoals zaal 1), salvo en
+//                   flitsen op de tel in de drop, de salvo's van de club in de groove, nooit in de break; altijd 0 als S.strobe 'uit'
+//                   is. Wit alleen hiervoor gebruiken.
+//   kleur(i)  THREE.Color: kleur i (geheel getal, modulo 3) van het palet van dit moment: verzadigd, nooit wit of pastel. Wisselt hard
+//             op de tel: groove per maat (nieuw palet per 8 maten, kleuren volgen de fase van de avond), break per 2 maten (koel
+//             blauw/violet), opbouw per maat -> 2 tellen -> elke tel, drop elke tel (heet palet, nieuw per 2 maten).
+//             Gedeeld object: elk beeld opnieuw opvragen en niet aanpassen; kleur(i, uit) kopieert in uit en geeft uit terug.
+//   blackout  0..1  hoe donker het nu moet: ~0,8 in de break (één spot of langzame bundel), zakt in de opbouw naar 0, 0 in groove en
+//                   drop (in ~1 s erin, op de drop meteen 0). De kern dimt zelf alleen zijn ambient en de standaard-doos ermee.
 (function () {
   'use strict';
   const doolhof = window.doolhof = window.doolhof || {};
+  // show-bus (zie boven): bestaat altijd, ook als de kern hieronder niet start (dan blijft hij op groove)
+  const SHOW_KL = [new THREE.Color(0xff0080), new THREE.Color(0x00e5ff), new THREE.Color(0x7a00ff)];
+  let showRot = 0;  // welke kleur van het palet nu kleur(0) is
+  const show = doolhof.show = { stand: 'groove', opbouw: 0, drop: 0, flits: 0, blackout: 0,
+    kleur(i, uit) { const c = SHOW_KL[((((i | 0) + showRot) % 3) + 3) % 3]; return uit ? uit.copy(c) : c; } };
   doolhof.kamers = doolhof.kamers || {};
   doolhof.actief = null;     // de kamer (wat maak() teruggaf) waar de camera nu is
   doolhof.volgende = null;   // soort die als volgende kamer moet komen (testen); daarna weer loting
@@ -61,6 +85,61 @@
     }
     STAT.hookMs = performance.now() - t0;
   });
+
+  // --- show-bus bijwerken: elk beeld, vóór de gangen (hook hieronder) en de kamers (in het shot); clubRegie is dan al bij ---
+  // paletten: drie verzadigde kleuren per moment, per fase van de avond (club/lichtregie.js); break koel, drop heet
+  const PAL = {
+    deuren: [[0xff3300, 0xff0066, 0xffaa00], [0xff1a1a, 0xff7a00, 0xc800ff], [0xff0040, 0xffc400, 0xff00b4]],
+    piek: [[0xff0080, 0x00e5ff, 0x7a00ff], [0x00ff66, 0xff00c8, 0x0055ff], [0xff2200, 0x00aaff, 0xff00aa], [0xffcc00, 0xff0055, 0x6a00ff]],
+    diep: [[0x2233ff, 0x8800ff, 0x00ddff], [0x00ffaa, 0x3300ff, 0xff00cc], [0x0066ff, 0x00ffcc, 0x7700ff]],
+    ochtend: [[0xff5500, 0xff1a8c, 0x8a2cff], [0xff8800, 0xff0055, 0x00c8ff], [0xff3366, 0xffaa00, 0xaa00ff]],
+  };
+  const PAL_BREAK = [[0x1a22ff, 0x7700ff, 0x0099ff], [0x5500ff, 0x0044ff, 0xcc00ff], [0x0033ff, 0x00bbff, 0x6600ff]];
+  const PAL_DROP = [[0xff0033, 0x00e5ff, 0xff00cc], [0xff00e5, 0x00ffcc, 0xffdd00], [0xff2200, 0x0066ff, 0xff0099]];
+  let showPal = null, showFrase = null, showStand = null;
+  function showPalet(fam) {  // nieuw palet uit de familie, niet hetzelfde als nu
+    let p = fam[Math.floor(Math.random() * fam.length)];
+    if (fam.length > 1 && p === showPal) p = fam[(fam.indexOf(p) + 1) % fam.length];
+    showPal = p; for (let i = 0; i < 3; i++) SHOW_KL[i].setHex(p[i]);
+  }
+  function showBeeld(dt) {
+    const R = window.clubRegie, st = (R && R.stand) || 'groove', tel = Math.max(0, beatPos);
+    const now = (typeof last === 'number' ? last : performance.now()) / 1000;  // de klok van frame() (daarop staan de strobe-salvo's)
+    const nieuw = st !== showStand; showStand = st;
+    show.stand = st;
+    const kbo = st === 'opbouw' && R ? tel - Math.floor(R.sinds || 0) : 0;  // tellen sinds het begin van de opbouw (als lichtregie)
+    show.opbouw = Math.min(1, Math.max(0, kbo / 16));
+    const kb = R && R.dropBeat >= 0 ? tel - R.dropBeat : 1e9;                 // tellen sinds de drop
+    show.drop = st === 'drop' && kb < 16 ? Math.pow(1 - Math.max(0, kb) / 16, 2) : 0;
+    // palet: nieuw bij elke sectie, in de groove per 8 maten, in de drop per 2 maten; de volgorde draait op de tel
+    const fam = st === 'break' ? PAL_BREAK : st === 'drop' ? PAL_DROP : PAL[R && R.fase] || PAL.piek;
+    const frase = st === 'drop' ? Math.floor(Math.max(0, kb) / 8) : st === 'groove' ? Math.floor(tel / 32) : 0;
+    if (nieuw || frase !== showFrase || !showPal) { showFrase = frase; showPalet(fam); }
+    const stap = st === 'drop' ? 1 : st === 'break' ? 8 : st === 'opbouw' ? (show.opbouw < 0.5 ? 4 : show.opbouw < 0.75 ? 2 : 1) : 4;
+    showRot = Math.floor(tel / stap);
+    // flits: alleen op de tel en nooit met de strobe uit
+    let f = 0;
+    if (S.strobe !== 'uit') {
+      const vaak = S.strobe === 'vaak', fase = tel % 1;
+      if (st === 'opbouw') {  // zoals zaal 1: 1, 2, 4, 8 flitsen per tel; zwak aan het begin, vol aan het eind
+        const n = kbo < 8 ? 1 : kbo < 12 ? 2 : kbo < 16 ? 4 : 8;
+        if ((tel * n) % 1 < 0.25) f = 0.3 + 0.7 * show.opbouw;
+      } else if (st === 'drop' && kb >= -0.5) {
+        const k = Math.max(0, kb);
+        if (k < 1) f = Math.exp(-k * period / 0.13);                          // blinder op de tel van de drop
+        if (k < (vaak ? 2 : 1)) { if ((tel * 4) % 1 < 0.3) f = 1; }            // salvo (4 per tel)
+        else if (k < (vaak ? 8 : 4)) { if (fase < 0.15) f = Math.max(f, vaak ? 1 : 0.8); }  // op elke tel
+        else if (vaak && k < 16 && (Math.floor(tel) & 1) === 0 && fase < 0.12) f = Math.max(f, 0.6 * show.drop + 0.2);
+      } else if (st === 'groove' && now < strobeUntil) f = (now * strobeHz) % 1 < 0.3 ? 1 : 0;  // de salvo's van de club
+    }
+    show.flits = f > 0.02 ? f : 0;
+    // blackout: break donker, opbouw licht weer op, drop meteen vol
+    const wil = st === 'break' ? 0.8 : st === 'opbouw' ? 0.8 * (1 - show.opbouw) : 0;
+    if (st === 'drop') show.blackout = 0;
+    else show.blackout += (wil - show.blackout) * Math.min(1, dt * (wil > show.blackout ? 1.5 : 3));
+    doosBeeld();
+  }
+  clubHooks.push(dt => showBeeld(dt));
   // groepen die (nog) los van de scène bestaan maar leven: de klaarstaande kamer, de volgende kamer, een nieuwe ∞-gang
   const losseGroepen = new Set();
   const levend = o => { while (o.parent) o = o.parent; return o === scene || losseGroepen.has(o); };
@@ -564,6 +643,13 @@
     muur: houd(new THREE.MeshBasicMaterial({ map: wallTex, color: 0x4a4048 })),
     plafond: houd(new THREE.MeshBasicMaterial({ color: 0x0d0b10 })),
   };
+  // de standaard-doos zakt weg in het donker: alleen de show licht hem op (een zweem palet op de tel, wit bij een flits)
+  function doosBeeld() {
+    const a = 1 - 0.75 * show.blackout, p = pulse * energy * a, f = show.flits;
+    show.kleur(0, DOOS.vloer.color).multiplyScalar(0.5 * p).addScalar(0.2 * a + 1.0 * f);
+    show.kleur(1, DOOS.muur.color).multiplyScalar(0.14 * p).addScalar(0.06 * a + 0.6 * f);
+    DOOS.plafond.color.setScalar(0.025 * a + 0.25 * f);
+  }
   // vlak dat naar binnen kijkt; uv = deel [u0,u1,v0,v1] zodat stukken van één wand doorlopen.
   // BackSide-materiaal (zoals de club-doos): winding en normalen om, dan toont BackSide dezelfde binnenkant met dezelfde uv.
   function binnenVlak(parent, mat, bw, bh, pos, ry, rx, uv) {
@@ -1052,7 +1138,7 @@
   function maakShot() {
     const direct = !!doolhof.direct; doolhof.direct = false;  // showregie in de break: meteen de gang vóór kamer 1 in (de wandeling door zaal 2 duurt ~15 s)
     const z = { lt: 0, eigen: new Set(), verborgen: new Map(), z2licht: new Map(), z2lampen: [], fase: 'zaal2', dist: 0, v: 1.1,
-      dans: false, modus: 'volg', snap: null, rond: null, doel: 3 + Math.floor(Math.random() * 3), amb: ambient.intensity, kw: null, nLamp: 0 };
+      dans: false, modus: 'volg', snap: null, rond: null, doel: 3 + Math.floor(Math.random() * 3), kw: null, nLamp: 0, naFlits: false };
     // klaarstaande voorraad gebruiken (niet als een test om een andere soort vraagt of de stand intussen anders is)
     let V = voorraad;
     if (!(V && V.klaar && !V.weg && V.stand === KW.stand && V.zwaar === zwaar() && V.R && (!doolhof.volgende || doolhof.volgende === V.R.soort))) V = null;
@@ -1123,6 +1209,7 @@
       }
       if (bloom && bloom.enabled) bloom.strength /= 0.55;
     }
+    lichtTerug();
     if (z.kw) { KW.bol = z.kw.bol; KW.schaduw = z.kw.schaduw; renderer.shadowMap.needsUpdate = true; }
     zaal2LichtTerug(z);
     doolhof.actief = null;
@@ -1240,21 +1327,62 @@
       if (k >= 1) z.snap = null;
     } else { camPos.copy(tP); camLook.copy(tL); camFov = fov; }
   }
-  function sfeer(z, dt) {  // ambient vast, sporen en bloom van zaal 2 vloeien in de ∞-gang naar die van de kamers
-    const k = z.fase === 'zaal2' ? 1 - glad(z.dist, z.own.uitgangBoog + 0.3, z.own.tpBoog - 0.4) : 0;
-    z.amb += ((KW.stand === 'minimaal' ? 1.25 : 0.8) - z.amb) * Math.min(1, dt * 1.5);
-    ambient.intensity = z.amb;
+  // --- licht van het doolhof (zie boven): k = 1 in zaal 2 en het begin van de ∞-gang, 0 in de kamers; alles vloeit daartussen ---
+  // ambient per zwaarte (hoog/midden, laag = 1 kamerlamp, minimaal = geen kamerlampen): bijna niets, de kamers lichten zelf
+  const AMB_BASIS = [0.05, 0.07, 0.14];
+  // bloom: drempel op de felste kleurcomponent met een zachte knie (uMax 1 = doolhof, 0 = de luminantie van de club); sterkte per stand
+  const BL_DREMPEL = 0.6, BL_STRAAL = 0.6;  // (felle muren gloeien zo niet mee, lampen, neon en lasers wel)
+  const AMB_KLEUR = ambient.color.clone(), BLOOM_OUD = bloom ? { threshold: bloom.threshold, radius: bloom.radius, hp: bloom.materialHighPassFilter } : null;
+  const ambDoel = new THREE.Color(), WIT = new THREE.Color(1, 1, 1);
+  let hpDoolhof = null;
+  if (bloom && bloom.highPassUniforms && THREE.LuminosityHighPassShader) {
+    hpDoolhof = houd(new THREE.ShaderMaterial({ uniforms: Object.assign({}, bloom.highPassUniforms, { uMax: { value: 0 } }),  // zelfde uniforms (tDiffuse, drempel)
+      vertexShader: THREE.LuminosityHighPassShader.vertexShader,
+      fragmentShader: `uniform sampler2D tDiffuse; uniform vec3 defaultColor; uniform float defaultOpacity, luminosityThreshold, smoothWidth, uMax;
+        varying vec2 vUv;
+        void main() {
+          vec4 t = texture2D(tDiffuse, vUv);
+          float v = mix(dot(t.rgb, vec3(0.299, 0.587, 0.114)), max(t.r, max(t.g, t.b)), uMax);
+          gl_FragColor = mix(vec4(defaultColor, defaultOpacity), t, smoothstep(luminosityThreshold, luminosityThreshold + mix(smoothWidth, 0.3, uMax), v));
+        }` }));
+    // alvast compileren (op de achtergrond, zonder te wachten): anders hapert het eerste beeld in het doolhof
+    klus('bloom-shader', (function* () { yield RUST; compileer([new THREE.Mesh(new THREE.PlaneGeometry(2, 2), hpDoolhof)], [], false); })());
+  }
+  function lichtTerug() {  // de club weer zoals hij was (de rest zetten het hoofdscript en de lichtregie zelf elk beeld)
+    ambient.color.copy(AMB_KLEUR);
+    if (bloom && BLOOM_OUD) { bloom.threshold = BLOOM_OUD.threshold; bloom.radius = BLOOM_OUD.radius; bloom.materialHighPassFilter = BLOOM_OUD.hp; }
+  }
+  function sfeer(z) {
+    const k = z.fase === 'zaal2' ? 1 - glad(z.dist, z.own.uitgangBoog + 0.3, z.own.tpBoog - 0.4) : 0, sh = show;
+    // ambient: een zweem van kleur(0) die op de kick even aanzwelt, in de break nog minder, wit bij een flits (dan flitsen de figuren
+    // mee). ambient.intensity is hier wat het hoofdscript en de lichtregie deze frame voor zaal 2 zetten.
+    const amb = AMB_BASIS[zwaar()] * (1 - 0.75 * sh.blackout) * (1 + 1.2 * pulse * energy + 0.6 * sh.drop) + 1.1 * sh.flits;
+    ambDoel.copy(sh.kleur(0)).lerp(WIT, 0.25 + 0.75 * Math.min(1, sh.flits));
+    ambient.intensity = ambient.intensity * k + amb * (1 - k);
+    ambient.color.copy(AMB_KLEUR).lerp(ambDoel, 1 - k);
     strobeLight.intensity = 0;  // de stroboscoop (bereik 40 m) zou de loper in de ∞-gang door de muur heen laten flitsen
     const zfWas = camera.position.z > TUN_END - 0.5 ? 0.55 : 1;  // wat de kern en de lichtregie deze frame al toepasten (camera = vorige frame)
-    if (bloom && bloom.enabled) bloom.strength *= (1 - 0.45 * k) / zfWas;
+    if (bloom && bloom.enabled) {
+      const z2 = bloom.strength * 0.55 / zfWas, st = sh.stand;  // zaal 2 (daar gedempt: al fel)
+      const B = (st === 'break' ? 0.8 : st === 'opbouw' ? 0.8 + 0.4 * sh.opbouw : 0.9) + 0.3 * pulse * energy + 0.3 * sh.drop + 0.15 * sh.flits;
+      bloom.strength = z2 * k + B * (1 - k);
+      bloom.threshold = BLOOM_OUD.threshold * k + BL_DREMPEL * (1 - k);
+      bloom.radius = BLOOM_OUD.radius * k + BL_STRAAL * (1 - k);
+      if (hpDoolhof) { bloom.materialHighPassFilter = hpDoolhof; hpDoolhof.uniforms.uMax.value = 1 - k; }
+    }
     if (feedback) {
       if (KW.stand === 'laag' || KW.stand === 'minimaal') feedback.enabled = false;
       else {
-        const u = feedback.material.uniforms, nu = performance.now() / 1000;
-        feedback.enabled = S.fb > 0.01 || S.mirror || k > 0.02;
-        u.amount.value = S.fb + (Math.max(S.fb, 0.4 + 0.1 * pulse) - S.fb) * k;
-        u.zoom.value = 1.02 + 0.015 * k + 0.012 * Math.sin(nu * 0.21);
-        u.rotA.value = (0.006 + 0.012 * k) * Math.sin(nu * 0.13);
+        // korte lichtsporen: bundels en lasers trekken strepen; in de break lang en dromerig, geen nagloed na een strobe-flits
+        const u = feedback.material.uniforms, nu = performance.now() / 1000, st = sh.stand;
+        let d = st === 'break' ? 0.5 : st === 'opbouw' ? 0.32 + 0.18 * sh.opbouw : 0.26 + 0.1 * pulse;
+        d += 0.3 * sh.drop;
+        if (z.naFlits) d *= 0.3;
+        z.naFlits = sh.flits > 0.3;
+        u.amount.value = Math.max(S.fb, 0.4 + 0.1 * pulse) * k + Math.max(S.fb, d) * (1 - k);
+        feedback.enabled = S.fb > 0.01 || S.mirror || u.amount.value > 0.02;
+        u.zoom.value = 1.035 * k + 1.01 * (1 - k) + (0.012 * k + 0.005 * (1 - k)) * Math.sin(nu * 0.21);
+        u.rotA.value = (0.018 * k + 0.004 * (1 - k)) * Math.sin(nu * 0.13);
       }
     }
     if (z.fase === 'zaal2') zaal2Licht(z, k);
@@ -1349,21 +1477,42 @@
     }
   }
 
-  // --- eenvoudige kamer van de kern zelf: een smalle gang-kamer met neonbuizen en wat publiek langs de wanden ---
+  // --- eenvoudige kamer van de kern zelf: een smalle gang-kamer als lichttunnel (ledpoorten, ledbuizen, publiek langs de wanden) ---
   doolhof.registreer('gang-kamer', { gewicht: 0.3, maak(ctx) {
     const r = ctx.rnd, kies = a => a[Math.min(a.length - 1, Math.floor(r() * a.length))];
     const w = 6 + r() * 2, d = 13 + r() * 5, h = 3.3;
     const tint = new THREE.Color().setHSL(r(), 0.85, 0.55);
-    ctx.doos({ w, d, h, muur: new THREE.MeshBasicMaterial({ map: wallTex, color: new THREE.Color(0x40363a).lerp(tint, 0.18) }) });
-    // neonbuizen onder het plafond langs beide wanden: op de tel loopt er een lichtgolf van de ingang naar de uitgang
+    const muur = new THREE.MeshBasicMaterial({ map: wallTex, color: 0x000000 });  // schildering in het donker, alleen de show licht hem op
+    ctx.doos({ w, d, h, muur });
+    // ledbuizen onder het plafond langs beide wanden: een looplicht van de ingang naar de uitgang, op de show-bus
     const buizen = [], n = Math.max(3, Math.round(d / 3.2)), seg = d / n;
     for (const sx of [-1, 1]) for (let i = 0; i < n; i++) {
       const m = additive(0x000000);
       add(ctx.groep, BOX, m, [sx * (w / 2 - 0.05), h - 0.3, -d / 2 + (i + 0.5) * seg], [0.06, 0.06, seg * 0.82]);
-      buizen.push({ m, i });
+      buizen.push({ m, i, sx });
     }
     const plint = additive(0x000000);  // gloeiende plint
     for (const sx of [-1, 1]) add(ctx.groep, BOX, plint, [sx * (w / 2 - 0.03), 0.04, 0], [0.04, 0.04, d - 0.2]);
+    // ledpoorten: per poort twee staande balken langs de wanden (achter het publiek: silhouetten tegen het licht) en één over het
+    // plafond; de camera kijkt er doorheen als door een lichttunnel. Eén draw, kleur per balk op de show-bus.
+    const nb = Math.max(5, Math.round(d / 1.6)), balken = new THREE.InstancedMesh(BOX, additive(0xffffff), nb * 3), kc = new THREE.Color(), m4 = new THREE.Matrix4();
+    for (let i = 0; i < nb; i++) {
+      const z = -d / 2 + (i + 0.5) * d / nb;
+      for (let s = 0; s < 2; s++) { m4.makeScale(0.07, h - 0.5, 0.07).setPosition((s ? 1 : -1) * (w / 2 - 0.05), 0.25 + (h - 0.5) / 2, z); balken.setMatrixAt(i * 3 + s, m4); }
+      m4.makeScale(w - 0.1, 0.07, 0.07).setPosition(0, h - 0.06, z); balken.setMatrixAt(i * 3 + 2, m4);
+      for (let s = 0; s < 3; s++) balken.setColorAt(i * 3 + s, kc.setRGB(0, 0, 0));
+    }
+    balken.frustumCulled = false; ctx.groep.add(balken);
+    // licht dat de balken op muur en vloer werpen (zachte gloed, additief): per staande balk een veeg op de muur en een plas op de vloer
+    const was = new THREE.InstancedMesh(gangVlak1, new THREE.MeshBasicMaterial({ map: gloedTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), nb * 4);
+    const wq = new THREE.Quaternion(), wv = new THREE.Vector3(), ws = new THREE.Vector3(), we = new THREE.Euler();
+    for (let i = 0; i < nb; i++) for (let s = 0; s < 2; s++) {
+      const sx = s ? 1 : -1, z = -d / 2 + (i + 0.5) * d / nb;
+      wq.setFromEuler(we.set(0, -sx * Math.PI / 2, 0)); m4.compose(wv.set(sx * (w / 2 - 0.02), h / 2, z), wq, ws.set(1.5, h * 1.1, 1)); was.setMatrixAt(i * 4 + s, m4);
+      wq.setFromEuler(we.set(-Math.PI / 2, 0, 0)); m4.compose(wv.set(sx * (w / 2 - 0.5), 0.015, z), wq, ws.set(2.2, 2.2, 1)); was.setMatrixAt(i * 4 + 2 + s, m4);
+      for (let k = 0; k < 4; k++) was.setColorAt(i * 4 + k, kc.setRGB(0, 0, 0));
+    }
+    was.frustumCulled = false; was.renderOrder = -1; ctx.groep.add(was);
     const bord = ctx.neon(kies(['DEEPER', 'NO EXIT', 'VERDWAALD', 'NOG DIEPER', 'LOST', 'AFTER', 'HIER NIET', '∞']), '#' + tint.getHexString(), 2.6, 0.65);
     const bs = r() < 0.5 ? -1 : 1;
     bord.position.set(bs * (w / 2 - 0.06), 2.2, (r() - 0.5) * d * 0.4); bord.rotation.y = -bs * Math.PI / 2;
@@ -1374,15 +1523,44 @@
       const sx = i % 2 ? 1 : -1, z = -d / 2 + 2 + (d - 4) * (i + 0.5) / nf + (r() - 0.5) * 0.6;
       ctx.figuur({ x: sx * (w / 2 - 0.7), z, face: -sx * Math.PI / 2 + (r() - 0.5) * 0.9, rol: r() < 0.3 ? 'dans' : 'staan' });
     }
+    // camera: laag bij de ingang, de blik door de poorten naar de uitgang; de dansende loper staat er als silhouet tussen
+    const cp = new THREE.Vector3(), cl = new THREE.Vector3(), cr = { pos: cp, look: cl, fov: 60 }, cs = r() < 0.5 ? -1 : 1;
     return { maat: { w, d, h }, blijf: 8,
+      cam(t) {
+        const u = 0.5 + 0.5 * Math.sin(t * 0.13);
+        cp.set(cs * (0.4 + 0.9 * u), 1.05 + 0.35 * u, -d / 2 + 1.3 + 1.2 * u); cl.set(-cs * 0.4 * u, 1.75 + 0.25 * u, d / 2);
+        ctx.groep.updateWorldMatrix(true, false); ctx.groep.localToWorld(cp); ctx.groep.localToWorld(cl);
+        return cr;
+      },
       update() {
-        const b = ctx.beat();
+        const b = ctx.beat(), sh = doolhof.show, a = 1 - 0.85 * sh.blackout, st = sh.stand;
+        // golf van ingang naar uitgang: break traag (8 tellen), opbouw steeds sneller (4 -> 1), groove 4 tellen, drop elke tel
+        const per = st === 'break' ? 8 : st === 'opbouw' ? 4 / (1 + 3 * sh.opbouw) : st === 'drop' ? 1 : 4;
         for (const t of buizen) {
-          const f = ((b.pos / 4 - t.i / n) % 1 + 1) % 1;  // golf van ingang naar uitgang, elke 4 tellen
-          t.m.color.copy(tint).multiplyScalar(0.12 + 0.9 * Math.pow(1 - f, 6) * (0.4 + 0.6 * b.energy));
+          const f = ((b.pos / per - t.i / n) % 1 + 1) % 1;
+          const v = (0.03 + 1.2 * Math.pow(1 - f, 6) * (0.45 + 0.55 * b.energy) + 0.7 * sh.drop * b.pulse) * a;
+          sh.kleur(t.sx > 0 ? 0 : 1, t.m.color).multiplyScalar(v).addScalar(1.2 * sh.flits);
         }
-        plint.color.copy(tint).multiplyScalar(0.15 + 0.35 * b.pulse);
-        if (lamp) lamp.intensity = 1.1 + 1.3 * b.pulse * b.energy;
+        sh.kleur(2, plint.color).multiplyScalar((0.05 + 0.45 * b.pulse) * a);
+        sh.kleur(0, muur.color).multiplyScalar(0.05 * b.pulse * a).addScalar(0.05 * a + 0.55 * sh.flits);
+        if (lamp) { sh.kleur(0, lamp.color); lamp.intensity = (0.4 + 1.6 * b.pulse * b.energy) * a + 2.5 * sh.flits; }
+        // ledpoorten: break één trage poort, opbouw een looplicht dat versnelt, groove om en om op de tel + looplicht, drop alles aan
+        const tel = Math.floor(b.pos);
+        for (let i = 0; i < nb; i++) {
+          let v, ki = i + tel;
+          if (st === 'break') { v = i === Math.floor(b.pos / 2) % nb ? 0.6 : 0.02; ki = 0; }
+          else if (st === 'opbouw') { const q = ((b.pos * (1 + 3 * sh.opbouw) - i) % nb + nb) % nb; v = 0.06 + 0.25 * sh.opbouw + Math.exp(-q * 0.8) * (0.5 + 0.9 * sh.opbouw); ki = 0; }
+          else if (st === 'drop') v = (0.7 + 0.9 * b.pulse) * (0.6 + 0.4 * sh.drop);
+          else { const q = ((b.pos * 2 - i) % nb + nb) % nb; v = 0.35 + 0.8 * b.pulse * b.energy * ((i + tel) & 1) + 1.0 * Math.exp(-q * 1.2); }
+          for (let s = 0; s < 3; s++) {
+            sh.kleur(ki + (s === 2 ? 1 : 0), kc).multiplyScalar(s === 2 ? v * 0.8 : v).addScalar(1.3 * sh.flits);
+            balken.setColorAt(i * 3 + s, kc);
+          }
+          sh.kleur(ki, kc).multiplyScalar(0.55 * v);
+          for (let k = 0; k < 4; k++) was.setColorAt(i * 4 + k, kc);
+        }
+        was.instanceColor.needsUpdate = true;
+        balken.instanceColor.needsUpdate = true;
       } };
   } });
 })();
