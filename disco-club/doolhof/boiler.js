@@ -424,6 +424,33 @@
     // --- elk beeld ---
     const M4 = new THREE.Matrix4(), P = new THREE.Vector3(), P2 = new THREE.Vector3(), S = new THREE.Vector3(), EEN = new THREE.Vector3(1, 1, 1), Q = new THREE.Quaternion(), E = new THREE.Euler();
     let vorigeTel = -1;
+    // silhouetten: dichtbij een kartonnen bord, steil van boven (totaal) een plat vlak: dan zijn ze weg (met speling tegen knipperen).
+    // Gerekend op de camera van het vorige beeld én het doel van cam() (bij een knip anders één beeld een reuzenbord)
+    const camNu = new THREE.Vector3(), camDoel = new THREE.Vector3();
+    let doelGeldig = false, silPos = 0, silEn = 0;
+    const teDicht = (s, c, m) => {  // ook: van opzij gezien (ze kijken naar de piramide) is een silhouet een dun streepje
+      const dx = c.x - s.x, dz = c.z - s.z, dh = Math.hypot(dx, dz), hoog = c.y - 1.0;
+      return dh < 3.8 + m || hoog / Math.max(dh, 0.1) > 0.55 - m * 0.25 || Math.abs(dx * Math.sin(s.face) + dz * Math.cos(s.face)) < (0.5 + m * 0.3) * dh;
+    };
+    function zetSil() {
+      for (const s of sil) {
+        const act = s.op ? s.p1 : s.p0, rust = s.op ? s.p0 : s.p1;
+        if (rust !== act) silMesh[rust].setMatrixAt(s.slot[rust], NUL);
+        const m = s.weg ? 0.35 : 0;
+        s.weg = teDicht(s, camNu, m) || (doelGeldig && teDicht(s, camDoel, m));
+        if (s.weg) { silMesh[act].setMatrixAt(s.slot[act], NUL); if (s.tel >= 0) telSil.setMatrixAt(s.tel, NUL); continue; }
+        const bob = 0.05 * Math.pow(Math.abs(Math.sin(Math.PI * (silPos + s.ph))), 2) * (0.6 + silEn);
+        Q.setFromEuler(E.set(0, s.face, 0.05 * Math.sin(Math.PI * (silPos * 0.5 + s.ph))));
+        P.set(s.x, bob, s.z);
+        silMesh[act].setMatrixAt(s.slot[act], M4.compose(P, Q, S.set(s.sw, s.sh, 1)));
+        if (s.tel >= 0) {
+          P2.set(TEL_X * s.sw, TEL_Y * s.sh, 0.04).applyQuaternion(Q).add(P);
+          telSil.setMatrixAt(s.tel, M4.compose(P2, Q, EEN));
+        }
+      }
+      for (const m of silMesh) if (m) m.instanceMatrix.needsUpdate = true;
+      if (telSil) telSil.instanceMatrix.needsUpdate = true;
+    }
     function update(dt, now) {
       const b = ctx.beat() || {}, pu = b.pulse || 0, bas = b.bas || 0, en = b.energy || 0, pos = b.pos || 0;
       dt = Math.min(dt || 0, 0.1);
@@ -465,19 +492,8 @@
       const tel = Math.floor(pos);
       if (tel !== vorigeTel) { vorigeTel = tel; for (const s of sil) s.op = en > s.drempel; }
       silMat.color.setScalar(0.75 + 0.5 * pu);
-      for (const s of sil) {
-        const act = s.op ? s.p1 : s.p0, rust = s.op ? s.p0 : s.p1;
-        const bob = 0.05 * Math.pow(Math.abs(Math.sin(Math.PI * (pos + s.ph))), 2) * (0.6 + en);
-        Q.setFromEuler(E.set(0, s.face, 0.05 * Math.sin(Math.PI * (pos * 0.5 + s.ph))));
-        P.set(s.x, bob, s.z);
-        silMesh[act].setMatrixAt(s.slot[act], M4.compose(P, Q, S.set(s.sw, s.sh, 1)));
-        if (rust !== act) silMesh[rust].setMatrixAt(s.slot[rust], NUL);
-        if (s.tel >= 0) {
-          P2.set(TEL_X * s.sw, TEL_Y * s.sh, 0.04).applyQuaternion(Q).add(P);
-          telSil.setMatrixAt(s.tel, M4.compose(P2, Q, EEN));
-        }
-      }
-      for (const m of silMesh) if (m) m.instanceMatrix.needsUpdate = true;
+      camNu.copy(camera.position); G.worldToLocal(camNu); doelGeldig = false; silPos = pos; silEn = en;
+      zetSil();
       // telefoons: zacht flakkerend scherm, af en toe een flits
       if (telSil) {
         for (let i = 0; i < nTelSil; i++) {
@@ -555,9 +571,10 @@
         uit.fov = 62;
       } else if (fase === 'schouder') {
         // hoek 0 = achter de dj (hij kijkt naar -z); de camera zwaait van links via achter naar rechts, iets over zijn rechterschouder
-        const th = 1.55 * Math.sin(ts * 0.19 + k * 2.4 + zwaaiFase), s = Math.sin(th), c = Math.cos(th), R0 = 0.8, zij = 0.3;
+        // R0/zij: 0,85 m achter en 0,58 m naast hem (verder kan niet: glas van de piramide), dj aan de rand van het beeld i.p.v. zijn rug ervoor
+        const th = 1.55 * Math.sin(ts * 0.19 + k * 2.4 + zwaaiFase), s = Math.sin(th), c = Math.cos(th), R0 = 0.85, zij = 0.58;
         camP.set(s * R0 + c * zij, CAMY + 0.04 * Math.sin(t * 0.8), DJZ + c * R0 - s * zij);
-        camL.set(-s * 6 + 0.03 * Math.sin(t * 1.7), 1.2 + 0.02 * Math.sin(t * 2.3), DJZ - c * 6);  // beetje handheld
+        camL.set(-s * 6 - c * zij * 0.8 + 0.03 * Math.sin(t * 1.7), 1.1 + 0.02 * Math.sin(t * 2.3), DJZ - c * 6 + s * zij * 0.8);  // beetje handheld
         uit.fov = 64;
       } else {
         const kant = k % 2 ? -1 : 1, a = kant * Math.PI / 4 - kant * (ts - SCHOUDER) * 0.05;
@@ -567,6 +584,7 @@
       }
       uit.pos.copy(camP); G.localToWorld(uit.pos);
       uit.look.copy(camL); G.localToWorld(uit.look);
+      camDoel.copy(camP); doelGeldig = true; zetSil();
       return uit;
     }
 

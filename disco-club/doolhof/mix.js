@@ -904,7 +904,7 @@
     const rookKleur = new THREE.Color(0.9, 0.78, 0.62);
     const uit = uitgang(ctx, K, w, d, h, kies(r, ['SMOKING ROOM', 'LOUNGE', 'ROOKHOK', 'CIGAR CLUB', 'HAZE']), WARM);
     const L1 = ctx.licht(WARM, 1.4, 9, fx - kant * 1.0, 1.0, 0), L2 = ctx.licht(WARM, 0.8, 10, 0, h - 0.6, 0);
-    const camKant = r() < 0.5 ? -1 : 1;
+    const camKant = -kant;  // camera aan de overkant van de haard: de vlammen komen in beeld (stond hij aan dezelfde kant, dan keek hij er altijd van weg)
     return {
       maat: { w, d, h },
       blijf: 12,
@@ -1034,13 +1034,13 @@
     g.add(flessen);
     // krukken voor de toog, gasten staan ertussen met het gezicht naar de bar
     const krukMat = lam(0x6a1a1a, { emissive: 0x200606 }), poot = basic(0x55555a), kruk = [];
-    for (let z = -L / 2 + 0.6; z < L / 2 - 0.3; z += 1.0) {
+    for (let z = -L / 2 + 0.6; z < L / 2 - 0.3; z += 1.3) {  // 1,3 m: een gast tussen twee krukken houdt zijn benen vrij (bij 1,0 m stonden brede figuren in een kruk)
       const kx = s * (w / 2 - 2.25);
       add(g, K.cyl, krukMat, [kx, 0.76, z], [0.2, 0.06, 0.2]); add(g, K.cyl, poot, [kx, 0.37, z], [0.03, 0.74, 0.03]); add(g, K.cyl, poot, [kx, 0.02, z], [0.18, 0.03, 0.18]);
       kruk.push(z);
     }
     kruk.sort(() => r() - 0.5);
-    for (const z of kruk.slice(0, [3, 2, 1][Z])) fig(ctx, { x: s * (w / 2 - 2.35), z: z + 0.5, face: s * Math.PI / 2, rol: 'staan' });
+    for (const z of kruk.filter(z => z + 0.65 < L / 2 - 0.2).slice(0, [3, 2, 1][Z])) fig(ctx, { x: s * (w / 2 - 2.35), z: z + 0.65, face: s * Math.PI / 2, rol: 'staan' });
     fig(ctx, { x: s * (w / 2 - 0.85), z: tussen(r, -L / 3, L / 3), face: -s * Math.PI / 2, rol: 'staan' });  // de barman
     // statafels aan de overkant met groepjes
     const tafelMat = basic(0x1a1a1e), drankMat = gloei(LED, 0.9);
@@ -1076,8 +1076,8 @@
         if (L2) L2.intensity = 0.7 + 0.6 * b.pulse;
         uit.puls(b);
       },
-      cam(t) {  // langs de toog, schuin op de flessenwand
-        const u = glad(klem(t / 20)), z = -L / 2 - 0.5 + u * (L + 0.5);
+      cam(t) {  // langs de toog, schuin op de flessenwand (tot vóór het eind van de toog: verder keek hij in een lege hoek)
+        const u = glad(klem(t / 20)), z = -L / 2 - 0.5 + u * (L - 1.2);
         return kcam(t, s * (w / 2 - 4.2), 1.55, z - 1.5, s * (w / 2 - 1.2), 1.3, z + 1.2, 54);
       },
       opruimen() { ruimDeeltjes(g); },

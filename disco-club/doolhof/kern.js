@@ -1,11 +1,12 @@
 // --- Het doolhof: achter een nieuwe ∞-deur in de rechterwand van zaal 2 begint een eindeloos gebouw van kamers ---
 // Kamers staan ver van de club (x -400 en verder, z 300; daar knipt de regie niet weg) en er bestaan er hooguit twee tegelijk:
-// de kamer waar de loper is en de volgende (al gebouwd en opgewarmd, maar verborgen). Tussen twee kamers ligt een donkere
-// S-gang (2 x 2,6 m, rode lampjes). De gang achter de uitgang van kamer A en die vóór de ingang van kamer B zijn exact gelijk;
+// de kamer waar de loper is en de volgende (al gebouwd en opgewarmd, maar verborgen). Tussen twee kamers ligt een
+// S-gang (2 x 2,6 m) in een stijl uit doolhof/gangen.js. De gang achter de uitgang van kamer A en die vóór de ingang van kamer B zijn exact gelijk;
 // in het dwarsstuk (geen deur in zicht) zet de kern loper en camera ongemerkt van A's gang naar dezelfde plek in B's gang.
 // Kamermodules (doolhof/*.js) registreren een soort: doolhof.registreer(soort, { gewicht, maak(ctx) => kamer }) (contract: ctx/kamer hieronder).
 // Shot SHOTS.doolhof: een loper loopt van het midden van zaal 2 door de ∞-deur en door 3-5 kamers ('Camera: het doolhof' = eindeloos);
-// in 'auto' volgt hij in de helft van de gevallen op de trip. Test: doolhof.start('boiler') of doolhof.volgende = 'boiler'.
+// in 'auto' kiest club/showregie.js wanneer (in de break: doolhof.direct, meteen de gang vóór kamer 1 in).
+// Test: doolhof.start('boiler'), doolhof.start('boiler', true) (direct) of doolhof.volgende = 'boiler'.
 (function () {
   'use strict';
   const doolhof = window.doolhof = window.doolhof || {};
@@ -15,6 +16,13 @@
   doolhof.registreer = function (soort, def) {
     if (!soort || !def || typeof def.maak !== 'function') { console.error('doolhof.registreer: soort + { gewicht, maak(ctx) } nodig', soort); return; }
     doolhof.kamers[soort] = def;
+  };
+  // gangstijlen (doolhof/gangen.js): doolhof.gangStijl(naam, { gewicht, maak(g, maat, rnd, zwaar) => { muur?, vloer?, plafond?, update(dt, now, b, stand) } })
+  doolhof.gangStijlen = doolhof.gangStijlen || {};
+  doolhof.volgendeGang = null;  // stijl die de volgende overgang moet krijgen (testen); daarna weer loting
+  doolhof.gangStijl = function (naam, def) {
+    if (!naam || !def || typeof def.maak !== 'function') { console.error('doolhof.gangStijl: naam + { gewicht, maak(g, maat, rnd, zwaar) } nodig', naam); return; }
+    doolhof.gangStijlen[naam] = def;
   };
   if (typeof SHOTS === 'undefined' || typeof zone2 === 'undefined' || typeof makeModelDancer === 'undefined') return;
 
@@ -68,7 +76,119 @@
   const houd = x => { KEEP.add(x); return x; };
   const houden = x => !x || KEEP.has(x) || (x.userData && x.userData.doolhofHouden);
 
-  // --- de donkere S-gang: één sjabloon, elke gang is een kloon (zelfde geometrie, zelfde materialen: de wissel valt niet op) ---
+  // --- gangen: een S-vormige schil (muren, vloer, plafond, één dichte kop) met een stijl uit doolhof/gangen.js ---
+  // Elke overgang (∞-deur -> kamer 1, kamer A -> kamer B) krijgt één stijl, een spiegeling en een zaad. De gang achter de uitgang van A
+  // en die vóór de ingang van B worden er allebei mee gebouwd (zelfde maat, zelfde toevalsreeks, gedeelde geometrie en texturen) en lopen
+  // op dezelfde klok (beatPos/now): bij de wissel ziet de camera precies hetzelfde. Nooit twee keer dezelfde stijl achter elkaar.
+  // Gangcoördinaten (ook in de shaders, attribuut aP = (s, d, y)): s = booglengte langs de middellijn (0 = begindeur, G_LEN = einddeur),
+  // d = zijwaarts (+ = binnenkant van de eerste bocht), y = hoogte; in de bochten draaien s en d om de binnenhoek.
+  const GH2 = GW / 2, G_LEN = L1 + L2 + L3, KWART = Math.PI / 2;
+  const I1 = [GH2, L1 - GH2], I2 = [L2 - GH2, L1 + GH2];  // binnenhoeken van de twee bochten
+  function gangST(x, z) {  // punt in de gang (eigen ruimte) -> [s, d]
+    const h = GH2;
+    if (x <= h + 1e-6 && z <= L1 - h) return [z, x];
+    if (x <= h + 1e-6) { const vx = x - I1[0], vz = z - I1[1]; return [L1 - h + Math.atan2(vz, -vx) / KWART * 2 * h, h - Math.hypot(vx, vz)]; }
+    if (x < L2 - h - 1e-6) return [L1 + x, L1 - z];
+    if (z < L1 + h - 1e-6) { const vx = x - I2[0], vz = z - I2[1]; return [L1 + L2 - h + Math.atan2(vx, -vz) / KWART * 2 * h, Math.hypot(vx, vz) - h]; }
+    return [L2 + z, x - L2];
+  }
+  function gangXZ(s, d, uit) {  // omgekeerd: (s, d) -> { x, z, dx, dz } (dx, dz = looprichting bij s)
+    const h = GH2; uit = uit || {};
+    let x, z, dx, dz;
+    if (s <= L1 - h) { x = d; z = s; dx = 0; dz = 1; }
+    else if (s <= L1 + h) { const a = (s - L1 + h) / (2 * h) * KWART, r = h - d; x = I1[0] - r * Math.cos(a); z = I1[1] + r * Math.sin(a); dx = Math.sin(a); dz = Math.cos(a); }
+    else if (s <= L1 + L2 - h) { x = s - L1; z = L1 - d; dx = 1; dz = 0; }
+    else if (s <= L1 + L2 + h) { const a = (s - L1 - L2 + h) / (2 * h) * KWART, r = d + h; x = I2[0] + r * Math.sin(a); z = I2[1] - r * Math.cos(a); dx = Math.cos(a); dz = Math.sin(a); }
+    else { x = L2 + d; z = s - L2; dx = 0; dz = 1; }
+    uit.x = x; uit.z = z; uit.dx = dx; uit.dz = dz; return uit;
+  }
+  function gangLijn(d) {  // lijn evenwijdig aan de middellijn op afstand d, met verstek in de hoeken (d = ±1 = de muren): { len, punten, op(t) }
+    const p = [[d, 0], [d, L1 - d], [L2 + d, L1 - d], [L2 + d, L1 + L3]], cum = [0];
+    for (let i = 1; i < 4; i++) cum.push(cum[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+    return { len: cum[3], punten: p, op(t, uit) {
+      uit = uit || {}; let i = 0; while (i < 2 && t > cum[i + 1]) i++;
+      const a = p[i], b = p[i + 1], l = cum[i + 1] - cum[i] || 1, u = Math.max(0, Math.min(1, (t - cum[i]) / l));
+      uit.x = a[0] + (b[0] - a[0]) * u; uit.z = a[1] + (b[1] - a[1]) * u; uit.dx = (b[0] - a[0]) / l; uit.dz = (b[1] - a[1]) / l; return uit;
+    } };
+  }
+  const reeks = zaad => {  // mulberry32: zelfde zaad = zelfde reeks (beide helften van een overgang)
+    let s = zaad >>> 0;
+    return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  };
+  const recenteGangen = [];
+  function nieuweOvergang(vorige, sx) {  // stijl kiezen (gewogen, niet de vorige en liefst niet een van de laatste drie)
+    const S = doolhof.gangStijlen, namen = Object.keys(S).filter(n => S[n] && typeof S[n].maak === 'function' && (+S[n].gewicht || 0) > 0);
+    let stijl = null;
+    if (doolhof.volgendeGang && S[doolhof.volgendeGang]) { stijl = doolhof.volgendeGang; doolhof.volgendeGang = null; }
+    else if (namen.length) {
+      let kand = namen.filter(n => n !== vorige && !recenteGangen.includes(n));
+      if (!kand.length) kand = namen.filter(n => n !== vorige);
+      if (!kand.length) kand = namen;
+      let r = Math.random() * kand.reduce((a, n) => a + +S[n].gewicht, 0);
+      stijl = kand.find(n => (r -= +S[n].gewicht) < 0) || kand[0];
+    }
+    if (stijl) { recenteGangen.push(stijl); while (recenteGangen.length > Math.max(0, Math.min(3, namen.length - 2))) recenteGangen.shift(); }
+    return { stijl, sx: sx || (Math.random() < 0.5 ? -1 : 1), zaad: (Math.random() * 4294967296) >>> 0, zwaar: zwaar(), deel: new Map(), n: 0 };
+  }
+
+  // de schil: muren (in stukken van 0,4 m), vloer en plafond (rechte stukken + waaiers in de bochten), koppen apart.
+  // uv muren = schildering per muurstuk (eigen verschuiving, naad alleen in de hoeken, leesbaar ook gespiegeld), vloer/plafond = meters
+  function bak() {
+    const P = [], N = [], U = [], A = [];
+    const zet = (p, nx, ny, nz) => { P.push(p.x, p.y, p.z); N.push(nx, ny, nz); U.push(p.u, p.v); A.push(p.s, p.d, p.y); };
+    const drie = (a, b, c, nx, ny, nz) => {  // volgorde zo dat de voorkant naar (nx, ny, nz) kijkt
+      const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+      if ((uy * vz - uz * vy) * nx + (uz * vx - ux * vz) * ny + (ux * vy - uy * vx) * nz < 0) { const t = b; b = c; c = t; }
+      zet(a, nx, ny, nz); zet(b, nx, ny, nz); zet(c, nx, ny, nz);
+    };
+    return { drie, vier(a, b, c, d, nx, ny, nz) { drie(a, b, c, nx, ny, nz); drie(a, c, d, nx, ny, nz); },
+      geo() {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2)); g.setAttribute('aP', new THREE.Float32BufferAttribute(A, 3));
+        g.computeBoundingSphere(); return g;
+      } };
+  }
+  function schilGeo(ov, st) {
+    const h = GH2, r = reeks(ov.zaad ^ 0x5bd1e995), sx = ov.sx;
+    const [bw, bh] = Array.isArray(st.muurMaat) ? st.muurMaat : [GH * 2048 / 869, GH], [vw, vh] = Array.isArray(st.vloerMaat) ? st.vloerMaat : [2, 2];
+    const muren = bak(), vloer = bak(), plafond = bak(), kapB = bak(), kapE = bak();
+    const wand = (B, x0, z0, x1, z1, nx, nz) => {  // muurstuk van (x0,z0) naar (x1,z1), voorkant naar (nx, nz)
+      const len = Math.hypot(x1 - x0, z1 - z0), ex = (x1 - x0) / len, ez = (z1 - z0) / len;
+      const heen = (ex * nz - ez * nx) * sx > 0;  // loopt het stuk voor de kijker naar rechts? anders de schildering omdraaien
+      const u0 = r() * Math.max(0, 1 - len / bw), v0 = r() * Math.max(0, 1 - GH / bh), n = Math.max(1, Math.ceil(len / 0.4));
+      const pt = (t, y) => {
+        const tt = Math.min(len - 1e-3, Math.max(1e-3, t)), c = gangST(x0 + ex * tt, z0 + ez * tt);  // iets het stuk in: hoekpunten horen bij dit stuk
+        return { x: x0 + ex * t, y, z: z0 + ez * t, u: u0 + (heen ? t : len - t) / bw, v: v0 + y / bh, s: c[0], d: c[1] };
+      };
+      for (let i = 0; i < n; i++) { const a = len * i / n, b = len * (i + 1) / n; B.vier(pt(a, 0), pt(b, 0), pt(b, GH), pt(a, GH), nx, 0, nz); }
+    };
+    wand(muren, -h, 0, -h, L1 + h, 1, 0); wand(muren, -h, L1 + h, L2 - h, L1 + h, 0, -1); wand(muren, L2 - h, L1 + h, L2 - h, L1 + L3, 1, 0);
+    wand(muren, h, 0, h, L1 - h, -1, 0); wand(muren, h, L1 - h, L2 + h, L1 - h, 0, 1); wand(muren, L2 + h, L1 - h, L2 + h, L1 + L3, -1, 0);
+    wand(kapB, -h, 0, h, 0, 0, 1); wand(kapE, L2 - h, L1 + L3, L2 + h, L1 + L3, 0, -1);
+    const vlak = (B, y, ny) => {
+      const P = (x, z, s, d) => ({ x, y, z, u: (x + h) / vw, v: z / vh, s, d });
+      const recht = (x0, z0, x1, z1) => {
+        const c = (x, z) => { const q = gangST(x + (x < (x0 + x1) / 2 ? 1e-3 : -1e-3), z + (z < (z0 + z1) / 2 ? 1e-3 : -1e-3)); return P(x, z, q[0], q[1]); };
+        B.vier(c(x0, z0), c(x1, z0), c(x1, z1), c(x0, z1), 0, ny, 0);
+      };
+      recht(-h, 0, h, L1 - h); recht(h, L1 - h, L2 - h, L1 + h); recht(L2 - h, L1 + h, L2 + h, L1 + L3);
+      const waaier = (I, dir, s0, sd) => {  // bocht: driehoeken vanuit de binnenhoek, s en d als poolcoördinaten
+        const q = (a, f) => { const rho = 2 * h / Math.max(Math.cos(a), Math.sin(a)), rr = rho * f, [ux, uz] = dir(a); return P(I[0] + ux * rr, I[1] + uz * rr, s0 + a / KWART * 2 * h, sd * (h - rr)); };
+        for (let k = 0; k < 8; k++) {
+          const a0 = KWART * k / 8, a1 = KWART * (k + 1) / 8;
+          B.drie(q((a0 + a1) / 2, 0), q(a0, 0.5), q(a1, 0.5), 0, ny, 0);
+          B.vier(q(a0, 0.5), q(a0, 1), q(a1, 1), q(a1, 0.5), 0, ny, 0);
+        }
+      };
+      waaier(I1, a => [-Math.cos(a), Math.sin(a)], L1 - h, 1);
+      waaier(I2, a => [Math.sin(a), -Math.cos(a)], L1 + L2 - h, -1);
+    };
+    vlak(vloer, 0, 1); vlak(plafond, GH, -1);
+    return { muren: muren.geo(), vloer: vloer.geo(), plafond: plafond.geo(), kapBegin: kapB.geo(), kapEind: kapE.geo() };
+  }
+
+  // standaard (kale) gang: de oude donkere gang met rode lampjes, als er (nog) geen stijlen zijn of een stijl faalt
   const gangMuur = houd(new THREE.MeshBasicMaterial({ map: wallTex, color: 0x2e2527 }));
   const gangVloer = houd(new THREE.MeshBasicMaterial({ color: 0x0b090b }));
   const gangPlafond = houd(new THREE.MeshBasicMaterial({ color: 0x060406 }));
@@ -79,46 +199,83 @@
     g.fillStyle = gr; g.fillRect(0, 0, w, h);
   }));
   const gangGloed = houd(new THREE.MeshBasicMaterial({ map: gloedTex, color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-  function gangVlak(g, mat, w, h, x, y, z, ry, rx) {
-    const m = new THREE.Mesh(houd(new THREE.PlaneGeometry(w, h)), mat);
-    m.position.set(x, y, z); m.rotation.set(rx || 0, ry || 0, 0); g.add(m); return m;
-  }
-  const gangSjabloon = (() => {
-    const g = new THREE.Group(), h = GW / 2;
-    const mx = (x, z0, z1, n) => gangVlak(g, gangMuur, z1 - z0, GH, x, GH / 2, (z0 + z1) / 2, n > 0 ? Math.PI / 2 : -Math.PI / 2);  // muur langs z, kijkt naar +x of -x
-    const mz = (z, x0, x1, n) => gangVlak(g, gangMuur, x1 - x0, GH, (x0 + x1) / 2, GH / 2, z, n > 0 ? 0 : Math.PI);                   // muur langs x, kijkt naar +z of -z
-    mx(-h, 0, L1 + h, 1); mx(h, 0, L1 - h, -1);
-    mz(L1 + h, -h, L2 - h, -1); mz(L1 - h, h, L2 + h, 1);
-    mx(L2 + h, L1 - h, L1 + L3, -1); mx(L2 - h, L1 + h, L1 + L3, 1);
-    mz(0, -h, h, 1).userData.kap = 'begin';
-    mz(L1 + L3, L2 - h, L2 + h, -1).userData.kap = 'eind';
-    for (const [x0, x1, z0, z1] of [[-h, h, 0, L1 - h], [-h, L2 + h, L1 - h, L1 + h], [L2 - h, L2 + h, L1 + h, L1 + L3]]) {
-      gangVlak(g, gangVloer, x1 - x0, z1 - z0, (x0 + x1) / 2, 0, (z0 + z1) / 2, 0, -Math.PI / 2);
-      gangVlak(g, gangPlafond, x1 - x0, z1 - z0, (x0 + x1) / 2, GH, (z0 + z1) / 2, 0, Math.PI / 2);
-    }
-    const ruw = maakSpoor([V3(0, 0), V3(0, L1), V3(L2, L1), V3(L2, L1 + L3)]);  // rode lampjes op de middellijn
-    for (let b = 1.3; b < ruw.len; b += 2.6) {
-      const p = opSpoor(ruw, b, new THREE.Vector3());
+  const gangVlak1 = houd(new THREE.PlaneGeometry(1, 1));
+  function kaleGang(g) {
+    for (let s = 1.3; s < G_LEN; s += 2.6) {
+      const p = gangXZ(s, 0);
       add(g, SPH, gangLamp, [p.x, GH - 0.07, p.z], [0.05, 0.05, 0.05]);
-      gangVlak(g, gangGloed, 1.2, 1.2, p.x, GH - 0.012, p.z, 0, Math.PI / 2);
+      const m = add(g, gangVlak1, gangGloed, [p.x, GH - 0.012, p.z], [1.2, 1.2, 1]); m.rotation.x = Math.PI / 2;
     }
-    return g;
-  })();
-  // gang plaatsen: frame f = begin en richting (yaw) in de ruimte van parent, sx = dwarsstuk naar rechts (1) of links (-1), kap = welk eind dicht
-  function gang(parent, f, sx, kap) {
-    const g = gangSjabloon.clone();
-    for (const c of [...g.children]) if (c.userData.kap && c.userData.kap !== kap) g.remove(c);
-    g.position.set(f.x, 0, f.z); g.rotation.y = f.yaw; g.scale.x = sx;  // spiegelen mag: three draait de voorkant dan zelf om
-    parent.add(g); return g;
+    return { muur: gangMuur, vloer: gangVloer, plafond: gangPlafond, muurMaat: [5.2, GH],
+      update(dt, now, b) {  // gedeeld materiaal: elke kale gang gelijk
+        gangLamp.color.setRGB(1, 0.2, 0.12).multiplyScalar(0.55 + 0.45 * b.pulse);
+        gangGloed.color.setRGB(0.45, 0.05, 0.03).multiplyScalar(0.6 + 0.4 * b.pulse);
+      } };
   }
-  clubHooks.push(() => {  // lampjes kloppen zacht mee (gedeeld materiaal: elke gang gelijk)
-    gangLamp.color.setRGB(1, 0.2, 0.12).multiplyScalar(0.55 + 0.45 * pulse);
-    gangGloed.color.setRGB(0.45, 0.05, 0.03).multiplyScalar(0.6 + 0.4 * pulse);
+
+  // wat een stijl over de gang weet (gelijk voor beide helften van een overgang)
+  const gangBol = new THREE.Sphere(new THREE.Vector3(L2 / 2, GH / 2, (L1 + L3) / 2), 4.8);  // omhullende bol (frustum-culling van instanced spul)
+  const gangPad = SBS.pts.map(p => ({ x: p.x, z: p.z }));  // de looplijn (afgerond)
+  function gangMaat(ov) {
+    const h = GH2;
+    return { L1, L2, L3, B: GW, H: GH, h, LEN: G_LEN, sx: ov.sx, zwaar: ov.zwaar, bol: gangBol, pad: gangPad,
+      st: gangST, xz: gangXZ, lijn: gangLijn,
+      dwars: [[0.2, L1 - h - 0.1], [L1 + h + 0.1, L1 + L2 - h - 0.1], [L1 + L2 + h + 0.1, G_LEN - 0.2]],  // rechte stukken (s): daar past iets dwars van muur tot muur
+      kijk: [{ x: 0, z: L1 + h - 0.03, ry: Math.PI }, { x: L2 + h - 0.03, z: L1, ry: -Math.PI / 2 }],      // de muren recht vooruit (been 1, dwarsstuk)
+      recht: o => { if (ov.sx < 0) o.scale.x = -o.scale.x; return o; },                                   // tekst leesbaar houden in een gespiegelde gang
+      deel: (k, f) => { if (!ov.deel.has(k)) ov.deel.set(k, f()); return ov.deel.get(k); } };            // één keer maken, beide helften gebruiken het
+  }
+  function gangBeat() { const r = window.clubRegie || null; return { pos: beatPos, pulse, energy, bas: bands[0].v, mid: bands[1].v, hoog: bands[2].v, stand: (r && r.stand) || 'groove', regie: r }; }
+  const gangLijst = new Set();  // levende gangen: elke frame update (ook verborgen: dan klopt ook het eerste beeld na de wissel)
+  // gang plaatsen: frame f = begin en richting (yaw) in de ruimte van parent, ov = de overgang (stijl, sx, zaad), kap = welk eind dicht
+  function gang(parent, f, ov, kap) {
+    const g = new THREE.Group();
+    g.position.set(f.x, 0, f.z); g.rotation.y = f.yaw; g.scale.x = ov.sx;  // spiegelen mag: three draait de voorkant dan zelf om
+    parent.add(g);
+    const def = ov.stijl && !ov.kapot ? doolhof.gangStijlen[ov.stijl] : null, maat = gangMaat(ov);
+    let st = null;
+    if (def) {
+      try { st = def.maak(g, maat, reeks(ov.zaad), ov.zwaar) || {}; }
+      catch (e) {  // dan beide helften kaal (ov.kapot)
+        fout('gangstijl ' + ov.stijl, e); ov.kapot = true; st = null;
+        const weg = new THREE.Group(); for (const c of [...g.children]) weg.add(c);
+        try { afvoeren(weg); } catch (e2) { /* niets */ }
+      }
+    }
+    if (!st) st = kaleGang(g);
+    const sg = maat.deel('schil', () => schilGeo(ov, st));
+    const muur = st.muur || gangMuur;
+    for (const [geo, mat] of [[sg.muren, muur], [sg.vloer, st.vloer || gangVloer], [sg.plafond, st.plafond || gangPlafond]]) g.add(new THREE.Mesh(geo, mat));
+    const kop = new THREE.Mesh(kap === 'begin' ? sg.kapBegin : sg.kapEind, st.kap || muur); kop.userData.kap = kap; g.add(kop);
+    const x = { g, stijl: ov.stijl || 'kaal', update: typeof st.update === 'function' ? st.update : null };
+    g.userData.gangStijl = x.stijl;
+    gangLijst.add(x);
+    if (x.update) { const b = gangBeat(); try { x.update(0, performance.now() / 1000, b, b.stand); } catch (e) { x.update = null; fout('gangstijl ' + x.stijl + ' (update)', e); } }
+    if (++ov.n >= 2) ov.deel.clear();  // beide helften staan: het deel-lijstje is niet meer nodig
+    return g;
+  }
+  const inScene = o => { while (o) { if (o === scene) return true; o = o.parent; } return false; };
+  clubHooks.push((dt, now) => {
+    // de ∞-gang krijgt zijn eerste stijl zodra doolhof/gangen.js geladen is (bij het laden van de kern bestonden er nog geen)
+    if (zaal2Ov && !zaal2Ov.stijl && !actief && Object.keys(doolhof.gangStijlen).length) zaal2Gang();
+    if (!gangLijst.size) return;
+    const b = gangBeat();
+    for (const x of gangLijst) {
+      if (!inScene(x.g)) { gangLijst.delete(x); continue; }
+      if (x.update) try { x.update(dt, now, b, b.stand); } catch (e) { x.update = null; fout('gangstijl ' + x.stijl + ' (update)', e); }
+    }
   });
 
   // --- de ∞-deur: rechterwand van zaal 2 (x = 17) rond z = 30, met dezelfde S-gang erachter ---
   const ZD = { x: Z2.x + Z2.w / 2, z: 30 };
   const ZAAL2_UIT = { x: ZD.x, z: ZD.z, yaw: Math.PI / 2 }, ZAAL2_SX = 1;
+  let zaal2Ov = null, zaal2Groep = null;
+  function zaal2Gang() {  // de ∞-gang opnieuw bouwen met een nieuwe stijl (bij elk doolhof-shot; de eerste kamer krijgt dezelfde gang)
+    const oud = zaal2Groep;
+    zaal2Ov = nieuweOvergang(zaal2Ov && zaal2Ov.stijl, ZAAL2_SX);
+    zaal2Groep = gang(zone2, ZAAL2_UIT, zaal2Ov, 'eind');
+    if (oud) { zone2.remove(oud); afvoeren(oud); }
+  }
   (function bouwDeur() {
     const room2 = zone2.children.find(o => o.isMesh && Array.isArray(o.material) && o.material[0] === tripMat);
     if (!room2) { console.error('doolhof: wand van zaal 2 niet gevonden'); return; }
@@ -145,7 +302,7 @@
     add(zone2, BOX, kozijn, [X - 0.05, GH + 0.06, ZD.z], [0.12, 0.12, GW + 0.24]);
     add(zone2, BOX, kozijn, [X - 0.04, 3.25, ZD.z], [0.04, 0.62, 1.9]);  // donkere plaat: additief neon verdween op de felle kaleidoscoopwand
     const bord = neonSign('∞', '#3cffc8', 1.6, 0.4); bord.position.set(X - 0.08, 3.25, ZD.z); bord.rotation.y = -Math.PI / 2; zone2.add(bord);
-    gang(zone2, ZAAL2_UIT, ZAAL2_SX, 'eind');
+    zaal2Gang();
   })();
 
   // --- figuren: een eigen voorraad (geen nieuwe klonen per kamer: geen hapering bij het bouwen, geen geheugengroei) ---
@@ -360,7 +517,7 @@
   }
   function beweegFig(R, d, dt) {
     switch (d.rol) {
-      case 'paal': d.mixer.update(dt); break;
+      case 'paal': { const G = window.clubDansgevoel; d.mixer.update(dt * (G && G.aan && G.paalF > 0 ? G.paalF : 1)); break; }  // tempo mee met de sectie (club/dansgevoel.js)
       case 'zit': pose(d, beatPos, energy, dt); zitHier(R, d, dt); break;
       case 'juich': {
         if (!d.queue || !d.queue.length) {  // juichen en springen om de 8 tellen
@@ -405,8 +562,9 @@
     if (r[r.length - 2].z < dh - 1.2) r.splice(r.length - 1, 0, V3(0, dh - 0.9));
     return afronden(r, 0.7);
   }
-  function probeerKamer(z, soort, sxIn) {
+  function probeerKamer(z, soort, inOv) {  // inOv = de overgang vóór deze kamer (zelfde gang als achter de vorige kamer)
     const def = doolhof.kamers[soort]; if (!def) return null;
+    const sxIn = inOv.sx;
     const groep = new THREE.Group(), slot = z.slot++;
     groep.position.set(SLOT_X - (slot % 4) * SLOT_STAP, 0, SLOT_Z);
     groep.visible = false; scene.add(groep); groep.updateMatrixWorld(true); z.eigen.add(groep);
@@ -421,9 +579,10 @@
     kamer.soort = soort; R.kamer = kamer;
     const m = kamer.maat, G = groep.position, dh = m.d / 2;
     R.blijf = kamer.blijf == null ? 12 : Math.max(0, +kamer.blijf || 0);
-    // gangen in de ruimte van de kamer: vóór de ingang (begin dicht) en achter de uitgang (eind dicht)
+    // gangen in de ruimte van de kamer: vóór de ingang (begin dicht) en achter de uitgang (eind dicht); de uitgang krijgt een nieuwe stijl
+    R.inOv = inOv; R.uitOv = nieuweOvergang(inOv.stijl); R.sxUit = R.uitOv.sx;
     const inL = { x: -sxIn * L2, z: -dh - L1 - L3, yaw: 0 }, uitL = { x: 0, z: dh, yaw: 0 };
-    gang(groep, inL, sxIn, 'begin'); gang(groep, uitL, R.sxUit, 'eind');
+    R.gangIn = gang(groep, inL, inOv, 'begin'); R.gangUit = gang(groep, uitL, R.uitOv, 'eind');
     R.inFrame = { x: G.x + inL.x, z: G.z + inL.z, yaw: 0 }; R.uitFrame = { x: G.x, z: G.z + dh, yaw: 0 };
     // spoor in wereld-coördinaten: gang in, route, gang uit
     const route = kamerRoute(kamer, R.ctx.rnd).map(p => p.add(G));
@@ -435,8 +594,8 @@
     groep.updateMatrixWorld(true);
     return R;
   }
-  function bouwKamer(z, soort, sxIn) {
-    return probeerKamer(z, soort, sxIn) || (soort !== 'gang-kamer' ? probeerKamer(z, 'gang-kamer', sxIn) : null);
+  function bouwKamer(z, soort, inOv) {
+    return probeerKamer(z, soort, inOv) || (soort !== 'gang-kamer' ? probeerKamer(z, 'gang-kamer', inOv) : null);
   }
   function sloop(z, R, nu) {
     if (R.weg) return; R.weg = true;
@@ -528,15 +687,17 @@
     const D = V3(ZD.x, ZD.z), W0 = V3(Z2.x, Z2.z), dir = new THREE.Vector3().subVectors(D, W0).normalize();
     const C0 = W0.clone().addScaledVector(dir, -2.7), Q = V3(ZD.x - 1.4, ZD.z);
     const sp = maakSpoor([...afronden([C0, W0, Q, D], 0.6), ...sbPunten(ZAAL2_UIT, ZAAL2_SX).slice(1)]), uitgangBoog = sp.len - SB_LEN;
-    return { isKamer: false, sp, uitgangBoog, tpBoog: uitgangBoog + E_TP, uitFrame: ZAAL2_UIT, sxUit: ZAAL2_SX, startBoog: 2.7 };
+    return { isKamer: false, sp, uitgangBoog, tpBoog: uitgangBoog + E_TP, uitFrame: ZAAL2_UIT, sxUit: ZAAL2_SX, uitOv: zaal2Ov, gangUit: zaal2Groep, startBoog: 2.7 };
   }
   let actief = null;  // toestand van het lopende doolhof-shot
   function einde(s) { s.beats = Math.max(0.01, beatPos - s.b0); if (s.z) s.z.klaar = true; }
 
   function maakShot() {
+    const direct = !!doolhof.direct; doolhof.direct = false;  // showregie in de break: meteen de gang vóór kamer 1 in (de wandeling door zaal 2 duurt ~15 s)
     const z = { lt: 0, klus: [], afvoer: [], eigen: new Set(), verborgen: new Map(), z2licht: new Map(), z2lampen: [], fase: 'zaal2', dist: 0, v: 1.1,
       dans: false, modus: 'volg', snap: null, rond: null, slot: 0, doel: 3 + Math.floor(Math.random() * 3), amb: ambient.intensity, kw: null, nLamp: 0 };
     try {
+      zaal2Gang();  // nieuwe stijl voor de ∞-gang (de knip naar dit shot verbergt de wissel)
       const p = ACTS.Casual_Walk ? lenen(null, null, false) : null;
       if (!p) { z.mislukt = true; return z; }
       z.loper = p;
@@ -554,10 +715,21 @@
       zone2.traverse(o => { if (o.isLight) z.z2lampen.push(o); });
       verberg(z); bewaarKW(z);
       actief = z;
-      const R = bouwKamer(z, kiesSoort(null), ZAAL2_SX);
+      const R = bouwKamer(z, kiesSoort(null), z.own.uitOv);
       if (!R) { z.mislukt = true; return z; }
       R.nr = 1; z.next = R; z.laatste = R.soort;
       opwarmen(z, R); R.klaar = true;
+      if (direct) {  // de knip verbergt de sprong: de loper staat ~3 m voor de deur van kamer 1, de camera kijkt door de gang naar binnen
+        const A = z.own;
+        z.dist = A.tpBoog; opSpoor(A.sp, z.dist, w.root.position);
+        wissel(z, 0, true);
+        z.dist = Math.max(z.dist, R.ingangBoog - 3.2);
+        opSpoor(R.sp, z.dist, w.root.position); opSpoor(R.sp, z.dist + 0.5, tA);
+        w.root.rotation.y = Math.atan2(tA.x - w.root.position.x, tA.z - w.root.position.z);
+        w.root.updateMatrixWorld(true);  // drankje meteen in de hand (anders één beeld op de oude plek)
+        for (const h of held) if (h.d === w) { h.g.position.copy(h.off); h.hand.localToWorld(h.g.position); h.g.rotation.set(0, w.root.rotation.y, 0); }
+        zone2.visible = false;
+      }
     } catch (e) { fout('start', e); z.mislukt = true; }
     return z;
   }
@@ -577,13 +749,13 @@
   function bouwVolgende(z) {
     z.bouwGepland = false;
     if (z.weg || z.next || !z.own || !z.own.isKamer) return;
-    const R = bouwKamer(z, kiesSoort(z.laatste), z.own.sxUit);
+    const R = bouwKamer(z, kiesSoort(z.laatste), z.own.uitOv);
     if (!R) return;
     R.nr = z.own.nr + 1; z.next = R; z.laatste = R.soort;
     z.klus.push({ wacht: 2, doe: () => { if (!R.weg) { opwarmen(z, R); R.klaar = true; } } });
   }
   function planVolgende(z) { if (!z.bouwGepland && !z.next) { z.bouwGepland = true; z.klus.push({ wacht: 8, doe: () => bouwVolgende(z) }); } }
-  function wissel(z, t) {  // loper en camera van de gang van A naar dezelfde plek in de gang van B
+  function wissel(z, t, later) {  // loper en camera van de gang van A naar dezelfde plek in de gang van B (later: volgende kamer pas plannen als z.doel vaststaat)
     const A = z.own, B = z.next, w = z.loper.d;
     const M = frameMat(B.inFrame).multiply(frameMat(A.uitFrame).invert()), dyaw = B.inFrame.yaw - A.uitFrame.yaw;
     w.root.position.applyMatrix4(M); w.root.rotation.y += dyaw; w.home.applyMatrix4(M);
@@ -596,7 +768,8 @@
     z.own = B; z.next = null; z.wacht = 0;
     B.t0 = t; B.actief = true; B.groep.visible = true; doolhof.actief = B.kamer;
     for (const p of B.figs) p.d.root.visible = true;
-    if (S.cam === 'doolhof' || B.nr < z.doel) planVolgende(z);
+    if (later) z.planNa = true;
+    else if (S.cam === 'doolhof' || B.nr < z.doel) planVolgende(z);
   }
   function startDans(z, t) {  // stilstaan op de wachtplek en meedansen; de loopclip vloeit eruit
     const w = z.loper.d;
@@ -705,6 +878,7 @@
     if (z.mislukt || !z.loper) { vasteCam(); einde(s); return; }
     const now = performance.now() / 1000;
     verberg(z); bewaarKW(z);
+    if (z.planNa) { z.planNa = false; if (S.cam === 'doolhof' || z.own.nr < z.doel) planVolgende(z); }  // directe start: z.doel staat nu vast
     if (z.klus.length && --z.klus[0].wacht <= 0) z.klus.shift().doe();  // hooguit één klusje per beeld
     loperBeeld(s, z, t, dt);
     const R = z.own.isKamer ? z.own : null;
@@ -735,7 +909,8 @@
     else if (shot && shot.kind === 'doolhof' && shot.z && !shot.z.mislukt && typeof lastTrip !== 'undefined') lastTrip = performance.now() / 1000;
     return kernStart(kind, now);
   };
-  doolhof.start = soort => { if (soort) doolhof.volgende = soort; startShot('doolhof', performance.now() / 1000); };
+  doolhof.start = (soort, direct) => { if (soort) doolhof.volgende = soort; doolhof.direct = !!direct; startShot('doolhof', performance.now() / 1000); };
+  doolhof.direct = false;  // true vlak vóór startShot('doolhof'): begin in de gang vóór kamer 1 (showregie in de break)
   doolhof.toestand = () => actief;  // voor de testronde: kamer, loper, booglengte (null buiten het shot)
   {
     const sel = document.getElementById('cam');
