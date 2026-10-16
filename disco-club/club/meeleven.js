@@ -95,6 +95,7 @@
 
   function golf(kind, tb) {
     if (kind !== 'drop' && kind !== 'ymca') return;  // solo/paar: alleen knikken
+    if (kind === 'drop' && window.clubMoshpit && clubMoshpit.golfWeg()) return;  // deze drop wordt een moshpit (club/moshpit.js)
     const CH = ACTS.Cheer_with_Both_Hands_Up, JU = ACTS.Happy_jump_f, YM = ACTS.ymca_dance;
     if (kind === 'drop' ? !CH || !JU : !YM) return;
     if (typeof tb !== 'number' || !isFinite(tb)) tb = beatPos;  // console of wrapper zonder tel: anders NaN-tijden en onzichtbare figuren

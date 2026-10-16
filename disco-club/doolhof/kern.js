@@ -1429,6 +1429,18 @@
   doolhof.start = (soort, direct) => { if (soort) doolhof.volgende = soort; doolhof.direct = !!direct; startShot('doolhof', performance.now() / 1000); };
   doolhof.direct = false;  // true vlak vóór startShot('doolhof'): begin in de gang vóór kamer 1 (showregie in de break)
   doolhof.toestand = () => actief;  // voor de testronde: kamer, loper, booglengte (null buiten het shot)
+  // club/moshpit.js: de loper blijft (nog) minstens sec seconden dansen waar hij staat (moshpit in deze kamer). Alleen als hij ver
+  // genoeg binnen is (de kamer-camera neemt het dan over) en niet vlak voor de uitgang; anders false (later nog eens proberen).
+  doolhof.houdLoper = sec => {
+    const z = actief;
+    if (!z || z.weg || z.mislukt || !z.loper || !z.own || !z.own.isKamer) return false;
+    if (!z.dans) {
+      if (z.dist < z.own.ingangBoog + BACK + 0.5 || z.dist > z.own.uitgangBoog - 3.5) return false;
+      startDans(z, z.lt);
+    }
+    z.dansTot = Math.max(z.dansTot, z.lt + sec);
+    return true;
+  };
   doolhof.voorraad = () => voorraad && { klaar: voorraad.klaar, soort: voorraad.R && voorraad.R.soort, gang: voorraad.ov && voorraad.ov.stijl, ms: voorraad.ms };
   doolhof.werk = () => werk.map(k => k.naam);
   doolhof.losse = () => [...losseGroepen, ...pool.map(p => p.d.root)];  // testronde: wat buiten de scène leeft (lekzoeker)
