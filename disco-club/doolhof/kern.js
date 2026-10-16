@@ -1364,7 +1364,8 @@
     const zfWas = camera.position.z > TUN_END - 0.5 ? 0.55 : 1;  // wat de kern en de lichtregie deze frame al toepasten (camera = vorige frame)
     if (bloom && bloom.enabled) {
       const z2 = bloom.strength * 0.55 / zfWas, st = sh.stand;  // zaal 2 (daar gedempt: al fel)
-      const B = (st === 'break' ? 0.8 : st === 'opbouw' ? 0.8 + 0.4 * sh.opbouw : 0.9) + 0.3 * pulse * energy + 0.3 * sh.drop + 0.15 * sh.flits;
+      // bij een strobe-flits minder bloom: anders wordt de flits een grijze waas zonder vorm (de leds en voegen moeten zichtbaar blijven)
+      const B = ((st === 'break' ? 0.8 : st === 'opbouw' ? 0.8 + 0.4 * sh.opbouw : 0.9) + 0.3 * pulse * energy + 0.3 * sh.drop) * (1 - 0.65 * Math.min(1, sh.flits));
       bloom.strength = z2 * k + B * (1 - k);
       bloom.threshold = BLOOM_OUD.threshold * k + BL_DREMPEL * (1 - k);
       bloom.radius = BLOOM_OUD.radius * k + BL_STRAAL * (1 - k);
@@ -1482,8 +1483,20 @@
     const r = ctx.rnd, kies = a => a[Math.min(a.length - 1, Math.floor(r() * a.length))];
     const w = 6 + r() * 2, d = 13 + r() * 5, h = 3.3;
     const tint = new THREE.Color().setHSL(r(), 0.85, 0.55);
-    const muur = new THREE.MeshBasicMaterial({ map: wallTex, color: 0x000000 });  // schildering in het donker, alleen de show licht hem op
-    ctx.doos({ w, d, h, muur });
+    // wanden en vloer: gedimde ledvlakken (doolhof/led.js; de poorten blijven de hoofdrol), plafond zwart. Zonder led.js: de oude
+    // schildering in het donker, alleen de show licht hem op
+    const LED = doolhof.led && doolhof.led.scherm ? doolhof.led : null;
+    let muur = null;
+    if (LED) {
+      const hue = tint.getHSL({}).h, zaad = Math.floor(r() * 997);
+      const pal = { a: tint.clone(), b: new THREE.Color().setHSL((hue + 0.33) % 1, 0.95, 0.5), c: new THREE.Color().setHSL((hue + 0.62) % 1, 0.95, 0.5), donker: 0x010003 };
+      const zij = LED.scherm({ palet: pal, maat: { w: d, h }, zaad, modi: { patroon: 2, beeld: 1, golf: 0.6 }, helder: 0.42, zwaar: ctx.zwaar });
+      const kop = LED.scherm({ palet: pal, maat: { w, h }, zaad: zaad + 5, modi: { patroon: 1, tekst: 1.2 }, helder: 0.42, zwaar: ctx.zwaar });
+      ctx.doos({ w, d, h, muur: [zij, zij, kop, kop], vloer: LED.vloerMat(w, d, { palet: pal, tegel: 0.6, zaad, helder: 0.58, zwaar: ctx.zwaar }), plafond: new THREE.MeshBasicMaterial({ color: 0x000000 }) });
+    } else {
+      muur = new THREE.MeshBasicMaterial({ map: wallTex, color: 0x000000 });
+      ctx.doos({ w, d, h, muur });
+    }
     // ledbuizen onder het plafond langs beide wanden: een looplicht van de ingang naar de uitgang, op de show-bus
     const buizen = [], n = Math.max(3, Math.round(d / 3.2)), seg = d / n;
     for (const sx of [-1, 1]) for (let i = 0; i < n; i++) {
@@ -1533,7 +1546,7 @@
         return cr;
       },
       update() {
-        const b = ctx.beat(), sh = doolhof.show, a = 1 - 0.85 * sh.blackout, st = sh.stand;
+        const b = ctx.beat(), sh = doolhof.show, a = 1 - 0.6 * sh.blackout, st = sh.stand;  // break gedimd, niet zwart
         // golf van ingang naar uitgang: break traag (8 tellen), opbouw steeds sneller (4 -> 1), groove 4 tellen, drop elke tel
         const per = st === 'break' ? 8 : st === 'opbouw' ? 4 / (1 + 3 * sh.opbouw) : st === 'drop' ? 1 : 4;
         for (const t of buizen) {
@@ -1542,13 +1555,13 @@
           sh.kleur(t.sx > 0 ? 0 : 1, t.m.color).multiplyScalar(v).addScalar(1.2 * sh.flits);
         }
         sh.kleur(2, plint.color).multiplyScalar((0.05 + 0.45 * b.pulse) * a);
-        sh.kleur(0, muur.color).multiplyScalar(0.05 * b.pulse * a).addScalar(0.05 * a + 0.55 * sh.flits);
+        if (muur) sh.kleur(0, muur.color).multiplyScalar(0.05 * b.pulse * a).addScalar(0.05 * a + 0.55 * sh.flits);
         if (lamp) { sh.kleur(0, lamp.color); lamp.intensity = (0.4 + 1.6 * b.pulse * b.energy) * a + 2.5 * sh.flits; }
         // ledpoorten: break één trage poort, opbouw een looplicht dat versnelt, groove om en om op de tel + looplicht, drop alles aan
         const tel = Math.floor(b.pos);
         for (let i = 0; i < nb; i++) {
           let v, ki = i + tel;
-          if (st === 'break') { v = i === Math.floor(b.pos / 2) % nb ? 0.6 : 0.02; ki = 0; }
+          if (st === 'break') { const q = ((b.pos / 2 - i) % nb + nb) % nb; v = 0.08 + 0.7 * Math.exp(-q * 1.5); ki = 0; }  // trage golf door de poorten
           else if (st === 'opbouw') { const q = ((b.pos * (1 + 3 * sh.opbouw) - i) % nb + nb) % nb; v = 0.06 + 0.25 * sh.opbouw + Math.exp(-q * 0.8) * (0.5 + 0.9 * sh.opbouw); ki = 0; }
           else if (st === 'drop') v = (0.7 + 0.9 * b.pulse) * (0.6 + 0.4 * sh.drop);
           else { const q = ((b.pos * 2 - i) % nb + nb) % nb; v = 0.35 + 0.8 * b.pulse * b.energy * ((i + tel) & 1) + 1.0 * Math.exp(-q * 1.2); }

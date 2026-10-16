@@ -10,7 +10,9 @@
 // middenstukken zetten focus (waar de dj staat) en midden (plek + hoogste punt), zodat rigs en shows daar rekening mee houden.
 // Lichtshow: de show-bus van de kern (window.doolhof.show) stuurt mee: stand en opbouw-voortgang (volger), in drop en break de
 // kleuren van de show (volger(P) zet het palet P elk beeld om), blackout en stroboscoop (busLicht). Constructie is een donker
-// silhouet (vastMesh gedempt), schilderingen en vloeren zijn donker tot de show ze raakt; bundels vervagen vlak voor de camera.
+// silhouet (vastMesh gedempt); bundels vervagen vlak voor de camera. Geen stilstaande vlakken: schilderingen zijn ledschermen
+// (DH.ledHulp, hieronder: doolhof/led.js of een eigen eenvoudige versie), podia (altaar-treden, ring-, kooi-, hologram- en tunnelpodium,
+// bodem van de kubus) zijn ledvloer. stijl.eigenKleur (stijlkamers): de kleuren van de club, nooit die van de show-bus.
 (() => {
   'use strict';
   const DH = window.doolhof = window.doolhof || {};
@@ -133,7 +135,8 @@
   // --- palet, maat en de stand van de muziek ---
   function palet(stijl) {
     const p = (stijl && stijl.palet) || {}, k = (x, d) => (x && x.isColor ? x.clone() : new THREE.Color(x != null ? x : d));
-    return { a: k(p.a, 0xff2d95), b: k(p.b, 0x00e5ff), c: k(p.c, 0xffe600), donker: k(p.donker, 0x0b0812) };
+    // eigenKleur (stijlkamers: elke club houdt zijn eigen kleuren): in de drop draaien a/b/c op de tel, nooit de kleuren van de show-bus
+    return { a: k(p.a, 0xff2d95), b: k(p.b, 0x00e5ff), c: k(p.c, 0xffe600), donker: k(p.donker, 0x0b0812), eigen: !!(stijl && stijl.eigenKleur) };
   }
   const maatVan = (stijl, plek) => { const m = (stijl && stijl.maat) || {}, p = plek || {}; return { w: +p.w || +m.w || 12, d: +p.d || +m.d || 14, h: +p.h || +m.h || 4.5 }; };
   const sfeerVan = stijl => (stijl && stijl.sfeer) || 'rauw';
@@ -157,7 +160,10 @@
     v.stap = (dt, b, stand) => {
       const R = window.clubRegie || {}, sh = showNu(), st = (sh && sh.stand) || stand || R.stand || 'groove', eerste = v.vorig == null;
       if (P) {
-        if (sh && (st === 'drop' || st === 'break')) { sh.kleur(0, P.a); sh.kleur(1, P.b); sh.kleur(2, P.c); }
+        if (P.eigen) {
+          const q = st === 'drop' ? ((Math.floor(b.pos) % 3) + 3) % 3 : 0, K = [P0.a, P0.b, P0.c];
+          P.a.copy(K[q]); P.b.copy(K[(q + 1) % 3]); P.c.copy(K[(q + 2) % 3]);
+        } else if (sh && (st === 'drop' || st === 'break')) { sh.kleur(0, P.a); sh.kleur(1, P.b); sh.kleur(2, P.c); }
         else { P.a.copy(P0.a); P.b.copy(P0.b); P.c.copy(P0.c); }
       }
       if (st !== v.st || eerste) {
@@ -344,6 +350,166 @@ void main() { float a = pow(vF, uScherp) * mix(1.0, 0.05 + 0.95 * vT * vT, uVerl
   const vlekMat = () => { const m = additive(0xffffff, 1); m.map = gloedTex(); return m; };
   const verstop = (im, i) => { _m.makeScale(0, 0, 0); im.setMatrixAt(i, _m); };
 
+  // --- led-hulp (ook voor doolhof/stijl.js: DH.ledHulp): schermen en ledvloeren uit doolhof/led.js (window.doolhof.led); zolang die
+  // bibliotheek er niet is (of faalt) een eenvoudige eigen versie die wel beweegt: schermen met beeld/patroon/golf op de tel, een
+  // tegelvloer met patronen per tel zoals zaal 1. vloer(geo) neemt elke vorm (rond, met gaten, treden): de ledvloer van de bibliotheek
+  // wordt op maat (omhullende rechthoek) gemaakt en krijgt onze geometrie, met uv volgens hetzelfde lineaire verband als de zijne.
+  const LEDH = DH.ledHulp = (() => {
+    const lib = () => { const L = DH.led; return L && typeof L.scherm === 'function' ? L : null; };
+    const fout = {};
+    const meld = (wat, e) => { if (!fout[wat]) { fout[wat] = true; console.warn('doolhof led-hulp: ' + wat + ' via led.js faalt, eigen versie', e); } };
+    // eigen gedeelde uniforms (alleen nodig zonder led.js): één keer per beeld bijgewerkt (tik), alle eigen schermen en vloeren lezen ze
+    const U = { uT: { value: 0 }, uPos: { value: 0 }, uPulse: { value: 0 }, uBas: { value: 0 }, uHoog: { value: 0 }, uOpb: { value: 0 }, uDrp: { value: 0 }, uBrk: { value: 0 }, uFlits: { value: 0 } };
+    let laatst = -1;
+    function tik(b) {
+      const nu = performance.now();
+      if (nu - laatst < 3) return;
+      const dt = laatst < 0 ? 1 : Math.min(0.1, (nu - laatst) / 1000); laatst = nu;
+      b = b || {}; const sh = showNu(), R = window.clubRegie || {}, st = (sh && sh.stand) || R.stand || 'groove';
+      U.uT.value = (nu / 1000) % 3600; U.uPos.value = (((+b.pos || 0) % 256) + 256) % 256; U.uPulse.value = +b.pulse || 0; U.uBas.value = +b.bas || 0; U.uHoog.value = +b.hoog || 0;
+      U.uOpb.value = sh ? sh.opbouw : 0; U.uFlits.value = sh ? sh.flits : 0;
+      U.uDrp.value = naar(U.uDrp.value, sh ? sh.drop : st === 'drop' ? 1 : 0, Math.min(1, dt * 8));
+      U.uBrk.value = naar(U.uBrk.value, sh ? sh.blackout : st === 'break' ? 0.8 : 0, Math.min(1, dt * 3));
+    }
+    const FS_S = `uniform float uT, uPos, uPulse, uBas, uHoog, uOpb, uDrp, uBrk, uFlits;
+uniform sampler2D uMap; uniform float uMapOk, uZaad, uHelder, uPitch; uniform vec2 uMaat; uniform vec3 uMod, uA, uB, uC, uD;
+varying vec2 vUv;
+float h1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+void main() {
+  vec2 px = max(uMaat / uPitch, vec2(4.0)), g = vUv * px, f = fract(g) - 0.5, c = (floor(g) + 0.5) / px;
+  float tel = floor(uPos), fr = fract(uPos), blok = floor(uPos / 16.0) + uZaad, k = h1(blok * 7.31) * (uMod.x + uMod.y + uMod.z);
+  vec2 q = (c - 0.5) * vec2(uMaat.x / max(uMaat.y, 0.01), 1.0);
+  vec3 kl;
+  if (k < uMod.x) {  // beeld: de schildering schuift en pompt op de tel, kleuren naar het palet, lichtband loopt eroverheen
+    vec2 t = vec2(c.x + uPos * 0.015 * (h1(blok) > 0.5 ? 1.0 : -1.0), c.y);
+    t = (t - 0.5) / (1.0 + 0.06 * uPulse + 0.3 * uOpb) + 0.5;
+    vec3 m = texture2D(uMap, fract(t)).rgb;
+    float l = dot(m, vec3(0.3, 0.55, 0.15));
+    kl = mix(mix(uD * 2.0, uA, smoothstep(0.08, 0.45, l)), uB, smoothstep(0.5, 0.9, l)) * (0.35 + 0.65 * uPulse);
+    kl += uC * exp(-pow((c.y - fract(uPos * 0.25)) * 8.0, 2.0)) * 0.7;
+    if (uDrp > 0.5 && mod(tel, 2.0) < 1.0) kl = (uA + uB) * 0.5 * (0.4 + 0.6 * uPulse) - kl * 0.6;  // drop: negatief om de tel
+  } else if (k < uMod.x + uMod.y) {  // patroon: balken of ringen, kleur wisselt op de tel
+    float s = mod(blok, 2.0) < 1.0 ? fract(c.x * 3.0 - uPos * (0.5 + 1.5 * uOpb)) : fract(length(q) * 2.5 - uPos);
+    kl = (mod(tel, 2.0) < 1.0 ? uA : uB) * step(s, 0.35) * (0.25 + 0.75 * uPulse) + uC * step(0.88, s) * 0.5;
+  } else {  // golf uit de banden
+    float y = 0.5 + 0.3 * sin(c.x * 9.0 + uT * 2.0) * (0.35 + uBas) + 0.12 * sin(c.x * 23.0 - uT * 3.1) * (0.3 + uHoog);
+    kl = mix(uA, uB, c.x) * exp(-pow((c.y - y) * 12.0, 2.0)) * 1.4 + uC * step(c.y, y) * 0.1 * (0.4 + uPulse);
+  }
+  kl = max(kl, 0.0) * uHelder * (1.0 - 0.75 * uBrk) + uA * (fr < 0.08 ? 0.25 * uPulse * (1.0 - uBrk) : 0.0) + vec3(uFlits) * 0.45;
+#ifndef MINI
+  kl *= 1.0 - smoothstep(0.3, 0.5, length(f));
+#endif
+  gl_FragColor = vec4(kl, 1.0);
+}`;
+    const VS_P = `varying vec3 vP; void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+    const FS_V = `uniform float uT, uPos, uPulse, uBas, uHoog, uOpb, uDrp, uBrk, uFlits;
+uniform float uTegel, uZaad, uHelder; uniform vec3 uA, uB, uC, uD;
+varying vec3 vP;
+float h1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+void main() {
+  vec2 q = vP.xz / uTegel, cel = floor(q), f = fract(q) - 0.5;
+  float tel = floor(uPos), pat = mod(floor(uPos / 8.0) + uZaad, 5.0), r = length(cel + 0.5), k;
+  if (pat < 1.0) k = mod(cel.x + cel.y + tel, 2.0);                                                     // dambord
+  else if (pat < 2.0) k = step(mod(floor(r) - tel, 3.0), 0.5);                                         // ringen uit het midden
+  else if (pat < 3.0) k = max(step(mod(cel.x + tel, 4.0), 0.5), step(mod(cel.y + tel, 4.0), 0.5));     // looplicht
+  else if (pat < 4.0) k = step(0.62 - 0.25 * uDrp, h1(dot(cel, vec2(1.7, 9.3)) + tel * 3.1));            // ruis
+  else k = step(mod(abs(cel.x) + cel.y + tel * 2.0, 6.0), 1.5);                                        // chevron
+  vec3 kl = mod(floor(r * 0.6) + tel, 2.0) < 1.0 ? uA : uB;
+  float lev = k > 0.5 ? 0.3 + 0.7 * uPulse : 0.04 + 0.03 * uBas;
+  float voeg = 1.0 - smoothstep(0.42, 0.48, max(abs(f.x), abs(f.y)));
+  gl_FragColor = vec4(uD * 0.25 + (kl * lev * uHelder * (1.0 - 0.75 * uBrk) + vec3(uFlits) * 0.3) * voeg, 1.0);
+}`;
+    const kleuren = P => ({ uA: { value: (P && P.a ? P.a : new THREE.Color(0xff2d95)).clone() }, uB: { value: (P && P.b ? P.b : new THREE.Color(0x00e5ff)).clone() },
+      uC: { value: (P && P.c ? P.c : new THREE.Color(0xffe600)).clone() }, uD: { value: (P && P.donker ? P.donker : new THREE.Color(0x0b0812)).clone() } });
+    const bron = b => (b && b.isTexture ? b : typeof b === 'string' && b ? DH.tex(b) : null);
+    // o.mix = eigen uniform { value } voor showMix van led.js (hoeveel de kleuren naar die van de show schuiven): de stijlkamers houden
+    // zo hun clubkleuren; zonder o.mix de gedeelde (break koel, drop heet)
+    const eigenMix = (m, o) => { if (o.mix && m.uniforms && m.uniforms.showMix) m.uniforms.showMix = o.mix; return m; };
+    function scherm(o, Z) {
+      o = o || {};
+      const L = lib();
+      if (L) { try { const m = L.scherm(Object.assign({ zwaar: Z }, o)); if (m && m.isMaterial) return eigenMix(m, o); } catch (e) { meld('scherm', e); } }
+      const mo = o.modi || ['beeld', 'patroon', 'golf'], modi = Array.isArray(mo) ? mo : Object.keys(mo).filter(k => mo[k] > 0), kaart = bron(o.bron), mt = o.maat || { w: 2, h: 1 };
+      const mod = new THREE.Vector3(kaart && modi.includes('beeld') ? 1 : 0, modi.includes('patroon') || modi.includes('tekst') ? 1 : 0, modi.includes('golf') ? 1 : 0);
+      if (mod.x + mod.y + mod.z === 0) mod.y = 1;
+      const u = Object.assign({}, U, kleuren(o.palet), { uMap: { value: kaart }, uMapOk: { value: kaart ? 1 : 0 }, uZaad: { value: (+o.zaad || 0) % 97 }, uHelder: { value: o.helder == null ? 0.8 : o.helder },
+        uPitch: { value: o.pitch || 0.05 }, uMaat: { value: new THREE.Vector2(+mt.w || 2, +mt.h || 1) }, uMod: { value: mod } });
+      const m = shader(u, VS_UV, FS_S, Z === 2 ? { defines: { MINI: 1 } } : null);
+      m.eigenLed = true;
+      return m;
+    }
+    // lineair verband uv = f(positie in het vlak) aflezen uit drie hoekpunten van de bibliotheek-geometrie
+    function uvVerband(g0) {
+      const P = g0.attributes.position, UV = g0.attributes.uv;
+      if (!UV || P.count < 3) return null;
+      g0.computeBoundingBox(); const e = g0.boundingBox.getSize(_v), as = e.x <= e.y && e.x <= e.z ? 0 : e.y <= e.z ? 1 : 2, I = as === 0 ? 1 : 0, J = as === 2 ? 1 : 2;
+      const pt = k => [P.getComponent(k, I), P.getComponent(k, J)];
+      let b = 1, best = -1;
+      for (let k = 1; k < P.count; k++) { const p = pt(k), q = pt(0), dd = (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2; if (dd > best) { best = dd; b = k; } }
+      let c = -1; best = 1e-8;
+      const A = pt(0), Bp = pt(b);
+      for (let k = 1; k < P.count; k++) { const C = pt(k), kr = Math.abs((Bp[0] - A[0]) * (C[1] - A[1]) - (Bp[1] - A[1]) * (C[0] - A[0])); if (kr > best) { best = kr; c = k; } }
+      if (c < 0) return null;
+      const Cp = pt(c), det = A[0] * (Bp[1] - Cp[1]) - A[1] * (Bp[0] - Cp[0]) + (Bp[0] * Cp[1] - Cp[0] * Bp[1]);
+      if (Math.abs(det) < 1e-9) return null;
+      const los = (w0, w1, w2) => {  // a*s + b*t + c = w (Cramer)
+        const a = (w0 * (Bp[1] - Cp[1]) - A[1] * (w1 - w2) + (w1 * Cp[1] - w2 * Bp[1])) / det;
+        const bb = (A[0] * (w1 - w2) - w0 * (Bp[0] - Cp[0]) + (Bp[0] * w2 - Cp[0] * w1)) / det;
+        const cc = (A[0] * (Bp[1] * w2 - Cp[1] * w1) - A[1] * (Bp[0] * w2 - Cp[0] * w1) + w0 * (Bp[0] * Cp[1] - Cp[0] * Bp[1])) / det;
+        return [a, bb, cc];
+      };
+      return { I, J, u: los(UV.getX(0), UV.getX(b), UV.getX(c)), v: los(UV.getY(0), UV.getY(b), UV.getY(c)) };
+    }
+    // onze vorm (kamer- of groepcoördinaten) in de mesh van de bibliotheek zetten; false = kan niet (eigen attributen, instancing)
+    function overzet(m, geo, cx, cz) {
+      const g0 = m.geometry;
+      if (!g0 || !g0.attributes || !g0.attributes.position) return false;
+      for (const k of Object.keys(g0.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') return false;
+      const fit = uvVerband(g0);
+      if (g0.attributes.uv && !fit) return false;
+      m.updateMatrix(); const inv = new THREE.Matrix4().copy(m.matrix).invert();
+      const bron2 = geo.index ? geo.toNonIndexed() : geo, P = bron2.attributes.position, n = P.count;
+      const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = fit ? new Float32Array(n * 2) : null;
+      const N0 = g0.attributes.normal ? V(g0.attributes.normal.getX(0), g0.attributes.normal.getY(0), g0.attributes.normal.getZ(0)) : V(0, 1, 0).transformDirection(inv);
+      for (let k = 0; k < n; k++) {
+        _v.fromBufferAttribute(P, k); _v.x -= cx; _v.z -= cz; _v.applyMatrix4(inv);
+        pos[k * 3] = _v.x; pos[k * 3 + 1] = _v.y; pos[k * 3 + 2] = _v.z;
+        nor[k * 3] = N0.x; nor[k * 3 + 1] = N0.y; nor[k * 3 + 2] = N0.z;
+        if (uv) { const s = _v.getComponent(fit.I), t = _v.getComponent(fit.J); uv[k * 2] = fit.u[0] * s + fit.u[1] * t + fit.u[2]; uv[k * 2 + 1] = fit.v[0] * s + fit.v[1] * t + fit.v[2]; }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      if (uv) g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      m.geometry = g; m.position.x += cx; m.position.z += cz;
+      return true;
+    }
+    // ledvloer in de vorm van geo (naar boven gericht); o = { palet, tegel, zaad, helder }
+    function vloer(geo, o, Z) {
+      o = o || {};
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox, w = Math.max(0.4, bb.max.x - bb.min.x), d = Math.max(0.4, bb.max.z - bb.min.z), cx = (bb.max.x + bb.min.x) / 2, cz = (bb.max.z + bb.min.z) / 2;
+      const L = lib();
+      if (L && typeof L.vloer === 'function') {
+        try {
+          const m = L.vloer(w, d, { palet: o.palet, tegel: o.tegel, zaad: o.zaad, helder: o.helder, zwaar: Z });
+          if (m && m.material) eigenMix(m.material, o);
+          if (m && m.isMesh && !m.isInstancedMesh && overzet(m, geo, cx, cz)) { m.frustumCulled = false; return m; }
+          if (m && m.isMesh && o.recht) { m.position.x += cx; m.position.z += cz; m.position.y += bb.min.y; return m; }  // rechthoek: zoals hij is
+        } catch (e) { meld('vloer', e); }
+      }
+      const u = Object.assign({}, U, kleuren(o.palet), { uTegel: { value: o.tegel || 0.9 }, uZaad: { value: (+o.zaad || 0) % 97 }, uHelder: { value: o.helder == null ? 1 : o.helder } });
+      const mesh = new THREE.Mesh(geo, shader(u, VS_P, FS_V));
+      mesh.frustumCulled = false;
+      return mesh;
+    }
+    // vlakken (PlaneGeometry/CircleGeometry, plat in xy) als ledvloer naar boven op hoogte y: [[geo, x, y, z]] -> één mesh
+    function vloerVlakken(lijst, o, Z) {
+      const delen = lijst.map(([geo, x, y, z]) => [geo, mat(x, y, z, 1, 1, 1, -Math.PI / 2)]);
+      return vloer(samen(delen), o, Z);
+    }
+    return { lib, tik, scherm, vloer, vloerVlakken, eigen: () => !lib(), U };
+  })();
+
   // --- registreren met vangnet: een fout in één onderdeel legt de kamer niet stil ---
   function reg(soort, naam, def) {
     const maak = def.maak;
@@ -416,9 +582,10 @@ void main() {
     const r = ctx.rnd, Z = ctx.zwaar, P = palet(stijl), M = maatVan(stijl), sf = sfeerVan(stijl), BK = bouwKleur(sf, P);
     const { g, px, pz, R } = middenGroep(ctx, plek);
     const R0 = Math.max(1.45, R * 0.7), N = Math.max(2, Math.min(Z === 0 ? 4 : 3, Math.floor((R0 - 1.15) / 0.32) + 1)), SH = 0.27;
-    const RT = klem(R0 * 0.42, 1.15, 1.6), top = N * SH, vast = [], gl = [];
+    const RT = klem(R0 * 0.42, 1.15, 1.6), top = N * SH, vast = [], gl = [], treden = [];
     for (let i = 0; i < N; i++) {
       const s = N > 1 ? R0 - (R0 - RT) * i / (N - 1) : RT, y0 = i * SH, e = s + 0.012, y = y0 + SH + 0.012;
+      treden.push([new THREE.PlaneGeometry(s * 2, s * 2), 0, y0 + SH + 0.004, 0]);  // bovenkant van elke trede: ledtegels
       vast.push([GEO.doos, mat(0, y0 + SH / 2, 0, s * 2, SH, s * 2), { kl: BK.romp }]);
       vast.push([GEO.doos, mat(0, y0 + SH - 0.02, 0, s * 2 + 0.03, 0.04, s * 2 + 0.03), { kl: BK.rand }]);
       for (const [a, b] of [[[-e, -e], [e, -e]], [[-e, -e], [-e, e]], [[e, -e], [e, e]], [[-e, e], [e, e]]]) neon(gl, V(a[0], y, a[1]), V(b[0], y, b[1]), 0.03, i, Z);
@@ -446,6 +613,7 @@ void main() {
     }
     djTafel(vast, gl, 0, top, -0.25, 1.5, BK.romp, N + 3);
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
+    g.add(LEDH.vloerVlakken(treden, { palet: P, tegel: 0.34, zaad: Math.floor(r() * 1000), mix: bus(ctx).ledMix }, Z));
     const dj = djZet(ctx, px, top, pz + 0.3);
     let logo = null;
     if (Z < 2) { logo = ctx.neon(kies(r, ['DEEP SAMSO', 'BLOODLINE', 'SAMSO']), hex(P.c), 1.3, 0.325); logo.position.set(px, top + 0.46, pz - 0.25 - 0.32); logo.rotation.y = Math.PI; }
@@ -457,6 +625,7 @@ void main() {
     return { focus: { x: px, y: top + 1.6, z: pz + 0.3 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
+        LEDH.tik(b);
         ch += v.dp * (1 + 3 * v.opb * v.opb);  // looplicht de trap op, in de opbouw steeds sneller
         const c = ch % (N + 1), dropKl = v.tel % 2 ? P.c : P.a;
         for (let i = 0; i < N; i++) {
@@ -527,6 +696,7 @@ void main() {
     for (const s of [-1, 1]) vast.push([GEO.cil, mat(s * S * 0.18, 0.97, -h + 0.32, 0.15, 0.02, 0.15), { kl: new THREE.Color(0x0a0a0c) }]);
     vast.push([GEO.doos, mat(0, 0.97, -h + 0.32, 0.28, 0.05, 0.3), { kl: new THREE.Color(0x3a3a40) }]);
     const vm = vastMesh(kub, vast), gm = gloedMesh(kub, gl);
+    kub.add(LEDH.vloerVlakken([[new THREE.PlaneGeometry(S - 0.04, S - 0.04), 0, 0.104, 0]], { palet: P, tegel: 0.3, zaad: Math.floor(r() * 1000), mix: bus(ctx).ledMix }, Z));  // ledbodem
     // twee neonkaders die om de kubus draaien
     const kader = new THREE.Group(); kader.position.y = HV + S / 2; g.add(kader);
     const F2 = Math.min(S * 1.5, R * 1.38) / 2, kl2 = [];
@@ -542,7 +712,7 @@ void main() {
     return { focus: { x: px, y: HV + 1.65, z: pz + zDJ }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
-        bobB = Math.max(bobB * Math.exp(-dt * 6), b.bas);
+        bobB = Math.max(bobB * Math.exp(-dt * 6), b.bas); LEDH.tik(b);
         const bob = 0.05 * Math.sin(now * 1.3) + 0.05 * bobB + 0.12 * v.hit;
         kub.position.y = HV + bob; if (dj) dj.yOff = HV + 0.1 + bob;
         kader.position.y = HV + S / 2 + bob * 0.5;
@@ -580,6 +750,7 @@ void main() {
     neonRing(gl, 0, 0.21, 0, RP + 0.36, 0.03, NS, Z, Math.PI / 2, 0, 64);
     djTafel(vast, gl, 0, PH, -0.3, 1.45, BK.romp, NS + 1);
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
+    g.add(LEDH.vloerVlakken([[new THREE.CircleGeometry(RP + 0.03, 48), 0, PH + 0.004, 0]], { palet: P, tegel: 0.3, zaad: Math.floor(r() * 1000), mix: bus(ctx).ledMix }, Z));  // podium = ledvloer
     const ringen = [], kl = [P.a, P.b, P.c];
     for (let i = 0; i < n; i++) {
       const Ri = Math.max(RP + 0.35 + i * 0.3, Math.min(R - 0.12, RP + 0.55 + i * Math.max(0.3, (R - 0.12 - RP - 0.55) / Math.max(1, n - 1))));
@@ -595,6 +766,7 @@ void main() {
     return { focus: { x: px, y: PH + 1.55, z: pz + 0.25 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
+        LEDH.tik(b);
         ringen.forEach((q, i) => {
           const w = q.dir * (0.25 + 0.15 * i) * (0.6 + 0.6 * v.en) * (1 + 3 * v.opb) * (1 + 3 * v.drp) * (1 - 0.7 * v.brk);
           q.mesh.rotation.y += w * dt;
@@ -718,6 +890,7 @@ void main() {
     neonRing(gl, 0, YR + 0.335, ZK, 0.26, 0.03, 3, Z, Math.PI / 2, 0, 32);
     djTafel(vast, gl, 0, YR, -0.62, 1.4, BK.romp, 1);
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
+    g.add(LEDH.vloerVlakken([[new THREE.CircleGeometry(RR, 48), 0, YR + 0.004, 0]], { palet: P, tegel: 0.3, zaad: Math.floor(ctx.rnd() * 1000), mix: bus(ctx).ledMix }, Z));  // sokkel = ledvloer
     // het hoofd: schedel (incl. achterkant van de kaak, neus, wenkbrauwen) en een losse kaak aan een scharnier
     const hm = shader({ uT: { value: 0 }, uLev: { value: 1 }, uGlitch: { value: 0 }, uKl: { value: P.b.clone() } }, VS_HOLO, FS_HOLO, plusOpties);
     const hg = new THREE.Group(); hg.position.set(0, YB, ZK); hg.scale.set(HH * 0.86, HH, HH); g.add(hg);
@@ -744,6 +917,7 @@ void main() {
     return { focus: { x: px, y: YR + 1.55, z: pz - 0.07 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
+        LEDH.tik(b);
         // kaak: snel open op de bas, iets trager dicht; in de break een zacht gemompel
         const doel = meng(v, klem(b.bas * 1.2 - 0.15) * 0.34, klem(b.bas * 1.2 - 0.1) * 0.3, klem(b.bas * 1.3 - 0.1) * 0.4, 0.04 + 0.04 * Math.abs(Math.sin(now * 7)) * b.hoog);
         open += (doel - open) * Math.min(1, dt * (doel > open ? 25 : 9)); scharnier.rotation.x = -open;
@@ -784,6 +958,7 @@ void main() {
     }
     djTafel(vast, gl, 0, YD, ZDJ - 0.55, 1.5, BK.romp, N);
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
+    g.add(LEDH.vloerVlakken([[new THREE.PlaneGeometry(2.6, 2.0), 0, YD + 0.004, ZDJ]], { palet: P, tegel: 0.3, zaad: Math.floor(r() * 1000), mix: bus(ctx).ledMix }, Z));  // podium = ledvloer
     // ledscherm achter de dj
     const lm = ledMat(P, Z === 0 ? [36, 30] : [24, 20], r() * 50), scherm = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(2.4, past(zA + 0.12)), Math.min(2.4, M.h - YD - 0.4)), lm);
     scherm.position.set(0, YD + Math.min(2.4, M.h - YD - 0.4) / 2 + 0.05, zA + 0.12); scherm.rotation.y = Math.PI; g.add(scherm);
@@ -795,7 +970,7 @@ void main() {
     return { focus: { x: px, y: YD + 1.55, z: pz + ZDJ }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
-        kOpb.copy(P.b).lerp(WIT, v.opb);
+        kOpb.copy(P.b).lerp(WIT, v.opb); LEDH.tik(b);
         golf += v.dp * (1 + 3 * v.opb * v.opb);  // één golf per tel, in de opbouw tot vier
         const x = (golf % 1) * (N + 2) - 1, xb = (1 - ((b.pos / 4) % 1)) * (N + 2) - 1;  // break: langzaam terug, elke 4 tellen
         for (let k = 0; k < N; k++) {
@@ -838,6 +1013,7 @@ void main() {
     }
     djTafel(vast, gl, 0, PH, -0.3, 1.3, BK.romp, nL + 3);
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
+    g.add(LEDH.vloerVlakken([[new THREE.CircleGeometry(RK, 48), 0, PH + 0.004, 0]], { palet: P, tegel: 0.3, zaad: Math.floor(r() * 1000), mix: bus(ctx).ledMix }, Z));  // podium = ledvloer
     let bord = null;
     if (Z < 2) { bord = ctx.neon(kies(r, ['THE CAGE', 'KOOI', 'LOCKED IN', 'NO EXIT']), hex(P.a), 1.5, 0.375); bord.position.set(px, HK - 0.45, pz - RB - 0.06); bord.rotation.y = Math.PI; }
     const dj = djZet(ctx, px, PH, pz + 0.25);
@@ -848,7 +1024,7 @@ void main() {
     return { focus: { x: px, y: PH + 1.55, z: pz + 0.25 }, dj,
       update(dt, now, b, stand) {
         v.stap(dt, b, stand); const L = busLicht(ctx), H = L.helder, F = L.flits;
-        rond += v.dp * (1 + 5 * v.opb * v.opb);
+        rond += v.dp * (1 + 5 * v.opb * v.opb); LEDH.tik(b);
         const kop = rond % nL;
         for (let i = 0; i < nL; i++) {
           const d = ((kop - i) % nL + nL) % nL, s = Math.exp(-d * 0.9);
@@ -1155,13 +1331,17 @@ void main() {
   }
   const opWand = (w, u, y, af) => V(w.a.x + w.t.x * u + w.n.x * af, y, w.a.z + w.t.z * u + w.n.z * af);
   const MUREN = { rauw: ['beton-bunker', 'rave-flyers', 'neonsteeg'], trippy: ['paddenstoelen', 'kosmos', 'uv-jungle', 'slijmhol'], luxe: ['bass-tempel', 'chroom', 'kosmos'],
-    futuristisch: ['arcade', 'neonsteeg', 'chroom', 'kosmos'], organisch: ['uv-jungle', 'slijmhol', 'paddenstoelen', 'bass-tempel'] };
+    futuristisch: ['arcade', 'neonsteeg', 'chroom', 'kosmos'], organisch: ['uv-jungle', 'slijmhol', 'paddenstoelen', 'bass-tempel'],
+    // clubs van doolhof/stijl.js (stijl.club)
+    bunker: ['beton-bunker', 'rave-flyers'], ibiza: ['bass-tempel', 'chroom'], jungle: ['uv-jungle', 'paddenstoelen', 'slijmhol'], scifi: ['kosmos', 'chroom', 'neonsteeg'],
+    disco: ['chroom', 'rave-flyers', 'arcade'], onderwater: ['kosmos', 'slijmhol'], hel: ['bass-tempel', 'beton-bunker', 'paddenstoelen'], arcade: ['arcade', 'neonsteeg', 'rave-flyers'] };
 
-  // ----- 1. Muurschilderingen: lichtbakken met een stuk muurschildering, neonlijst die op de tel gloeit, strijklicht eronder -----
+  // ----- 1. Muurschilderingen: ledschermen (lichtbakken) met een muurschildering als beeld: schuift, pompt en kleurt op de tel
+  //          (doolhof/led.js), neonlijst die op de tel gloeit, strijklicht eronder -----
   reg('muur', 'schilderingen', { gewicht: 1.1, maak(ctx, stijl, plek) {
     const r = ctx.rnd, Z = ctx.zwaar, P = palet(stijl), M = maatVan(stijl, plek), sf = sfeerVan(stijl), g = new THREE.Group(); ctx.groep.add(g);
-    const keus = (MUREN[sf] || MUREN.rauw).filter(n => n !== stijl.muurTex), A = 2048 / 878;
-    const tex = DH.tex(keus.length ? kies(r, keus) : (stijl.muurTex || 'kosmos'));
+    const keus = (MUREN[stijl.club] || MUREN[sf] || MUREN.rauw).filter(n => n !== stijl.muurTex), A = 2048 / 878;
+    const bronNaam = keus.length ? kies(r, keus) : (stijl.muurTex || 'kosmos');
     const panelen = [];
     for (const w of wanden(M, 0.5)) {
       if (w.zij) {
@@ -1178,10 +1358,7 @@ void main() {
     panelen.forEach((q, k) => {
       const { w, pw, ph, yc } = q, c = opWand(w, q.u, yc, 0.05), ax = w.as;
       let ch = 1, cw = (pw / ph) / A; if (cw > 1) { ch = 1 / cw; cw = 1; }
-      const zoom = 0.75 + r() * 0.25; cw *= zoom; ch *= zoom;
-      const u0 = r() * (1 - cw), v0 = r() * (1 - ch), pg = new THREE.PlaneGeometry(pw, ph), uv = pg.attributes.uv;
-      for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + uv.getX(i) * cw, v0 + uv.getY(i) * ch);
-      vlakken.push([pg, mat(c.x, c.y, c.z, 1, 1, 1, 0, w.ry)]);
+      vlakken.push([new THREE.PlaneGeometry(pw, ph), mat(c.x, c.y, c.z, 1, 1, 1, 0, w.ry)]);  // uv 0..1 per scherm: de ledbibliotheek kadert zelf
       const b0 = opWand(w, q.u, yc, 0.025);
       vast.push([GEO.doos, mat(b0.x, b0.y, b0.z, pw + 0.24, ph + 0.24, 0.05, 0, w.ry), { kl: lijst }]);
       const hx = pw / 2 + 0.07, hy = ph / 2 + 0.07, hoek = (sx, sy) => V(c.x + ax.x * sx * hx + w.n.x * 0.03, yc + sy * hy, c.z + ax.z * sx * hx + w.n.z * 0.03);
@@ -1189,7 +1366,9 @@ void main() {
       const wh = Math.max(0.6, yc - ph / 2 + 0.4), wc = opWand(w, q.u, wh / 2, 0.012);
       was.push([GEO.vlak, mat(wc.x, wc.y, wc.z, pw * 0.95, wh, 1, 0, w.ry)]);
     });
-    const pm = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff });
+    // alle schermen één materiaal (één draw call, zelfde beeld op de tel); maat = het grootste scherm (pixelraster)
+    const groot = panelen.reduce((m, q) => (q.pw > m.pw ? q : m), panelen[0] || { pw: 3, ph: 1.3 });
+    const pm = LEDH.scherm({ bron: bronNaam, palet: P, maat: { w: groot.pw, h: groot.ph }, zaad: Math.floor(r() * 1000), modi: ['beeld', 'golf'], helder: 0.95, mix: bus(ctx).ledMix }, Z);
     if (vlakken.length) g.add(new THREE.Mesh(samen(vlakken), pm));
     const vm = vastMesh(g, vast), gm = gloedMesh(g, gl);
     const wm = plusMap(wasTex()); if (was.length && Z < 2) g.add(new THREE.Mesh(samen(was), wm));
@@ -1203,7 +1382,7 @@ void main() {
           gm.lev[k] = meng(v, k === kop ? 0.6 + 0.6 * b.pulse : 0.25 + 0.1 * b.pulse, 0.25 + 0.6 * v.opb + (k === kop ? 0.6 : 0), 0.7 + 0.4 * b.pulse * ((k + v.tel) % 2 ? 1 : 0.3) + v.hit, 0.03 + 0.05 * Math.sin(now * 0.9 + k)) * H + F;
           mengKl(gm.kl[k], v, KL[k % 3], WIT, KL[(k + v.tel) % 3], P.b);
         }
-        pm.color.setScalar(meng(v, 0.1 + 0.32 * b.pulse, 0.08 + 0.55 * v.opb, 0.28 + 0.5 * b.pulse, 0.03) * H + 0.45 * F);
+        LEDH.tik(b);
         wm.color.copy(KL[v.tel % 3]).multiplyScalar(meng(v, 0.35 + 0.35 * b.bas, 0.3 + 0.5 * v.opb, 0.55 + 0.5 * b.pulse, 0.06) * H);
         if (vm) vm.color.setScalar(H + 0.5 * F);
       } };
@@ -1412,7 +1591,7 @@ void main() {
   float g1 = 0.02 + 0.22 * schaak * (0.15 + 0.85 * uPulse) + 0.45 * exp(-kw(rho - fr * 9.0) * 0.6);  // donkere tegels tussen de slagen (anders een fel 70s-schaakbord)
   float o1 = 0.12 + 0.4 * uOpb + 0.85 * exp(-kw(fract(-uPos * (0.5 + 1.5 * uOpb)) * 9.0 - sq) * 1.2) + step(1.0 - 0.3 * uOpb, hash2(cel + floor(uT * (4.0 + 12.0 * uOpb))));
   float d1 = (0.3 + 0.7 * uPulse) * (0.5 + 0.5 * step(0.5, hash2(cel + tel))) + uHit * 1.2;
-  float b1 = 0.04 + 0.16 * (0.5 + 0.5 * sin(uT * 0.7 + h * 6.28)) * step(0.72, h);
+  float b1 = 0.04 + 0.3 * pow(0.5 + 0.5 * sin(rho * 0.8 - uT * 2.2), 3.0) + 0.18 * (0.5 + 0.5 * sin(uT * 1.8 + h * 6.28)) * step(0.6, h);  // break: trage rimpel uit het midden + fonkelen (stond bijna stil)
   float lev = wGroove() * g1 + uOpb * o1 + uDrp * d1 + uBrk * b1;
   float som = max(0.001, wGroove() + uOpb + uDrp + uBrk);
   vec3 kol = (mix(uA, uB, schaak) * wGroove() + mix(uB, vec3(1.0), 0.6 * uOpb) * uOpb + pal3(h + tel * 0.25) * uDrp + uB * uBrk) / som;
@@ -1439,12 +1618,12 @@ void main() {
   float v = 0.5 + 0.5 * sin(w.x * 2.0 + w.y * 1.6 + t) + uBas * 0.25 * sin(rho * 3.0 - uT * 6.0) * exp(-rho * 0.12);
   vec3 kol = mix(pal3(v * 0.9 + t * 0.05), uD * 2.0, 0.5 * uBrk);
   float lijn = smoothstep(0.9, 1.0, 1.0 - abs(fract(v * 4.0) - 0.5) * 2.0);
-  float lev = (0.06 + 0.08 * uEn + 0.22 * uPulse * (1.0 - uBrk) + 0.22 * uDrp + 0.16 * uOpb + 0.3 * uHit) * (1.0 - 0.8 * uBrk);
+  float lev = (0.06 + 0.08 * uEn + 0.22 * uPulse * (1.0 - uBrk) + 0.22 * uDrp + 0.16 * uOpb + 0.3 * uHit) * (1.0 - 0.5 * uBrk);  // break: smeult zichtbaar door
   float ader = smoothstep(0.55, 1.0, v);  // alleen de toppen van de golven gloeien, de rest is diep donker
-  vec3 c = kol * lev * (0.25 + 0.75 * ader) + lijn * kol * (0.12 + 0.35 * uHoog) * (1.0 - 0.7 * uBrk);
+  vec3 c = kol * lev * (0.25 + 0.75 * ader) + lijn * kol * (0.12 + 0.35 * uHoog) * (1.0 - 0.45 * uBrk);
   gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.2 * ader, 1.0);
 }`;
-  reg('vloer', 'vloeibaar', { gewicht: 0.9, past: s => s.sfeer !== 'rauw', maak(ctx, stijl, plek) {
+  reg('vloer', 'vloeibaar', { gewicht: 0.9, past: s => s.sfeer !== 'rauw' || s.club === 'hel', maak(ctx, stijl, plek) {  // lavahel: lava
     const P = palet(stijl), M = maatVan(stijl, plek), u = mu(P, { uFase: { value: ctx.rnd() * 50 } });
     vloerMesh(ctx, M, u, FS_VLOEI);
     const v = volger(P); let fase = u.uFase.value;
@@ -1496,7 +1675,7 @@ void main() {
   float diep = clamp(vP.y / uDiep + 0.5, 0.0, 1.0);
   vec3 kx = mix(uA, uC, diep), kz = mix(uB, uA, diep);
   float scanZ = (fract(uPos / 4.0) - 0.5) * uDiep * (1.0 - uDrp) + (0.5 - fract(uPos)) * uDiep * uDrp;
-  float scan = exp(-kw((vP.y - scanZ) / 0.35)) * (1.0 - uBrk);
+  float scan = exp(-kw((vP.y - scanZ) / 0.35)) * (1.0 - 0.6 * uBrk);  // ook in de break een trage scan (het raster stond daar stil)
   float lev = wGroove() * (0.55 + 0.45 * uPulse) + uOpb * (0.4 + 0.8 * uOpb) + uDrp * (1.0 + 0.4 * uPulse + uHit) + uBrk * 0.15;
   vec3 c = uD * 0.4 + (kx * lx + kz * lz) * lev + mix(uC, vec3(1.0), 0.4) * scan * 0.6;
   gl_FragColor = vec4(c * (1.0 - 0.85 * uDim) + uFlits * 0.15, 1.0);

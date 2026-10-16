@@ -6,13 +6,16 @@
 // functie van now/b/stand (geen tellertjes, geen dt-optelsommen): dan zijn beide helften op elk moment gelijk en valt de wissel niet op.
 // maat: L1/L2/L3/B/H/h/LEN, sx + recht(o) (tekst leesbaar in een gespiegelde gang), zwaar, st(x,z) -> [s,d], xz(s,d) -> {x,z,dx,dz}, lijn(d),
 // pad (looplijn), dwars (rechte stukken in s), kijk (de twee muren recht vooruit), bol (omhullende bol), deel(sleutel, maak) (één keer voor beide helften).
-// Muren/vloer/plafond zijn shaders op de gangcoördinaten (s langs de gang, d zijwaarts, y hoogte): lichtpakketten, gloed en rasters lopen door de
-// bochten heen. Alles onverlicht (shader/additief), weinig draw calls (InstancedMesh, één Points per gang); zwaar 2 (tv): minder deeltjes, geen nevel/halo's.
-// Lichtshow (16-10): de gang is een clubvisual, geen verlichte ruimte. Muren, vloer en plafond zijn diepzwart; de schildering licht alleen op
-// waar de show hem raakt (lichtmasker: looplicht, ringflitsen, gobo's, stroboscoop). Per gang: bewegende koppen aan het plafond (bundels +
-// lichtplekken op de vloer) en twee laserwaaiers vanaf de muren recht vooruit (de camera kijkt ertegenin, de loper staat ervoor als silhouet).
-// Per sectie (clubRegie of de show-bus doolhof.show): break = bijna donker, één langzame bundel; opbouw = looplicht versnelt, strobe-aanloop;
-// drop = strobe-salvo, dan alles aan met een kleurwissel op elke tel; groove = op de tel, palet wisselt per maat. Elke stijl: een eigen palet van 3.
+// Ledgang (ronde 3): muren, plafond en vloer zijn bewegende ledoppervlakken op de gangcoördinaten (s langs de gang, d zijwaarts, y hoogte):
+// één shaderprogramma voor alle muren/plafonds en één voor alle vloeren (zie LEDW_F/LEDV_F), per stijl alleen andere uniforms. Op de muren
+// de schildering van de stijl als beeldmateriaal (scroll, zoom op de kick, kaleidoscoop, kleur naar het palet, pixelate, RGB-split,
+// negatief/glitch op de drop) of patronen (balken die door de gang rennen, spectrum, golven, lopende tekst, plasma, blokken, chevrons);
+// de vloer is een ledvloer zoals in zaal 1 (tegels met voegen, patroon per tel) of fijne leds met de schildering. Wat erop staat kiest de
+// ledregie (ledRegie) per 4 maten uit tel + zaad, dus beide helften blijven gelijk. De schermen flitsen op de tel (vlak, golf door de gang,
+// één muur, band), om de 8 maten groot; break = donker en traag, opbouw = balken versnellen + strobe-blokken, drop = strobe-salvo, daarna
+// elke maat een andere inhoud en elke tel een flits/negatief. Daarbij de lichtshow van ronde 2: koppen aan het plafond, laserwaaiers,
+// ringen, ledstrips met looplicht, neonborden. Alles onverlicht (shader/additief), weinig draw calls; zwaar 2 (tv): MINI (geen ledpuntjes).
+// Test: doolhof.gangLedForceer = { muur, plafond, vloer } (nummers van M/V) zet de inhoud vast.
 (function () {
   'use strict';
   const doolhof = window.doolhof = window.doolhof || {};
@@ -23,8 +26,6 @@
   window.doolhof.tex = window.doolhof.tex || (() => { const c = {}; return (naam, herhaal) => { const k = naam + (herhaal ? '*' : ''); if (!c[k]) { const t = new THREE.TextureLoader().load('tex/doolhof/' + naam + '.jpg'); if (renderer.outputEncoding === THREE.sRGBEncoding) t.encoding = THREE.sRGBEncoding; if (herhaal) t.wrapS = t.wrapT = THREE.RepeatWrapping; t.userData = t.userData || {}; t.userData.doolhofHouden = true; c[k] = t; } return c[k]; }; })();
   // (eigen toevoeging: t.userData = t.userData || {} — een Texture heeft in three r128 geen userData; dit bestand laadt als eerste, dus deze lader wint)
   const tex = (naam, herhaal) => doolhof.tex(naam, herhaal);
-  const ANISO = Math.min(4, (renderer.capabilities && renderer.capabilities.getMaxAnisotropy) ? renderer.capabilities.getMaxAnisotropy() : 1);
-  const scherp = (t, zwaar) => { if (t && !zwaar && t.anisotropy < ANISO) t.anisotropy = ANISO; return t; };  // muren zie je schuin (geldt bij de eerste upload)
 
   // --- kleine hulpjes ---
   const TAU = Math.PI * 2, KLOK = 200 * Math.PI;  // shadertijd loopt rond na 200π s: sin(k t) met k in honderdsten springt dan niet
@@ -93,141 +94,172 @@
       tel: opbSt ? (opb < 0.5 ? 2 : 1) : dropSt ? 1 : 2,                                // tellen om door de gang te rennen
       kstap: dropSt ? Math.floor(b.pos) : opbSt ? Math.floor(b.pos / (opb < 0.5 ? 2 : 1)) : brk ? 0 : Math.floor(b.pos / 4),  // paletstap: per maat, drop per tel
       maat: Math.floor(b.pos / 4),
+      richt: st === 'groove' && Math.floor(b.pos / 32) % 2 ? 1 : -1,  // looplicht: naar de camera toe (-1), in de groove om de 8 maten mee
       dropTel: dropSt && sinds >= 0 && sinds < 64 ? sinds : 0,  // extra fase tijdens de drop: begint op 0, na 16 tellen een veelvoud van de cyclus
       t: now % KLOK, b: b.pos % 64,
     });
   }
 
-  // --- shaders (onverlicht, op de gangcoördinaten van de kern) ---
+  // --- ledoppervlakken (ronde 3): muren, plafond en vloer zijn bewegende ledschermen op de gangcoördinaten van de kern ---
+  // (attribuut aP = (s, d, y): s langs de gang, ook door de bochten, d zijwaarts, y hoogte). Eén programma voor alle muren en plafonds
+  // (LEDW), één voor alle vloeren (LEDV): elke stijl alleen andere uniforms (bron, palet, inhoud), dus geen nieuwe shader per gang.
+  // Inhoud per ledpixel (uPitch m) uit (s, y); de ledregie (JS, alleen uit tel/klok/stand + zaad: beide helften gelijk) kiest per 4 maten
+  // wat erop staat: de muurschildering met effecten (scroll, zoom op de kick, kaleidoscoop, kleur naar het palet, pixelate, RGB-split,
+  // negatief/glitch op de drop), balken die door de gang rennen, spectrum, golven, lopende tekst, plasma, blokken, chevrons.
+  // Ledlook: rond puntje met zwarte voeg + scanlijn; van ver egaal (geen moiré); tv (MINI): zonder puntjes, één textuurlookup.
   const DRAAI = 'vec3 draai(vec3 c, float a) { const vec3 k = vec3(0.57735); float co = cos(a); return c * co + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - co); }\n';
-  const MUUR_V = `attribute vec3 aP;
-varying vec2 vUv; varying vec3 vP; varying vec3 vN; varying vec3 vV;
-void main() {
-  vUv = uv; vP = aP;
-  vec4 w = modelMatrix * vec4(position, 1.0);
-  vN = mat3(modelMatrix) * normal; vV = cameraPosition - w.xyz;
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-  // lichtmasker (muur, vloer, plafond): zonder show bijna zwart (uBasis); licht komt van het looplicht (twee kleuren om en om, per tel uPer
-  // pakketten die in uScanTel tellen door de gang rennen), de ringen die flitsen (uRingS = plek, uRingK = kleur x sterkte), gobo's die over de
-  // muren zwiepen (alleen muren) en de stroboscoop (uFlits = wit licht: de schildering is dan even helemaal te zien)
-  const LICHT = `uniform vec3 uPakA, uPakB, uGoboKleur, uRingK[4];
-uniform vec4 uRingS;
-uniform float uBasis, uPak, uPer, uGoboN, uGoboI, uGoboV, uFlits, uWit;
-float pakX(float s) { return (uB - uScanTel * s / uLen) * uPer; }
-float pakH(float s) { return exp(-fract(pakX(s)) * 9.0); }
-vec3 pakLicht(float s) { float x = pakX(s); return (mod(floor(x), 2.0) < 0.5 ? uPakA : uPakB) * exp(-fract(x) * 9.0); }
-vec3 showLicht(float s, float d, float y, float muur) {
-  vec3 L = vec3(uBasis + uFlits) + pakLicht(s) * uPak;
-  vec4 r = exp(-abs(vec4(s) - uRingS) * 4.0);
-  L += uRingK[0] * r.x + uRingK[1] * r.y + uRingK[2] * r.z + uRingK[3] * r.w;
-  for (int i = 0; i < 4; i++) {
-    float fi = float(i);
-    if (fi >= uGoboN * muur) break;
-    vec2 q = vec2(s - uLen * fract(uB * uGoboV / 16.0 + fi * 0.25), y - 1.2 - 0.75 * sin(6.2832 * (uB * uGoboV / 8.0 + fi * 0.37)));
-    float g = smoothstep(0.36, 0.28, length(q)) * (0.55 + 0.45 * sin(atan(q.y, q.x) * 5.0 + uT * 2.5 + fi * 1.7));  // draaiende gobo
-    L += uGoboKleur * uGoboI * g * step(0.0, d * (mod(fi, 2.0) < 0.5 ? 1.0 : -1.0));
-  }
-  return L;
+  const LED_V = `attribute vec3 aP;
+varying vec3 vP;
+void main() { vP = aP; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+  const LED_GEDEELD = `uniform sampler2D map;
+uniform vec3 uA, uB, uC;
+uniform float uT, uTel, uPakT, uPuls, uBas, uMid, uHoog, uE, uNiveau, uFlits, uTik, uLen, uh, uPer, uTelN, uRicht, uScroll, uTexW, uMapPx, uOrig, uGroot, uGain;
+varying vec3 vP;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float pakX(float s) { return (uPakT - uRicht * uTelN * s / uLen) * uPer; }  // looplicht: elke 1/uPer tel een pakket, in uTelN tellen door de gang
+vec3 duo(vec3 t) {  // schildering naar het palet van het moment (donker -> A -> B), uOrig = hoeveel van de eigen kleuren
+  t = min(t * uGain, vec3(1.0));  // helderheid per schildering gelijk getrokken (led.js bronGain)
+  float l = dot(t, vec3(0.3, 0.59, 0.11));
+  vec3 c = mix(uC * 0.05, uA * 0.8, smoothstep(0.22, 0.55, l));
+  c = mix(c, uB * 1.1, smoothstep(0.58, 0.92, l));
+  return mix(c, smoothstep(0.04, 0.85, t) * 1.1, uOrig);  // eigen kleuren, iets meer contrast: het donker blijft zwart
 }
 `;
-  // muur: schildering x tint x lichtmasker, felle/verzadigde delen gloeien (blacklight, glyphen, slijm) onder uv-licht en waar het looplicht
-  // langskomt, gloed langs vloer en plafond, GOLF = regenboogbanden die door de gang trekken, IRIS = kleur draait met de kijkhoek (chroom),
-  // WARP = de schildering ademt
-  const MUUR_F = `uniform sampler2D map;
-uniform vec3 uTint, uGloeiW, uGloeiKleur, uRandKleur;
-uniform float uT, uB, uPuls, uBas, uDonker, uLen, uH, uGloei, uDrempel, uSat, uScanTel, uRand, uGolf, uGolfT, uIris, uWarp;
-varying vec2 vUv; varying vec3 vP; varying vec3 vN; varying vec3 vV;
-${DRAAI}
-${LICHT}
-void main() {
-  vec2 uv = vUv;
-#ifdef WARP
-  uv += uWarp * vec2(sin(vP.z * 2.7 + uT * 0.9 + vP.x * 1.3), 0.6 * sin(vP.x * 1.9 - uT * 0.7 + vP.z * 1.1)) * (0.7 + 0.6 * uBas);
+  const LEDW_F = `${LED_GEDEELD}
+uniform sampler2D uTekst;
+uniform vec3 uRingK[4];
+uniform vec4 uRingS;
+uniform float uLoop, uModus, uVlak, uSx, uPitch, uPix, uH, uKal, uRgb, uNeg, uGlitch, uZoom, uWarp, uBeeldI, uPakI, uRij, uWoordW, uSpec, uVar, uTikVorm, uTikFase;
+vec3 beeld(vec2 q) {
+  vec2 t;
+  if (uKal > 0.5) {  // kaleidoscoop: gespiegelde blokken van een wandhoogte
+    vec2 m = abs(fract(vec2(q.x + uScroll, q.y) / uH) * 2.0 - 1.0);
+    t = vec2(0.3 + 0.08 * sin(uT * 0.13) + m.x * 0.5 * uH / (uTexW * uGroot), 0.5 + (m.y - 0.5) / uGroot);
+  } else t = vec2((q.x + uScroll) / (uTexW * uGroot), 0.5 + (q.y / uH - 0.5) / uGroot);  // uGroot: ingezoomd (grove schilderingen)
+  t.y = 0.5 + (t.y - 0.5) / (1.0 + uZoom);                                   // zoom op de kick
+  t += uWarp * vec2(sin(q.y * 3.1 + uT * 1.1), sin(q.x * 2.3 - uT * 0.9));    // ademen
+  float rij = floor(q.y / 0.2), tk = floor(uT * 15.0);                         // glitch: rijen leds schuiven opzij
+  t.x += uGlitch * step(0.62, hash(vec2(rij, tk))) * (hash(vec2(rij * 1.7, tk + 3.0)) - 0.5) * 0.35;
+  t = vec2(fract(t.x), clamp(t.y, 0.003, 0.997));
+  float bias = log2(max(1.0, uMapPx * uPitch * uPix / (uTexW * uGroot)));                 // één led = het gemiddelde van zijn stukje schildering
+#ifdef MINI
+  vec3 im = texture2D(map, t, bias).rgb;
+#else
+  vec3 im = vec3(texture2D(map, vec2(fract(t.x + uRgb), t.y), bias).r, texture2D(map, t, bias).g, texture2D(map, vec2(fract(t.x - uRgb), t.y), bias).b);
+  vec3 om = texture2D(map, t, bias + 3.0).rgb;                                  // omgeving: lokaal contrast, vlakke stukken vallen weg
+  im = clamp((im - om) * 1.4 + om * 0.9, 0.0, 1.0);
 #endif
-  vec3 t = texture2D(map, uv).rgb;
-  vec3 c = t * uTint * showLicht(vP.x, vP.y, vP.z, 1.0);
-  float mx = max(max(t.r, t.g), t.b), mn = min(min(t.r, t.g), t.b);
-  float m = smoothstep(uDrempel, uDrempel + 0.25, dot(t, uGloeiW) + uSat * (mx - mn));
-  c += t * m * (uGloeiKleur * uGloei * uDonker * (0.1 + 0.9 * pakH(vP.x)) + pakLicht(vP.x) * uPak * 1.2);  // uv-verf gloeit vooral waar het pakket is
-#ifdef GOLF
-  c = draai(c, uGolf * (vP.x * 0.9 + 0.7 * sin(vP.z * 2.1 + uT * 0.5)) - uGolfT);  // uGolf = dichtheid van de banden, uGolfT = vaste draaisnelheid
-#endif
-#ifdef IRIS
-  vec3 nn = normalize(vN), vv = normalize(vV);
-  float ndv = abs(dot(nn, vv));
-  c = mix(c, draai(c * 1.3, ndv * 5.0 + uT * 0.35 + vP.z * 0.9 + vP.x * 0.2), uIris);
-  c += uIris * 0.3 * pow(1.0 - ndv, 3.0) * draai(vec3(0.9, 0.3, 0.7), uT * 0.5 + vP.x * 0.6) * (uBasis * 3.0 + uPak * pakH(vP.x) + uFlits);
-#endif
-  c += uRandKleur * (exp(-vP.z * 4.0) + exp((vP.z - uH) * 4.0)) * uRand * uDonker;
-  gl_FragColor = vec4(c + uFlits * uWit, 1.0);
-}`;
-  const VLAK_V = `attribute vec3 aP;
-varying vec2 vUv; varying vec3 vP; varying vec3 vV;
-void main() {
-  vUv = uv; vP = aP;
-  vec4 w = modelMatrix * vec4(position, 1.0);
-  vV = cameraPosition - w.xyz;
-  gl_Position = projectionMatrix * viewMatrix * w;
-}`;
-  // vloer/plafond: KAART (uv in meters) of PADUV (schildering langs de gang, ook door de bochten), RASTER (synthwave), PLAS (natte plassen),
-  // STROOM (gloeiende goot over de middellijn), STREPEN (gevarenstrepen langs de muren), RIMPEL (kleurringen), VLEK (slijmplekken), GLANS
-  const VLAK_F = `uniform sampler2D map;
-uniform vec3 uTint, uKleurA, uKleurB;
-uniform vec2 uPad;
-uniform float uT, uB, uPuls, uBas, uMid, uDonker, uLen, uH2, uScanTel, uRaster, uGap, uPlas, uStroom, uStrepen, uRimpel, uVlek, uGlans;
-varying vec2 vUv; varying vec3 vP; varying vec3 vV;
-${DRAAI}
-${LICHT}
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float ruis(vec2 p) {
-  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+  vec3 c = duo(im);
+  return mix(c, (vec3(1.0) - c) * (uB + 0.25), uNeg);                          // negatief (drop)
+}
+vec3 balken(float s) {  // lichtbalken die door de gang rennen (muren + plafond samen: een lichttunnel)
+  float x = pakX(s), f = fract(x);
+  return (mod(floor(x), 2.0) < 0.5 ? uA : uB) * (exp(-f * 6.0) * 1.5 + 0.45 * smoothstep(0.88, 1.0, f));
+}
+vec3 spectrum(vec2 q) {  // ledstaven: bas/mid/hoog, per halve tel verspringend, kapje erop
+  float ci = floor(q.x / 0.2), g = fract(q.x / 0.2), f = fract(ci * 0.618);
+  float lv = f < 0.34 ? uBas : f < 0.67 ? uMid : uHoog;
+  lv = lv * (0.5 + 0.7 * hash(vec2(ci, floor(uTel * 2.0)))) * (0.55 + 0.6 * uE) + 0.2 * uPuls;
+  float y = uSpec > 0.5 ? abs(q.y - uH * 0.5) * 2.0 : q.y, top = clamp(lv, 0.06, 1.0) * uH;
+  float aan = step(y, top) * step(g, 0.74), kap = step(top - 0.11, y);
+  return mix(mix(uA, uB, y / uH), uC * 1.4 + 0.15, kap) * aan * 0.8;
+}
+vec3 golf(vec2 q) {  // drie oscilloscooplijnen op bas, mid en hoog
+  vec3 c = vec3(0.0);
+  float m = uH * 0.5;
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i), band = i == 0 ? uBas : i == 1 ? uMid : uHoog;
+    float a = (0.12 + 0.75 * band) * m * 0.9;
+    float y = m + a * sin(q.x * (1.3 + 0.8 * fi) - uT * (2.4 + fi * 0.9) + fi * 2.1) * (0.65 + 0.35 * sin(q.x * 0.37 + uT * 0.6 + fi));
+    c += (i == 0 ? uA : i == 1 ? uB : uC) * exp(-abs(q.y - y) / (0.035 + 0.04 * band));
+  }
+  return c * 1.3;
+}
+vec3 tekst(vec2 q, float dir) {  // lopende tekst (atlas: 5 woorden onder elkaar), leesbaar op beide muren, rent naar de camera
+  float Ht = uH * 0.54, y0 = uH * 0.5 - Ht * 0.5, rowM = Ht * 16.0, wM = uWoordW * rowM, per = wM + 1.6;
+  float lx = mod((q.x + uLoop * 1.6) * dir, per), v = (q.y - y0) / Ht, a = 0.0;
+  if (lx < wM && v > 0.0 && v < 1.0) a = texture2D(uTekst, vec2(0.5 - 0.5 * uWoordW + lx / rowM, 1.0 - (uRij + 1.0 - v) / 5.0), log2(max(1.0, 2048.0 * uPitch * uPix / rowM))).r;
+  return mix(uA, uB, 0.5 + 0.5 * sin(q.x * 0.9 - uT * 2.2)) * a * 1.1;
+}
+vec3 plasma(vec2 q) {
+  float t = uT * 0.8;
+  float v = sin(q.x * 1.1 + t) + sin(q.y * 2.3 - t * 1.3) + sin(q.x * 0.6 + q.y * 1.3 + t * 0.7) + sin(length(q - vec2(uLen * 0.5 + 3.0 * sin(t * 0.21), uH * 0.5)) * 2.4 - t * 1.9);
+  float r = pow(0.5 + 0.5 * sin(v * 2.4 + uBas * 2.5), 7.0);
+  return mix(uA, uB, 0.5 + 0.5 * sin(v * 1.3 + t * 0.5)) * r + uC * pow(r, 6.0) * 0.6;
+}
+vec3 blokken(vec2 q) {  // blokken van 0,4 m: dambord op de tel, of (drop/opbouw) willekeurige blokken op de strobe
+  vec2 id = floor(q / 0.4);
+  float tk = floor(uTel * uPer), h = hash(id + vec2(tk * 3.1, tk * 7.7));
+  float aan = uVar > 0.5 ? step(0.68, h) : mod(id.x + id.y + tk, 2.0);
+  return (h < 0.33 ? uA : h < 0.66 ? uB : uC) * aan * (0.25 + 0.75 * uPuls);
+}
+vec3 chevron(vec2 q) {  // pijlen die vooruit wijzen en de gang in schuiven
+  float v = (q.x + abs(q.y - uH * 0.5) * 0.9 - uLoop * 2.0) / 0.8, f = fract(v);
+  return (mod(floor(v), 2.0) < 0.5 ? uA : uB) * smoothstep(0.0, 0.06, f) * (1.0 - smoothstep(0.28, 0.36, f)) * (0.6 + 0.8 * uPuls);
 }
 void main() {
+  float s = vP.x, d = vP.y, kop = 1.0 - step(uh - 0.03, abs(d));  // kop = de dichte kopwand (s vast, d loopt)
+  vec2 p = uVlak > 0.5 ? vec2(s, d + uh) : vec2(s + kop * d * uSx, vP.z);
+  float dir = uVlak > 0.5 || kop > 0.5 ? 1.0 : sign(d) * uSx;     // d+ = linkermuur: lezen langs +s
+  float P = uPitch * uPix;
+  vec2 q = (floor(p / P) + 0.5) * P;                                // inhoud per (gepixelde) led
+  vec3 c;
+  if (uModus < 0.5) c = beeld(q) * (uBeeldI + uPakI * exp(-fract(pakX(q.x)) * 5.0)) * 0.6;
+  else if (uModus < 1.5) c = balken(q.x) + beeld(q) * 0.05;
+  else if (uModus < 2.5) c = spectrum(q) * 0.35;
+  else if (uModus < 3.5) c = golf(q) * 0.6 + beeld(q) * 0.04;
+  else if (uModus < 4.5) c = tekst(q, dir) + beeld(q) * 0.08;
+  else if (uModus < 5.5) c = plasma(q) * 0.45;
+  else if (uModus < 6.5) c = blokken(q) * 1.3;
+  else c = chevron(q) * 0.6;
+  c *= uNiveau;
+  vec4 r = exp(-abs(vec4(s) - uRingS) * 4.0);                       // licht van de ringen/poorten
+  c += uRingK[0] * r.x + uRingK[1] * r.y + uRingK[2] * r.z + uRingK[3] * r.w;
+  // de schermen flitsen op de tel: hele vlak, een golf die door de gang naar je toe rent, één muur, of een band van boven naar beneden
+  float tv = 1.0;
+  if (uTikVorm > 2.5) tv = exp(-abs(p.y - uH * (1.0 - uTikFase * 1.4)) * 3.0);
+  else if (uTikVorm > 1.5) tv = uVlak > 0.5 ? 0.3 : step(0.0, d * (mod(floor(uTel), 2.0) - 0.5));
+  else if (uTikVorm > 0.5) tv = exp(-abs(s - uLen * (1.0 - uTikFase * 1.6)) * 1.2) * 1.6;
+  c += mix(uA, vec3(1.0), 0.4) * uTik * tv + vec3(uFlits);          // + stroboscoop
+#ifndef MINI
+  vec2 f = fract(p / uPitch) - 0.5;
+  float w = max(fwidth(p.x), fwidth(p.y)) / uPitch;
+  c *= mix((1.0 - smoothstep(0.3, 0.48, length(f))) * 1.3, 0.62, smoothstep(0.3, 0.75, w));
+  c *= 0.9 + 0.22 * pow(0.5 + 0.5 * sin((p.y / 2.6 - uT * 0.45) * 6.2832), 24.0);  // scanlijn
+#else
+  c *= 0.62;  // zonder puntjes (en zonder bloom) is het vlak anders veel feller dan in hoog
+#endif
+  gl_FragColor = vec4(c, 1.0);
+}`;
+  // vloer: ledtegels (uTegel m, voeg ertussen) met patronen per tel zoals de vloer van zaal 1, of fijne leds met de schildering (video)
+  const LEDV_F = `${LED_GEDEELD}
+uniform float uPat, uTegel;
+void main() {
   float s = vP.x, d = vP.y;
-  vec3 c = uTint;  // verf (donker; alleen zichtbaar waar licht valt)
-#ifdef KAART
-  c *= texture2D(map, vUv).rgb;
+  vec2 g = vec2(s, d + uh) / uTegel, id = floor(g), f = fract(g);
+  float jc = floor(2.0 * uh / uTegel + 0.5) * 0.5 - 0.5, ic = floor(uLen / uTegel * 0.5), tel = floor(uTel), k = 0.0;
+  vec3 kl = uA;
+  if (uPat < 0.5) { k = mod(id.x + id.y + tel, 2.0); kl = mod(floor(id.x * 0.5) + tel, 2.0) < 1.0 ? uA : uB; }                   // dambord
+  else if (uPat < 1.5) { float x = (uPakT - uRicht * uTelN * (id.x + 0.5) * uTegel / uLen) * uPer; k = exp(-fract(x) * 2.5) * 1.15; kl = mod(floor(x), 2.0) < 0.5 ? uA : uB; }  // looplicht
+  else if (uPat < 2.5) { float r = abs(id.x - ic) + abs(id.y - jc); k = step(mod(r - tel, 3.0), 0.99); kl = mod(floor(r / 3.0), 2.0) < 1.0 ? uA : uB; }  // ringen uit het midden
+  else if (uPat < 3.5) { float v = id.x - abs(id.y - jc) - tel; k = step(mod(v, 4.0), 0.99); kl = mod(floor(v / 4.0), 2.0) < 1.0 ? uA : uB; }       // chevron vooruit
+  else if (uPat < 4.5) { float yw = jc + (jc + 0.5) * sin(id.x * 0.5 - uT * 2.5) * (0.35 + 0.65 * uBas); k = step(abs(id.y - yw), 0.6); kl = mix(uA, uB, 0.5 + 0.5 * sin(id.x * 0.4 + uT)); }  // golf
+  else if (uPat < 5.5) { float h = hash(id + vec2(floor(uTel * uPer) * 3.7, 1.3)); k = step(0.64, h); kl = h > 0.88 ? uB : h > 0.76 ? uC : uA; }  // fonkelen
+  else if (uPat < 6.5) { float a = abs(id.y - jc), band = a < 0.6 ? uBas : a < 1.6 ? uMid : uHoog; k = step(abs(id.x - ic), clamp(band * (0.6 + 0.6 * uE) + 0.2 * uPuls, 0.0, 1.0) * (ic + 1.0)); kl = mix(uA, uB, abs(id.x - ic) / (ic + 1.0)); }  // spectrum
+  else if (uPat < 7.5) { k = max(step(mod(id.x + tel, 4.0), 0.99), step(jc, abs(id.y - jc)) * 0.45); kl = mod(floor((id.x + tel) / 4.0), 2.0) < 1.0 ? uA : uB; }  // raster (synthwave)
+  else {  // video: fijne leds (6,25 cm) met de schildering die naar je toe stroomt
+    vec2 q = (floor(vec2(s, d + uh) / 0.0625) + 0.5) * 0.0625;
+    kl = duo(texture2D(map, vec2(fract((q.x + uScroll) / uTexW), clamp(q.y / (2.0 * uh), 0.0, 1.0)), log2(max(1.0, uMapPx * 0.0625 / uTexW))).rgb);
+    k = 0.55 + 0.6 * exp(-fract(pakX(s)) * 4.0);
+#ifndef MINI
+    vec2 fl = fract(vec2(s, d + uh) / 0.0625) - 0.5;
+    k *= mix((1.0 - smoothstep(0.3, 0.48, length(fl))) * 1.3, 0.62, smoothstep(0.3, 0.75, max(fwidth(s), fwidth(d)) / 0.0625));
 #endif
-#ifdef PADUV
-  c *= texture2D(map, vec2(s / uPad.x, (d + uH2) / uPad.y)).rgb;
-#endif
-#ifdef STREPEN
-  float zone = smoothstep(uH2 - 0.24, uH2 - 0.22, abs(d));
-  c = mix(c, uKleurB * step(0.5, fract((s + abs(d)) * 2.2)) * 0.6, zone * uStrepen);
-#endif
-  c *= showLicht(s, d, vP.z, 0.0);
-  // wat zelf licht geeft (x uDonker): weerschijn van het looplicht langs de randen, rasters, plassen, goot, ringen, slijm, glans
-  float pk = pakH(s);
-  vec3 e = pakLicht(s) * uPak * (0.04 + 0.6 * smoothstep(uH2 - 0.45, uH2, abs(d)));
-#ifdef RASTER
-  float fs = fract(s / uGap + uB * 0.5), fd = fract(d / uGap + 0.5);
-  float lijn = exp(-min(fs, 1.0 - fs) * 26.0) + exp(-min(fd, 1.0 - fd) * 26.0);
-  e += mix(uKleurA, uKleurB, 0.5 + 0.5 * sin(s * 0.6 - uT)) * lijn * uRaster * (0.5 + 0.8 * uPuls);
-#endif
-#ifdef PLAS
-  vec2 q = vec2(s, d);
-  float pm = smoothstep(0.5, 0.58, ruis(q * 1.3) * 0.7 + ruis(q * 3.1 + 7.0) * 0.3);
-  float rimp = 0.5 + 0.5 * sin(length(fract(q * 0.7) - 0.5) * 38.0 - uT * 7.0);
-  vec3 refl = mix(uKleurA, uKleurB, 0.5 + 0.5 * sin(s * 1.7 + d * 2.3 + uT * 0.3));
-  e += refl * (0.12 + 0.35 * uMid + 0.6 * pk) * (0.75 + 0.5 * rimp * uPuls) * pm * uPlas;
-#endif
-#ifdef STROOM
-  e += uKleurA * exp(-abs(d) * 12.0) * uStroom * (0.1 + 1.8 * pk + 0.4 * uBas);
-#endif
-#ifdef RIMPEL
-  float rr = min(min(length(vec2(s - uLen * 0.17, d)), length(vec2(s - uLen * 0.5, d))), length(vec2(s - uLen * 0.83, d)));
-  e += draai(uKleurA, rr * 0.8 - uT * 0.7) * pow(0.5 + 0.5 * sin(rr * 7.0 - uB * 3.14159), 6.0) * uRimpel;
-#endif
-#ifdef VLEK
-  e += uKleurA * smoothstep(0.58 - 0.14 * uBas, 0.78, ruis(vec2(s, d) * 1.6 + vec2(uT * 0.05, 0.0))) * uVlek;
-#endif
-#ifdef GLANS
-  float ndv = abs(normalize(vV).y);
-  e += draai(uKleurB, ndv * 6.0 + uT * 0.4 + s * 0.3) * pow(1.0 - ndv, 3.0) * uGlans * (0.25 + 0.75 * pk);
-#endif
-  gl_FragColor = vec4(c + e * uDonker + uFlits * uWit, 1.0);
+  }
+  float I = k > 0.01 ? k * (0.22 + 0.65 * uPuls * (0.4 + 0.6 * uE)) : 0.02;
+  vec2 e = min(f, 1.0 - f);
+  vec3 c = kl * I * (0.8 + 0.3 * (1.0 - length(f - 0.5) * 1.6)) * uNiveau + mix(uA, vec3(1.0), 0.4) * uTik * 0.5 + vec3(uFlits);
+  gl_FragColor = vec4(c * smoothstep(0.012, 0.045, min(e.x, e.y)), 1.0);
 }`;
   // deeltjes: alle beweging in de shader (zuivere functie van de tijd), langs de gang via dezelfde (s, d) -> (x, z) als de kern
   const DEELTJE_V = `attribute vec4 aZ;
@@ -339,61 +371,116 @@ void main() {
   gl_FragColor = vec4(vC * a, 1.0);
 }`;
   const U = v => ({ value: v });
-  const v3 = a => (Array.isArray(a) ? new THREE.Vector3(a[0], a[1], a[2]) : new THREE.Vector3(0.3, 0.59, 0.11));
-  // uniforms van het lichtmasker (LICHT); o.scan = hoeveel looplicht dit vlak krijgt
-  const lichtU = () => ({ uPakA: U(new THREE.Vector3()), uPakB: U(new THREE.Vector3()), uGoboKleur: U(new THREE.Vector3()),
-    uRingK: U([0, 1, 2, 3].map(() => new THREE.Vector3())), uRingS: U(new THREE.Vector4(-99, -99, -99, -99)),
-    uBasis: U(0.02), uPak: U(0), uPer: U(1), uGoboN: U(0), uGoboI: U(0), uGoboV: U(1), uFlits: U(0), uWit: U(0.05) });
-  function muurMat(map, o) {
-    o = o || {}; scherp(map, o.zwaar);
-    const m = new THREE.ShaderMaterial({ vertexShader: MUUR_V, fragmentShader: MUUR_F, defines: {}, uniforms: Object.assign(lichtU(), {
-      map: U(map || WIT), uTint: U(kl(o.tint)), uGloeiW: U(v3(o.gloeiW)), uGloeiKleur: U(kl(o.gloeiKleur == null ? 0x000000 : o.gloeiKleur)),
-      uRandKleur: U(kl(o.randKleur == null ? 0x000000 : o.randKleur)),
-      uT: U(0), uB: U(0), uPuls: U(0), uBas: U(0), uDonker: U(1), uLen: U(10.4), uH: U(2.6),
-      uGloei: U(0), uDrempel: U(o.drempel == null ? 0.6 : o.drempel), uSat: U(o.sat || 0), uScanTel: U(2),
-      uRand: U(o.rand || 0), uGolf: U(o.golf || 0), uGolfT: U(0), uIris: U(o.iris || 0), uWarp: U(o.warp || 0) }) });
-    m.userData.scan = o.scan == null ? 1 : o.scan; m.userData.muur = true;
-    if (o.golf) m.defines.GOLF = 1;
-    if (o.iris) m.defines.IRIS = 1;
-    if (o.warp) m.defines.WARP = 1;
+  // inhoud van muren/plafond (M) en patronen van de vloer (V); de nummers staan zo in de shaders
+  const M = { BEELD: 0, BALKEN: 1, SPECTRUM: 2, GOLF: 3, TEKST: 4, PLASMA: 5, BLOKKEN: 6, CHEVRON: 7 };
+  const V = { DAMBORD: 0, LOOP: 1, RINGEN: 2, CHEVRON: 3, GOLF: 4, FONKEL: 5, SPECTRUM: 6, RASTER: 7, BEELD: 8 };
+  // tekstatlas: vijf woorden onder elkaar (rij 128 px), woordB = breedte van het woord als deel van de rij
+  const WOORDEN = ['DEEP STEPPER', 'SAMSONIGHT', 'BLOODLINE', 'DEEPER', '∞'], woordB = [];
+  const tekstTex = houd(canvasTexture(2048, 640, (c, w) => {
+    c.fillStyle = '#000'; c.fillRect(0, 0, w, 640); c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    WOORDEN.forEach((t, i) => {
+      const px = t.length <= 2 ? 150 : 112;
+      c.font = `900 ${px}px Impact, "Arial Black", sans-serif`;
+      c.fillText(t, w / 2, i * 128 + 66);
+      woordB.push(Math.min(1, (c.measureText(t).width + 30) / w));
+    });
+  }));
+  // graffiti van zaal 1 (tex/graffiti-1.jpg, geladen in index.html) als bron voor de acid-gang; zolang hij laadt de oude betonwand
+  function graffiti() {
+    const m = typeof room !== 'undefined' && room && Array.isArray(room.material) ? room.material[0] : null, t = m && m.map;
+    if (!t || !t.image || !(t.image.width > 1500)) return wallTex;
+    t.userData = t.userData || {}; t.userData.doolhofHouden = true;  // hoort bij zaal 1: nooit weggooien
+    return t;
+  }
+  // gedeelde uniforms van muur, plafond en vloer
+  const ledU = (cfg, maat) => ({
+    map: U(cfg.bron || WIT), uA: U(new THREE.Color(1, 0.1, 0.4)), uB: U(new THREE.Color(0.1, 0.7, 1)), uC: U(new THREE.Color(0.5, 0.1, 1)),
+    uT: U(0), uTel: U(0), uPakT: U(0), uPuls: U(0), uBas: U(0), uMid: U(0), uHoog: U(0), uE: U(0), uNiveau: U(1), uFlits: U(0), uTik: U(0),
+    uLen: U(maat.LEN), uh: U(maat.h), uPer: U(1), uTelN: U(2), uRicht: U(1), uScroll: U(0), uTexW: U(cfg.texW), uMapPx: U(cfg.px), uOrig: U(0.5), uGroot: U(cfg.groot),
+    uGain: U(doolhof.led && doolhof.led.bronGain ? doolhof.led.bronGain(cfg.bron) : 1) });
+  function ledMuur(cfg, maat, zwaar, plafond) {
+    const m = new THREE.ShaderMaterial({ vertexShader: LED_V, fragmentShader: LEDW_F, defines: zwaar >= 2 ? { MINI: 1 } : {}, uniforms: Object.assign(ledU(cfg, maat), {
+      uTekst: U(tekstTex), uRingK: U([0, 1, 2, 3].map(() => new THREE.Vector3())), uRingS: U(new THREE.Vector4(-99, -99, -99, -99)),
+      uModus: U(0), uVlak: U(plafond ? 1 : 0), uSx: U(maat.sx < 0 ? -1 : 1), uPitch: U(cfg.pitch), uPix: U(1), uH: U(plafond ? maat.B : maat.H),
+      uKal: U(0), uRgb: U(0), uNeg: U(0), uGlitch: U(0), uZoom: U(0), uWarp: U(0), uBeeldI: U(0.4), uPakI: U(0.8),
+      uRij: U(0), uWoordW: U(0.3), uSpec: U(plafond ? 1 : cfg.spec), uVar: U(0), uTikVorm: U(0), uTikFase: U(0), uLoop: U(0) }) });
+    m.extensions.derivatives = true;
+    m.userData.led = plafond ? 'plafond' : 'muur';
     return m;
   }
-  function vlakMat(map, o) {
-    o = o || {};
-    const m = new THREE.ShaderMaterial({ vertexShader: VLAK_V, fragmentShader: VLAK_F, defines: {}, uniforms: Object.assign(lichtU(), {
-      map: U(map || WIT), uTint: U(kl(o.tint)),
-      uKleurA: U(kl(o.kleurA == null ? 0xffffff : o.kleurA)), uKleurB: U(kl(o.kleurB == null ? 0xffffff : o.kleurB)), uPad: U(new THREE.Vector2(...(o.pad || [10.4, 2]))),
-      uT: U(0), uB: U(0), uPuls: U(0), uBas: U(0), uMid: U(0), uDonker: U(1), uLen: U(10.4), uH2: U(1),
-      uScanTel: U(2), uRaster: U(o.raster || 0), uGap: U(o.gap || 0.5), uPlas: U(o.plas || 0),
-      uStroom: U(o.stroom || 0), uStrepen: U(o.strepen || 0), uRimpel: U(o.rimpel || 0), uVlek: U(o.vlek || 0), uGlans: U(o.glans || 0) }) });
-    m.userData.scan = o.scan == null ? 1 : o.scan;
-    const D = m.defines;
-    if (map && o.pad) D.PADUV = 1; else if (map) D.KAART = 1;
-    for (const [k, n] of [['raster', 'RASTER'], ['plas', 'PLAS'], ['stroom', 'STROOM'], ['strepen', 'STREPEN'], ['rimpel', 'RIMPEL'], ['vlek', 'VLEK'], ['glans', 'GLANS']]) if (o[k]) D[n] = 1;
+  function ledVloer(cfg, maat, zwaar) {
+    const m = new THREE.ShaderMaterial({ vertexShader: LED_V, fragmentShader: LEDV_F, defines: zwaar >= 2 ? { MINI: 1 } : {},
+      uniforms: Object.assign(ledU(cfg, maat), { uPat: U(0), uTegel: U(cfg.tegel) }) });
+    m.extensions.derivatives = true;
+    m.userData.led = 'vloer';
     return m;
+  }
+  // de ledset van een stijl: c = { bron, modi (muur), plafond, vloer, rust (inhoud in de break), pitch, tegel, orig, kal, rgb, glitch, warp,
+  // spec, woorden }. Het zaad komt uit rnd (vóór de deel-fabriekjes: zelfde reeks in beide helften); beide helften delen de materialen.
+  function ledSet(maat, rnd, zwaar, c) {
+    const z = Math.floor(rnd() * 1e4);
+    const LC = maat.deel('led', () => {
+      const t = c.bron, im = t && t.image, cfg = Object.assign({ pitch: 0.05, tegel: 0.5, orig: 0.4, kal: 0, rgb: 1, glitch: 0.4, warp: 0, spec: 0, groot: 1.4,
+        rust: M.BEELD, modi: [M.BEELD, M.BALKEN], plafond: [M.BALKEN, M.PLASMA], vloer: [V.DAMBORD, V.LOOP], woorden: [0, 1, 2, 3] }, c, { z, L: {} });
+      const asp = im && im.width > 1 ? im.width / im.height : (c.aspect || 2.357);
+      cfg.texW = maat.H * asp; cfg.px = im && im.width > 1 ? im.width : (c.px || 2048);
+      return cfg;
+    });
+    return { LC, muur: maat.deel('muur', () => ledMuur(LC, maat, zwaar, false)), plafond: maat.deel('plafond', () => ledMuur(LC, maat, zwaar, true)),
+      vloer: maat.deel('vloer', () => ledVloer(LC, maat, zwaar)) };
+  }
+  // ledregie van één beeld: welke inhoud, hoe snel, welke effecten. Zuiver uit tel (b.pos), klok, stand en zaad: beide helften gelijk.
+  // Groove: inhoud wisselt per 4 maten (vloer per 2), op elke tel een tik, elke maat een flits, om de 8 maten een grote; break: donker
+  // en traag (schildering met één langzame lichtband, of plasma); opbouw: balken versnellen, op het eind strobe-blokken; drop: inhoud
+  // per maat, kleur per tel, negatief/pixelate/glitch op de tel; tijdens het salvo witte strobe.
+  const lijstKies = (lijst, blok, pos, z) => lijst[(((Math.floor(pos / blok) + z) % lijst.length) + lijst.length) % lijst.length];
+  function ledRegie(cfg, b, k) {
+    const L = cfg.L, pos = b.pos, bi = Math.floor(pos), fase = pos - bi, tel4 = ((bi % 4) + 4) % 4, maatNr = Math.floor(pos / 4), z = cfg.z, st = k.st;
+    if (L.pos === pos && L.st === st && L.fl === k.flits) return L;  // tweede helft van hetzelfde beeld
+    L.pos = pos; L.st = st; L.fl = k.flits;
+    let m, pl, vl, rate;
+    if (st === 'break') { m = cfg.rust; pl = M.PLASMA; vl = V.GOLF; rate = 0.18; }  // vloer: trage golf (fonkelen per 4 tellen stond stil)
+    else if (st === 'opbouw') { m = k.opbouw < 0.75 ? M.BALKEN : M.BLOKKEN; pl = M.BALKEN; vl = k.opbouw < 0.85 ? V.LOOP : V.FONKEL; rate = 0.25 * k.per; }
+    else if (st === 'drop') { m = lijstKies(cfg.modi, 4, pos, z); pl = lijstKies(cfg.plafond, 4, pos, z + 1); vl = lijstKies(cfg.vloer, 4, pos, z); rate = 0.7; }
+    else { m = lijstKies(cfg.modi, 16, pos, z); pl = lijstKies(cfg.plafond, 16, pos, z + 1); vl = lijstKies(cfg.vloer, 8, pos, z); rate = 0.3; }
+    if (m === M.BALKEN || m === M.PLASMA || m === M.BLOKKEN || m === M.CHEVRON) pl = m;  // plafond loopt mee: een lichttunnel
+    L.muur = m; L.plafond = pl === M.TEKST ? M.BALKEN : pl; L.vloer = vl;
+    // beat-snit: in de drop elke tel, in de groove de tweede helft van elke 4 maten springt het beeld op de tel naar een ander stuk
+    const snit = st === 'drop' || (st === 'groove' && maatNr % 4 >= 2) ? hash(bi * 0.137 + z) * 40 : 0;
+    L.scroll = (pos * rate + snit) % 1000; L.loop = (pos * rate) % 1000;  // loop = zonder snit (tekst, chevrons)
+    // looplicht (balken, lichtband over de schildering, vloer): break één trage band per 4 tellen
+    if (st === 'break') { L.per = 0.25; L.telN = 8; } else { L.per = k.per; L.telN = k.tel; }
+    L.richt = k.richt; L.tel = pos % 192;
+    L.niveau = st === 'break' ? 0.8 : 0.2 + 0.8 * Math.min(1.25, k.dim);  // break: gedimd maar zichtbaar (de showregie gaat juist in de break het doolhof in)
+    L.beeldI = st === 'break' ? 0.3 : st === 'drop' ? 0.25 + 0.25 * b.pulse : st === 'opbouw' ? 0.2 + 0.15 * k.opbouw : 0.32 + 0.3 * b.pulse * k.en;
+    L.pakI = st === 'break' ? 1.2 : st === 'drop' ? 0.7 : st === 'opbouw' ? 1.0 : 0.8;
+    const om = ((Math.floor(pos / 16) + z) % 2 + 2) % 2;  // per 4 maten: eigen kleuren van de schildering of het palet
+    L.orig = st === 'break' ? 0.7 : st === 'drop' ? 0.1 : st === 'opbouw' ? cfg.orig * 0.5 : om ? Math.min(0.85, cfg.orig + 0.3) : cfg.orig;
+    L.kal = (cfg.kal && ((Math.floor(pos / 32) + z) % 2 + 2) % 2 === 0) || (st === 'drop' && maatNr % 2 === 1) ? 1 : 0;
+    L.pix = st === 'drop' && tel4 === 0 ? (fase < 0.2 ? 6 : fase < 0.45 ? 3 : 1) : st === 'groove' && maatNr % 4 === 3 && tel4 >= 2 ? 2 : st === 'opbouw' && k.opbouw > 0.85 ? 2 : 1;
+    L.rgb = cfg.rgb * (st === 'drop' ? 0.02 * b.pulse : st === 'opbouw' ? 0.012 * k.opbouw * k.opbouw : 0.008 * b.pulse * b.hoog);  // (vast een beetje = kleurruis per led)
+    L.neg = st === 'drop' ? (tel4 % 2 === 0 && fase < 0.1 ? 1 : 0) : st === 'groove' && maatNr % 8 === 7 && tel4 === 3 && fase < 0.12 ? 1 : 0;
+    L.glitch = cfg.glitch * (st === 'drop' ? 0.5 + 0.5 * b.pulse : st === 'opbouw' ? 0.6 * k.opbouw * k.opbouw : 0.08 * b.hoog);
+    L.zoom = (0.05 + (st === 'drop' ? 0.12 : 0)) * b.pulse * k.en;
+    L.warp = cfg.warp * (1 + 2 * b.bas);
+    L.rij = lijstKies(cfg.woorden, 8, pos, z);
+    L.var = st === 'drop' || st === 'opbouw' ? 1 : 0;
+    // de schermen flitsen: groove een tik per tel, een flits per maat, om de 8 maten (en op een vaste loting) een grote; drop elke tel
+    if (st === 'groove') L.tik = ((tel4 === 0 ? 0.28 : 0.07) * Math.exp(-fase * 7) + (tel4 === 0 && (maatNr % 8 === 0 || hash(maatNr * 0.71 + z) > 0.82) ? 0.55 * Math.exp(-fase * 4) : 0)) * k.en;
+    else if (st === 'opbouw') L.tik = 0.18 * Math.exp(-frac(pos * k.per) * 6) * k.opbouw;
+    else if (st === 'drop') L.tik = (k.salvo ? 0 : 0.35) * Math.exp(-fase * 6);
+    else L.tik = 0;
+    L.tikVorm = st === 'drop' ? tel4 : st === 'groove' && tel4 === 0 ? Math.floor(hash(maatNr * 1.31 + z) * 4) : 0;
+    L.tikFase = fase;
+    L.flits = k.flits * 0.6;
+    if (doolhof.gangLedForceer) Object.assign(L, doolhof.gangLedForceer);  // test: { muur, plafond, vloer, ... } vast zetten
+    return L;
   }
   function glansMat(kleur, iris) {
     return new THREE.ShaderMaterial({ vertexShader: GLANS_V, fragmentShader: GLANS_F, uniforms: { uKleur: U(kl(kleur)), uIris: U(iris || 0), uT: U(0), uPuls: U(0) } });
   }
   const bundelMat = () => new THREE.ShaderMaterial({ vertexShader: BUNDEL_V, fragmentShader: BUNDEL_F, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, side: THREE.DoubleSide, uniforms: { uT: U(0), uBreed: U(0.16) } });
-  // gedeelde uniforms van één beeld (klok, tel, muziek, dimmer); het lichtmasker zet show().mat erbij
-  function zet(m, maat, b, k) {
-    const u = m.uniforms;
-    if (u.uT) u.uT.value = k.t;
-    if (u.uGolfT) u.uGolfT.value = (k.t * 0.6) % TAU;
-    if (u.uB) u.uB.value = k.b;
-    if (u.uPuls) u.uPuls.value = b.pulse;
-    if (u.uBas) u.uBas.value = b.bas;
-    if (u.uMid) u.uMid.value = b.mid;
-    if (u.uE) u.uE.value = b.energy;
-    if (u.uDonker) u.uDonker.value = k.dim;
-    if (u.uScanTel) u.uScanTel.value = k.tel;
-    if (u.uPer) u.uPer.value = k.per;
-    if (u.uLen) u.uLen.value = maat.LEN;
-    if (u.uH) u.uH.value = maat.H;
-    if (u.uH2) u.uH2.value = maat.h;
-  }
 
   // --- bouwstenen ---
   // (clone() neemt userData mee, dus ook doolhofHouden van VLAK/TORUS: dan gooide de kern deze kopie nooit weg, ~3 geometrieën per bezoek)
@@ -446,7 +533,7 @@ void main() {
   // looplicht (zoals de acid-gang): elke 1/k.per tel vertrekt bij de begindeur een lichtpakket dat in k.tel tellen naar de einddeur rent,
   // om en om in de twee kleuren van het moment (zelfde formule als pakLicht in de shaders, ook op k.b: dan lopen leds en muurlicht gelijk)
   function pakket(c, s, maat, b, k, SH, basis) {
-    const x = (k.b - k.tel * s / maat.LEN) * k.per, n = Math.floor(x), h = Math.exp(-(x - n) * 7) * k.pak * (0.75 + 0.5 * b.pulse) * 1.6;
+    const x = (k.b - k.richt * k.tel * s / maat.LEN) * k.per, n = Math.floor(x), h = Math.exp(-(x - n) * 7) * k.pak * (0.75 + 0.5 * b.pulse) * 1.6;
     c.copy(n % 2 ? SH.B : SH.A).multiplyScalar(h);
     const bs = k.basis * 4 * (basis == null ? 1 : basis);
     c.r += SH.A.r * bs + k.flits; c.g += SH.A.g * bs + k.flits; c.b += SH.A.b * bs + k.flits;
@@ -597,24 +684,26 @@ void main() {
         lm.instanceMatrix.needsUpdate = lm.instanceColor.needsUpdate = true;
         if (sm) sm.instanceMatrix.needsUpdate = sm.instanceColor.needsUpdate = true;
       },
-      // lichtmasker op muur/vloer/plafond; R = ringen (of iets met lijst + kl) waarvan het licht op de wanden valt
+      // ledschermen van muur/vloer/plafond (o.led = de ledset van de stijl); R = ringen (lijst + kl) waarvan het licht op de wanden valt
       mat(mats, b, k, R) {
         R = R || geenRing;
-        const st = k.st, fl = Math.exp(-frac(k.b) * 3.5);
-        const goboN = zwaar >= 2 || st === 'break' ? 0 : st === 'drop' ? 4 : st === 'opbouw' ? (k.opbouw < 0.5 ? 1 : 2) : 3;
-        const goboI = k.salvo ? 0 : (st === 'drop' ? 1.8 : st === 'opbouw' ? 0.6 + 0.9 * k.opbouw : 1.0 + 0.6 * fl) * k.en;
+        const L = ledRegie(o.led, b, k);
         for (const m of mats) {
-          zet(m, maat, b, k);
-          const u = m.uniforms;
-          if (!u.uPakA) continue;
-          u.uPakA.value.set(SH.A.r, SH.A.g, SH.A.b); u.uPakB.value.set(SH.B.r, SH.B.g, SH.B.b); u.uGoboKleur.value.set(SH.C.r, SH.C.g, SH.C.b);
-          u.uBasis.value = k.basis; u.uPak.value = k.pak * m.userData.scan; u.uFlits.value = k.flits * 1.0;
-          u.uGoboN.value = goboN; u.uGoboI.value = goboI; u.uGoboV.value = st === 'drop' ? 2 : st === 'opbouw' ? k.per : 1;
+          const u = m.uniforms, w = m.userData.led;
+          if (!w) continue;
+          u.uA.value.copy(SH.A); u.uB.value.copy(SH.B); u.uC.value.copy(SH.C);
+          u.uT.value = k.t; u.uTel.value = L.tel; u.uPakT.value = k.b; u.uPuls.value = b.pulse; u.uBas.value = b.bas; u.uMid.value = b.mid; u.uHoog.value = b.hoog; u.uE.value = b.energy;
+          u.uNiveau.value = L.niveau; u.uFlits.value = L.flits * (w === 'vloer' ? 0.6 : 1); u.uTik.value = L.tik;
+          u.uPer.value = L.per; u.uTelN.value = L.telN; u.uRicht.value = L.richt; u.uScroll.value = L.scroll; u.uOrig.value = L.orig;
+          if (w === 'vloer') { u.uPat.value = L.vloer; continue; }
+          u.uModus.value = w === 'plafond' ? L.plafond : L.muur;
+          u.uPix.value = L.pix; u.uKal.value = L.kal; u.uRgb.value = L.rgb; u.uNeg.value = L.neg; u.uGlitch.value = L.glitch; u.uZoom.value = L.zoom; u.uWarp.value = L.warp;
+          u.uBeeldI.value = L.beeldI * (w === 'plafond' ? 0.55 : 1); u.uPakI.value = L.pakI; u.uRij.value = L.rij; u.uWoordW.value = woordB[L.rij] || 0.3; u.uVar.value = L.var; u.uTikVorm.value = L.tikVorm; u.uTikFase.value = L.tikFase; u.uLoop.value = L.loop;
           const rs = u.uRingS.value, rk = u.uRingK.value;
           for (let i = 0; i < 4; i++) {
             const s = R.lijst[i], q = R.kl[i];
             rs.setComponent(i, s == null ? -99 : s);
-            if (q) rk[i].set(q.r, q.g, q.b).multiplyScalar(m.userData.muur ? 0.5 : 0.35); else rk[i].set(0, 0, 0);
+            if (q) rk[i].set(q.r, q.g, q.b).multiplyScalar(0.3); else rk[i].set(0, 0, 0);
           }
         }
       },
@@ -622,37 +711,6 @@ void main() {
       neon: k => 0.22 + 0.78 * Math.min(1.15, k.dim),
     };
     return SH;
-  }
-  // gloeiende pijlen op de vloer langs de looplijn (lint door de bochten); springen op elke tel een halve tegel vooruit
-  function pijlen(g, maat, o) {
-    o = o || {};
-    const t = maat.deel('pijlTex', () => {
-      const tx = canvasTexture(128, 256, (c, w) => {  // twee chevrons, punt naar boven = vooruit
-        c.lineCap = c.lineJoin = 'round'; c.lineWidth = 12; c.strokeStyle = '#ffffff'; c.shadowColor = '#ffffff'; c.shadowBlur = 14;
-        for (const y of [40, 168]) { c.globalAlpha = 0.9; c.beginPath(); c.moveTo(w * 0.16, y + 46); c.lineTo(w * 0.5, y); c.lineTo(w * 0.84, y + 46); c.stroke(); }
-      });
-      tx.wrapS = tx.wrapT = THREE.RepeatWrapping; return tx;
-    });
-    const geo = maat.deel('pijlGeo|' + (o.breed || 0.55), () => lint(maat.pad, o.breed || 0.55, 0.9));
-    const mat = maat.deel('pijlMat', () => { const m = plus(t, THREE.DoubleSide); m.color.setRGB(0, 0, 0); return m; });
-    const m = new THREE.Mesh(geo, mat); m.position.y = 0.012; g.add(m);
-    return { zet(b, c) {
-      const bi = Math.floor(b.pos), hop = 1 - Math.pow(1 - Math.min(1, (b.pos - bi) / 0.35), 3);
-      t.offset.y = -frac(((bi % 2) + hop) * 0.5); mat.color.copy(c);
-    } };
-  }
-  function lint(pad, breed, tegel) {  // strook langs een lijn van punten, v = afgelegde weg / tegel
-    const P = [], UV = [], I = [], n = pad.length; let cum = 0;
-    for (let i = 0; i < n; i++) {
-      const a = pad[Math.max(0, i - 1)], c = pad[Math.min(n - 1, i + 1)], dx = c.x - a.x, dz = c.z - a.z, l = Math.hypot(dx, dz) || 1;
-      if (i) cum += Math.hypot(pad[i].x - pad[i - 1].x, pad[i].z - pad[i - 1].z);
-      const nx = dz / l * breed / 2, nz = -dx / l * breed / 2;
-      P.push(pad[i].x - nx, 0, pad[i].z - nz, pad[i].x + nx, 0, pad[i].z + nz); UV.push(0, cum / tegel, 1, cum / tegel);
-      if (i) { const k = i * 2; I.push(k - 2, k, k - 1, k - 1, k, k + 1); }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2)); geo.setIndex(I);
-    geo.computeBoundingSphere(); return geo;
   }
   // deeltjes (één Points, beweging in de shader): 0 zwerm (vuurvliegjes, stof), 1 stroom (langs de gang; snel < 0 = naar de loper toe), 2 val, 3 stijg
   function deeltjes(g, maat, rnd, o) {
@@ -762,11 +820,10 @@ void main() {
 
   // 1. acid: de oude rode gang als lichtshow: rode plafondlampjes, looplicht in acid-kleuren, lichtringen, vloerpijlen, smileys, 303
   doolhof.gangStijl('acid', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(wallTex, { zwaar, tint: 0xb08070, drempel: 0.55, gloeiKleur: 0xff4020, randKleur: 0xff1a08, rand: 0.2 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x2a2222, kleurA: 0xffe01a, stroom: 0.35 }));
-    const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x161212, scan: 0.5 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: graffiti(), groot: 1.3, modi: [M.BEELD, M.BALKEN, M.TEKST, M.CHEVRON, M.BLOKKEN], plafond: [M.BALKEN, M.CHEVRON, M.PLASMA], vloer: [V.CHEVRON, V.DAMBORD, V.LOOP, V.RINGEN, V.FONKEL], orig: 0.35, glitch: 0.5, woorden: [0, 2, 3, 4] });
+    const { muur, vloer, plafond } = LS;
     yield;
-    const L = leds(g, maat), R = ringen(g, maat, plekken(maat, [1, 2, 1])), P = pijlen(g, maat), S = smileys(g, maat, rnd, [5, 4, 2][zwaar]);
+    const L = leds(g, maat), R = ringen(g, maat, plekken(maat, [1, 2, 1])), S = smileys(g, maat, rnd, [5, 4, 2][zwaar]);
     yield;
     const W = wolken(g, maat, rnd, { n: 6 });
     yield;
@@ -781,15 +838,13 @@ void main() {
     yield;
     const B2 = bord(g, maat, '303', '#39ff14', kijkPlek(maat, 1, 1.85), 1.1, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0xff1a08, 0xffd400, 0x30ff10] }), rood = new THREE.Color(1, 0.12, 0.05);
-    return { muur, vloer, plafond, muurMaat: [5.2, maat.H], update(dt, now, b) {
+    const SH = show(g, maat, zwaar, { pal: [0xff1a08, 0xffd400, 0x30ff10], led: LS.LC }), rood = new THREE.Color(1, 0.12, 0.05);
+    return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       R.kleur((r, s, c) => SH.ring(c, r, R.lijst.length, b, k));
       SH.mat([muur, vloer, plafond], b, k, R);
-      muur.uniforms.uGloei.value = (0.06 + 0.3 * b.pulse) * k.en;
       L.kleur((p, c) => pakket(c, p.s, maat, b, k, SH));
-      P.zet(b, ca.copy(SH.B).multiplyScalar((0.2 + 0.8 * b.pulse) * k.dim));
       S.zet(b, k);
       W.zet(now, ca.copy(SH.A), (0.03 + 0.08 * b.bas) * k.dim);
       lampS.forEach((s, i) => {  // rode lampjes: kloppen op de kick, op de drop loopt er een golf langs
@@ -805,9 +860,8 @@ void main() {
 
   // 2. uv-jungle: blacklight-schildering die op de bas oplicht, violette uv-gloed langs vloer en plafond, vuurvliegjes, lianen van el-draad
   doolhof.gangStijl('uv-jungle', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('uv-jungle'), { zwaar, tint: 0x9a90c0, sat: 0.9, gloeiW: [0.2, 0.2, 0.2], drempel: 0.5, gloeiKleur: 0xb080ff, randKleur: 0x6a20ff, rand: 0.3, warp: zwaar < 2 ? 0.003 : 0 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x1a1426, kleurA: 0x7a30ff, vlek: 0.18 }));
-    const plafond = maat.deel('plafond', () => vlakMat(tex('uv-jungle'), { pad: [12, 2.6], tint: 0x3a3060, scan: 0.5 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('uv-jungle'), modi: [M.BEELD, M.PLASMA, M.GOLF, M.BEELD, M.TEKST], plafond: [M.PLASMA, M.BEELD, M.GOLF], vloer: [V.BEELD, V.GOLF, V.FONKEL, V.RINGEN], orig: 0.65, warp: 0.004, rust: M.PLASMA, woorden: [3, 2, 4] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const L = leds(g, maat), K = kabels(g, maat, rnd, { n: 3, el: true, zak: 0.22, kleur: 0x0a1608, gap: 1.1 });
     yield;
@@ -821,14 +875,12 @@ void main() {
     yield;
     const B2 = bord(g, maat, '∞', '#ff2bd6', kijkPlek(maat, 1, 1.9), 1.0, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0x8a30ff, 0xff2bd6, 0x60ff20] });
+    const SH = show(g, maat, zwaar, { pal: [0x8a30ff, 0xff2bd6, 0x60ff20], led: LS.LC });
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       R.kleur((r, s, c) => SH.ring(c, r, R.lijst.length, b, k));
       SH.mat([muur, vloer, plafond], b, k, R);
-      muur.uniforms.uGloei.value = (0.12 + 1.0 * b.bas + 0.4 * b.pulse) * k.en;  // blacklight-verf licht op op de bas (x dim: in de break bijna uit)
-      muur.uniforms.uRand.value = 0.15 + 0.3 * b.bas;
       L.kleur((p, c) => pakket(c, p.s, maat, b, k, SH));
       K.zet(ca.setHSL(0.3 + 0.05 * Math.sin(now * 0.4), 1, 0.5).multiplyScalar((0.15 + 1.0 * b.hoog) * k.dim));
       D.zet(b, k, 0.8);
@@ -841,9 +893,8 @@ void main() {
   // 3. bass-tempel: stenen tempelwand waarvan de speaker- en draaitafelglyphen oplichten als het lichtpakket langskomt, gouden poortjes
   // met een turquoise binnenrand die op de tel flitst, een gloeiende goot in de stenen vloer en zwevend goudstof
   doolhof.gangStijl('bass-tempel', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('bass-tempel'), { zwaar, tint: 0xc0b090, sat: 1.0, gloeiW: [0.15, 0.15, 0.15], drempel: 0.32, gloeiKleur: 0xffc060, randKleur: 0xffa030, rand: 0.08 }));
-    const vloer = maat.deel('vloer', () => vlakMat(tex('baksteen', true), { tint: 0x8a7868, kleurA: 0x30ffe0, stroom: 0.8 }));
-    const plafond = maat.deel('plafond', () => vlakMat(tex('baksteen', true), { tint: 0x403630, scan: 0.4 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('bass-tempel'), groot: 1.6, modi: [M.BEELD, M.SPECTRUM, M.BALKEN, M.TEKST], plafond: [M.BALKEN, M.SPECTRUM, M.BEELD], vloer: [V.SPECTRUM, V.RINGEN, V.DAMBORD, V.LOOP], tegel: 0.67, orig: 0.55, woorden: [2, 3, 1] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const poortS = plekken(maat, [1, 2, 1]);
     yield;
@@ -861,13 +912,12 @@ void main() {
     yield;
     const B2 = bord(g, maat, '∞', '#30ffe0', kijkPlek(maat, 1, 1.85), 0.9, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0x20ffe0, 0xffa018, 0xff3010] });
-    return { muur, vloer, plafond, vloerMaat: [1.4, 1.4], update(dt, now, b) {
+    const SH = show(g, maat, zwaar, { pal: [0x20ffe0, 0xffa018, 0xff3010], led: LS.LC });
+    return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       R.kleur((r, s, c) => SH.ring(c, r, R.lijst.length, b, k));
       SH.mat([muur, vloer, plafond], b, k, R);
-      muur.uniforms.uGloei.value = (0.05 + 0.35 * b.pulse) * k.en;
       goud.uniforms.uT.value = k.t; goud.uniforms.uPuls.value = b.pulse;
       P.kleur(() => ca.setScalar((0.22 + 0.3 * b.pulse) * k.dim + k.flits));  // goud: alleen een glans, de binnenrand is het licht
       D.zet(b, k, 0.7);
@@ -880,9 +930,8 @@ void main() {
   // 4. paddenstoelen-trip: 70s-schildering die golft en door de regenboog draait (alleen waar licht valt), ringen, kleurringen die over de
   // vloer uitdijen, sporen
   doolhof.gangStijl('paddenstoelen', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('paddenstoelen'), { zwaar, tint: 0x807078, golf: 0.55, warp: zwaar < 2 ? 0.006 : 0, drempel: 0.75, gloeiKleur: 0xffffff, randKleur: 0xff40a0, rand: 0.12 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x1e1624, kleurA: 0xff40c0, rimpel: 0.5 }));
-    const plafond = maat.deel('plafond', () => vlakMat(tex('paddenstoelen'), { pad: [10.6, 2.4], tint: 0x504058, scan: 0.4 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('paddenstoelen'), modi: [M.BEELD, M.PLASMA, M.GOLF, M.BEELD], plafond: [M.PLASMA, M.BEELD], vloer: [V.RINGEN, V.GOLF, V.BEELD, V.FONKEL], kal: 1, orig: 0.7, warp: 0.006, rust: M.PLASMA });
+    const { muur, vloer, plafond } = LS;
     yield;
     const R = ringen(g, maat, plekken(maat, [1, 2, 1]));
     yield;
@@ -893,13 +942,12 @@ void main() {
     const B1 = bord(g, maat, kies(rnd, ['DEEPER', '∞', 'GO DEEPER']), '#ff8a1a', kijkPlek(maat, 0, 1.8), 1.6, true);
     yield;
     const B2 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEP STEPPER']), '#ff3cc8', kijkPlek(maat, 1, 1.9), 1.6, true);
-    const SH = show(g, maat, zwaar, { pal: [0xff28c0, 0xff8a10, 0x8a30ff] });
+    const SH = show(g, maat, zwaar, { pal: [0xff28c0, 0xff8a10, 0x8a30ff], led: LS.LC });
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       R.kleur((r, s, c) => SH.ring(c, r, R.lijst.length, b, k));
       SH.mat([muur, vloer, plafond], b, k, R);
-      muur.uniforms.uGolf.value = 0.35 + 0.35 * b.mid + 0.3 * k.drop;
       D.zet(b, k);
       W.zet(now, ca.copy(SH.A), (0.03 + 0.1 * b.bas) * k.dim);
       B1.material.color.setScalar((0.7 + 0.5 * b.pulse) * n * (hapert(now, 5) ? 0.15 : 1));
@@ -910,9 +958,8 @@ void main() {
   // 5. rave-flyers: 90s folderwand in het donker, kale peertjes aan snoertjes die op de tel knipperen (loop, om en om, alles, fonkel), smileys,
   // natte vloer met weerschijn
   doolhof.gangStijl('rave-flyers', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('rave-flyers'), { zwaar, tint: 0xa09890, drempel: 0.8, gloeiKleur: 0xfff0b0, randKleur: 0xffa040, rand: 0.15 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x1c1a1e, plas: 0.8, kleurA: 0xffa050, kleurB: 0xff40a0, scan: 0.6 }));
-    const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x100e10, scan: 0.2 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('rave-flyers'), groot: 2.2, modi: [M.BEELD, M.TEKST, M.BLOKKEN, M.BALKEN], plafond: [M.BLOKKEN, M.BALKEN], vloer: [V.DAMBORD, V.FONKEL, V.LOOP, V.CHEVRON], pitch: 0.06, orig: 0.8, woorden: [1, 2, 0, 3] });
+    const { muur, vloer, plafond } = LS;
     // peertjes in twee rijen naast de looplijn (onderkant boven 2,3 m: een lange alien loopt eronderdoor)
     yield;
     const pr = [];
@@ -940,12 +987,11 @@ void main() {
     yield;
     const B2 = bord(g, maat, kies(rnd, ['DEEP STEPPER', 'DEEPER', '∞']), '#ff2bd6', kijkPlek(maat, 1, 1.85), 1.6, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0xff9a20, 0xff20c0, 0xffe010] }), warm = new THREE.Color(1, 0.55, 0.18);
+    const SH = show(g, maat, zwaar, { pal: [0xff9a20, 0xff20c0, 0xffe010], led: LS.LC }), warm = new THREE.Color(1, 0.55, 0.18);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       SH.mat([muur, vloer, plafond], b, k);
-      muur.uniforms.uGloei.value = (0.1 + 0.4 * b.pulse) * k.en;
       // peertjes: elke maat een ander patroon; drop = alles op elke tel + fonkelen ertussen, break = gloeidraadjes
       const modus = k.st === 'drop' ? (k.maat % 2 ? 3 : 0) : Math.floor(b.pos / 4) % 4, bi = Math.floor(b.pos), fase = b.pos - bi, flits = Math.exp(-fase * 5);
       const per = k.st === 'opbouw' ? k.per : 1;
@@ -971,9 +1017,8 @@ void main() {
   // 6. betonbunker: brutalistisch beton met buizen en kabels in het donker, twee zwaailichten die de muren rood afvegen (hun licht valt op
   // de schildering), een noodlichtstrip, kooilampjes (eentje stuk), gevarenstrepen langs de vloer; op de drop vol stroboscoop
   doolhof.gangStijl('betonbunker', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('beton-bunker'), { zwaar, tint: 0xb0b0b0, gloeiW: [1, -0.6, -0.6], drempel: 0.3, gloeiKleur: 0xff2a18, randKleur: 0x501010, rand: 0.12 }));
-    const vloer = maat.deel('vloer', () => vlakMat(tex('staal', true), { tint: 0x8a8888, strepen: 1, kleurB: 0xffb010, scan: 0.7 }));
-    const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x181818, scan: 0.3 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('beton-bunker'), modi: [M.BEELD, M.BALKEN, M.BLOKKEN, M.TEKST], plafond: [M.BALKEN, M.BLOKKEN], vloer: [V.LOOP, V.DAMBORD, V.FONKEL, V.CHEVRON], orig: 0.25, glitch: 1, woorden: [3, 2] });
+    const { muur, vloer, plafond } = LS;
     // buizen onder het plafond langs beide muren (met bochtstukken)
     yield;
     const buisGeo = maat.deel('buizen', () => {
@@ -1015,16 +1060,15 @@ void main() {
     yield;
     const B1 = bord(g, maat, kies(rnd, ['DEEPER', 'BLOODLINE']), '#ff2a20', kijkPlek(maat, 0, 1.75), 1.6, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0xff1208, 0xffa000, 0xff0038] }), rood = new THREE.Color(1, 0.06, 0.03);
+    const SH = show(g, maat, zwaar, { pal: [0xff1208, 0xffa000, 0xff0038], led: LS.LC }), rood = new THREE.Color(1, 0.06, 0.03);
     const Z = { lijst: zwS, kl: [new THREE.Color(), new THREE.Color()] };  // licht van de zwaailichten op muren en vloer (via het lichtmasker)
-    return { muur, vloer, plafond, vloerMaat: [1.6, 1.6], update(dt, now, b) {
+    return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k), strobo = k.flits * 0.65;
       SH.zet(b, now, k);
       const hoek = now * 2.4 + k.dropTel * Math.PI / 2;  // zwaailichten draaien; op de drop een kwartslag extra per tel (na 16 tellen weer in fase)
       const zwI = k.st === 'break' ? 0.12 : (0.5 + 0.5 * b.pulse) * Math.min(1.2, k.dim);
       for (let j = 0; j < 2; j++) Z.kl[j].copy(rood).multiplyScalar(zwI * (0.4 + 1.4 * Math.pow(Math.abs(Math.cos(hoek + j * Math.PI)), 3)));
       SH.mat([muur, vloer, plafond], b, k, Z);
-      muur.uniforms.uGloei.value = (0.12 + 0.6 * b.pulse) * k.en + 1.5 * k.drop;
       strip.forEach((q, i) => {
         let h = 0.04;
         for (let j = 0; j < 2; j++) { const a = Math.atan2(q.x - zw[j].x, q.z - zw[j].z), dist = Math.hypot(q.x - zw[j].x, q.z - zw[j].z); h += Math.pow(Math.max(0, Math.cos(a - hoek - j * Math.PI)), 6) * Math.exp(-dist * 0.35) * 1.8; }
@@ -1046,9 +1090,8 @@ void main() {
   // 7. kosmos-portaal: nevel op muren en plafond die alleen oplicht waar het licht valt, ovale portaalringen die op de tel flitsen,
   // sterren die naar je toe vliegen
   doolhof.gangStijl('kosmos', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('kosmos'), { zwaar, tint: 0x8c8cb0, warp: zwaar < 2 ? 0.008 : 0, drempel: 0.7, gloeiKleur: 0x8090ff, randKleur: 0x3040b0, rand: 0.12 }));
-    const vloer = maat.deel('vloer', () => vlakMat(tex('kosmos'), { pad: [10.6, 2.6], tint: 0x3a3a60, glans: 0.25, kleurB: 0x6a40ff, scan: 0.6 }));
-    const plafond = maat.deel('plafond', () => vlakMat(tex('kosmos'), { pad: [10.6, 2.6], tint: 0x6a6a90, scan: 0.5 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('kosmos'), modi: [M.BEELD, M.PLASMA, M.BALKEN, M.GOLF], plafond: [M.BEELD, M.PLASMA, M.BALKEN], vloer: [V.BEELD, V.RINGEN, V.LOOP, V.FONKEL], kal: 1, orig: 0.75, warp: 0.003, woorden: [1, 0, 4] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const ps = plekken(maat, [1, 2, 1]), ring = inst(g, maat, TORUS, maat.deel('portaalMat', () => plus()), ps.length);
     yield;
@@ -1059,7 +1102,7 @@ void main() {
     const B1 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEPER', 'DEEP STEPPER']), '#7fe8ff', kijkPlek(maat, 0, 1.8), 1.7, true);
     yield;
     const B2 = bord(g, maat, '∞', '#b46cff', kijkPlek(maat, 1, 1.85), 1.0, true);
-    const SH = show(g, maat, zwaar, { pal: [0x2a50ff, 0xb030ff, 0x20d8ff] }), R = { lijst: ps, kl: ps.map(() => new THREE.Color()) };
+    const SH = show(g, maat, zwaar, { pal: [0x2a50ff, 0xb030ff, 0x20d8ff], led: LS.LC }), R = { lijst: ps, kl: ps.map(() => new THREE.Color()) };
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
@@ -1070,7 +1113,6 @@ void main() {
       });
       ring.instanceMatrix.needsUpdate = true; ring.instanceColor.needsUpdate = true;
       SH.mat([muur, vloer, plafond], b, k, R);
-      muur.uniforms.uGloei.value = (0.05 + 0.35 * b.bas) * k.en;
       D.zet(b, k, 1.0 + 0.8 * k.drop);  // (vaste snelheid: een andere snelheid zou alle sterren laten verspringen)
       W.zet(now, ca.copy(SH.A), (0.03 + 0.08 * b.bas) * k.dim);
       B1.material.color.setScalar((0.7 + 0.5 * b.pulse) * n * (hapert(now, 9) ? 0.15 : 1));
@@ -1081,9 +1123,8 @@ void main() {
   // 8. neonsteeg: natte steeg in het donker vol neonbuizen (flikkeren, op de tel), spiegelende plassen die op de kick rimpelen, stoom uit
   // twee roosters, motregen
   doolhof.gangStijl('neonsteeg', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('neonsteeg'), { zwaar, tint: 0xa0a0b4, sat: 0.6, gloeiW: [0.25, 0.25, 0.25], drempel: 0.55, gloeiKleur: 0xffffff, randKleur: 0x2a60ff, rand: 0.06 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x16161e, plas: 1, kleurA: 0xff2a90, kleurB: 0x20e0ff, scan: 0.5 }));
-    const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x0e0e14, scan: 0.2 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('neonsteeg'), groot: 1.4, modi: [M.BEELD, M.TEKST, M.GOLF, M.BALKEN], plafond: [M.BALKEN, M.PLASMA], vloer: [V.FONKEL, V.GOLF, V.LOOP, V.BEELD], orig: 0.75, woorden: [1, 0, 2] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const K = kabels(g, maat, rnd, { n: 2, zak: 0.14, kleur: 0x08080a });
     // neonbuizen op de muren (staand en liggend) + hun weerschijn op de natte vloer
@@ -1113,12 +1154,11 @@ void main() {
     const B1 = bord(g, maat, kies(rnd, ['SAMSONIGHT', 'DEEPER']), '#ff2a90', kijkPlek(maat, 0, 1.8), 1.7, true);
     yield;
     const B2 = bord(g, maat, kies(rnd, ['DEEP STEPPER', 'BLOODLINE']), '#20e0ff', kijkPlek(maat, 1, 1.85), 1.7, true);
-    const SH = show(g, maat, zwaar, { pal: [0xff1a88, 0x10d8ff, 0x8a30ff] });
+    const SH = show(g, maat, zwaar, { pal: [0xff1a88, 0x10d8ff, 0x8a30ff], led: LS.LC });
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       SH.mat([muur, vloer, plafond], b, k);
-      muur.uniforms.uGloei.value = (0.1 + 0.4 * b.mid + 0.3 * b.pulse) * k.en * (hapert(now, 20) ? 0.3 : 1);
       const bi = Math.floor(b.pos);
       buis.forEach((q, i) => {  // groove: om en om op de tel; drop: alles, op elke tel een andere kleur; break: flauw, hapert
         const tik = Math.exp(-frac(b.pos) * 3), op = k.st === 'drop' ? 1 : (bi + q.i) % 2 === 0 ? 1 : 0.3;
@@ -1137,9 +1177,8 @@ void main() {
   // 9. slijmhol: biomechanische wand die ademt en groen opgloeit op de bas, slijmdruppels van het plafond met spatjes, ribben met een
   // groene binnenrand die flitst, bellen, groene grondmist
   doolhof.gangStijl('slijmhol', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('slijmhol'), { zwaar, tint: 0xa8b8a0, gloeiW: [-0.6, 1.2, -0.6], drempel: 0.15, gloeiKleur: 0x60ff40, warp: 0.01, randKleur: 0x30ff40, rand: 0.2 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x101a0e, vlek: 0.4, kleurA: 0x40ff30, scan: 0.6 }));
-    const plafond = maat.deel('plafond', () => vlakMat(tex('slijmhol'), { pad: [10.6, 2.4], tint: 0x5a6a56, scan: 0.4 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('slijmhol'), groot: 2, modi: [M.BEELD, M.PLASMA, M.GOLF, M.BEELD], plafond: [M.PLASMA, M.BEELD], vloer: [V.GOLF, V.FONKEL, V.RINGEN, V.BEELD], orig: 0.6, warp: 0.01, rust: M.PLASMA, woorden: [4, 3, 2] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const rib = maat.deel('rib', () => glansMat(0x2a3424, 0.15));
     yield;
@@ -1159,14 +1198,12 @@ void main() {
     yield;
     const B1 = bord(g, maat, kies(rnd, ['∞', 'DEEPER', 'BLOODLINE']), '#5aff2a', kijkPlek(maat, 0, 1.85), 1.4, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0x30ff20, 0xc0ff10, 0x10ffa0] }), groen = new THREE.Color(0.3, 1, 0.15), val = Math.sqrt((maat.H - 0.15) / 4.9);
+    const SH = show(g, maat, zwaar, { pal: [0x30ff20, 0xc0ff10, 0x10ffa0], led: LS.LC }), groen = new THREE.Color(0.3, 1, 0.15), val = Math.sqrt((maat.H - 0.15) / 4.9);
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now);
       SH.zet(b, now, k);
       G.kleur((r, s, c) => SH.ring(c, r, G.lijst.length, b, k));
       SH.mat([muur, vloer, plafond], b, k, G);
-      muur.uniforms.uGloei.value = (0.12 + 1.2 * b.bas + 0.3 * b.pulse) * k.en;
-      muur.uniforms.uWarp.value = 0.006 + 0.008 * b.bas;
       rib.uniforms.uT.value = k.t; rib.uniforms.uPuls.value = b.pulse;
       R0.kleur(() => ca.setScalar((0.35 + 0.3 * b.bas) * k.dim));
       dr.forEach((q, i) => {
@@ -1190,9 +1227,8 @@ void main() {
   // 10. chroom: vloeibaar chroom dat alleen glimt waar licht valt en met de kijkhoek van kleur verschiet, spiegelende ringen met een
   // lichtrand, glinsters, een zwarte spiegelvloer met olieglans
   doolhof.gangStijl('chroom', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('chroom'), { zwaar, tint: 0xc0c0cc, iris: 0.55, drempel: 0.7, gloeiKleur: 0xffffff, randKleur: 0x8060ff, rand: 0.06 }));
-    const vloer = maat.deel('vloer', () => vlakMat(tex('chroom'), { pad: [7.2, 2.2], tint: 0x50505e, glans: 0.5, kleurB: 0xa0c0ff, scan: 0.5 }));  // vloeibaar chroom, donkerder dan de wand
-    const plafond = maat.deel('plafond', () => vlakMat(tex('chroom'), { pad: [10.6, 2.4], tint: 0x60606a, scan: 0.3 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('chroom'), modi: [M.BEELD, M.SPECTRUM, M.BALKEN, M.CHEVRON], plafond: [M.BALKEN, M.SPECTRUM, M.CHEVRON], vloer: [V.BEELD, V.CHEVRON, V.SPECTRUM, V.DAMBORD], rgb: 2.5, spec: 1, orig: 0.45, woorden: [0, 1, 4] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const spiegel = maat.deel('spiegel', () => glansMat(0xd8dce8, 0.75));
     yield;
@@ -1208,14 +1244,12 @@ void main() {
     yield;
     const B2 = bord(g, maat, '∞', '#ff7ae0', kijkPlek(maat, 1, 1.85), 1.0, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0x3070ff, 0xff40d8, 0x40e8ff] });
+    const SH = show(g, maat, zwaar, { pal: [0x3070ff, 0xff40d8, 0x40e8ff], led: LS.LC });
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       H.kleur((r, s, c) => SH.ring(c, r, H.lijst.length, b, k));
       SH.mat([muur, vloer, plafond], b, k, H);
-      muur.uniforms.uGloei.value = (0.05 + 0.3 * b.hoog + 0.2 * b.pulse) * k.en;
-      muur.uniforms.uIris.value = 0.45 + 0.35 * b.mid;
       spiegel.uniforms.uT.value = k.t; spiegel.uniforms.uPuls.value = b.pulse;
       R.kleur(() => ca.setScalar((0.3 + 0.3 * b.pulse) * k.dim + k.flits));
       D.zet(b, k, 0.4 + b.hoog);
@@ -1238,9 +1272,8 @@ void main() {
     c.beginPath(); c.arc(w / 2, h / 2, w / 2 - 22, 0, TAU); c.fillStyle = 'rgba(255,40,160,0.25)'; c.fill();
   });
   doolhof.gangStijl('arcade', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('arcade'), { zwaar, tint: 0xa898b8, sat: 0.6, gloeiW: [0.2, 0.2, 0.2], drempel: 0.55, gloeiKleur: 0xffffff, randKleur: 0xff20c0, rand: 0.25 }));
-    const vloer = maat.deel('vloer', () => vlakMat(null, { tint: 0x0c0814, raster: 0.8, gap: 0.5, kleurA: 0xff20d0, kleurB: 0x20e0ff, scan: 0.6 }));
-    const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x08060e, raster: 0.4, gap: 0.5, kleurA: 0x20e0ff, kleurB: 0xb040ff, scan: 0.3 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('arcade'), groot: 1.5, modi: [M.BEELD, M.SPECTRUM, M.BLOKKEN, M.TEKST], plafond: [M.BLOKKEN, M.SPECTRUM, M.BALKEN], vloer: [V.RASTER, V.DAMBORD, V.SPECTRUM, V.CHEVRON], pitch: 0.065, orig: 0.75, woorden: [1, 0, 3] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const L = leds(g, maat, { plafond: zwaar < 2 });
     yield;
@@ -1253,13 +1286,11 @@ void main() {
     yield;
     const B2 = bord(g, maat, kies(rnd, ['GO DEEPER', 'DEEPER', 'BLOODLINE']), '#30f0ff', kijkPlek(maat, 1, 1.85), 1.7, true);
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0xff18d0, 0x18e0ff, 0x9a30ff] });
+    const SH = show(g, maat, zwaar, { pal: [0xff18d0, 0x18e0ff, 0x9a30ff], led: LS.LC });
     return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       SH.mat([muur, vloer, plafond], b, k);
-      muur.uniforms.uGloei.value = (0.08 + 0.5 * b.pulse) * k.en;
-      vloer.uniforms.uRaster.value = (0.6 + 0.6 * b.bas) * (1 + k.drop);
       L.kleur((p, c) => pakket(c, p.s, maat, b, k, SH));
       zon.material.color.setScalar((0.5 + 0.6 * b.bas) * n + 0.3 * k.drop);
       D.zet(b, k);
@@ -1271,9 +1302,8 @@ void main() {
   // 12. laserraster: stalen gang in het donker met gevarenstrepen, laserstralen dwars door de gang die op de maat op en neer zwiepen en
   // kantelen (kleur per maat, op de drop allemaal aan en sneller, in de break uit), stippen waar ze de muur raken, nevel om de stralen te zien
   doolhof.gangStijl('laserraster', { gewicht: 1, *maak(g, maat, rnd, zwaar) {
-    const muur = maat.deel('muur', () => muurMat(tex('staal', true), { zwaar, tint: 0x9098a4, gloeiW: [0.4, 0.3, -0.6], drempel: 0.25, gloeiKleur: 0xffc040, randKleur: 0xff0830, rand: 0.15 }));
-    const vloer = maat.deel('vloer', () => vlakMat(tex('staal', true), { tint: 0x6a6c74, strepen: 1, kleurB: 0xffb000, scan: 0.7 }));
-    const plafond = maat.deel('plafond', () => vlakMat(null, { tint: 0x101014, scan: 0.3 }));
+    const LS = ledSet(maat, rnd, zwaar, { bron: tex('staal', true), aspect: 1, px: 1024, modi: [M.BALKEN, M.GOLF, M.CHEVRON, M.BEELD], plafond: [M.BALKEN, M.CHEVRON], vloer: [V.LOOP, V.RASTER, V.CHEVRON, V.FONKEL], orig: 0.1, rust: M.BALKEN, woorden: [3, 2] });
+    const { muur, vloer, plafond } = LS;
     yield;
     const L = leds(g, maat);
     yield;
@@ -1291,12 +1321,11 @@ void main() {
     yield;
     const kleuren = [0xff1030, 0x20ff40, 0x2060ff, 0xff20e0].map(c => new THREE.Color(c));
     yield;
-    const SH = show(g, maat, zwaar, { pal: [0xff1030, 0x20ff40, 0x2060ff] }), as = new THREE.Vector3();
-    return { muur, vloer, plafond, vloerMaat: [1.6, 1.6], muurMaat: [1.8, 1.8], update(dt, now, b) {
+    const SH = show(g, maat, zwaar, { pal: [0xff1030, 0x20ff40, 0x2060ff], led: LS.LC }), as = new THREE.Vector3();
+    return { muur, vloer, plafond, update(dt, now, b) {
       const k = stemming(b, now), n = SH.neon(k);
       SH.zet(b, now, k);
       SH.mat([muur, vloer, plafond], b, k);
-      muur.uniforms.uGloei.value = (0.06 + 0.3 * b.pulse) * k.en;
       L.kleur((p, c) => pakket(c, p.s, maat, b, k, SH));
       const fase = b.pos + k.dropTel, maatNr = Math.floor(b.pos / 4);  // op de drop dubbel zo snel (dropTel loopt mee)
       st.forEach((q, i) => {

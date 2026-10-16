@@ -1,12 +1,15 @@
 // --- Doolhof: de kamer-mixer. Husselt alles wat de club al heeft door elkaar tot steeds andere kamers:
 // paalkamer, slakkenhol, spiegeldisco, kaleidoscoop, laserkooi, rokerslounge, graffitigang, bar en een omgekeerde kamer.
 // Elke soort varieert per kamer via ctx.rnd() (kleuren, maten, mensen, rekwisieten).
-// Elke kamer is een lichtshow (voor een ledscherm): vloer, muren en plafond zakken weg in het donker (showvlak uit
-// doolhof.lichtshow, boiler.js) en worden alleen opgelicht waar een bundel raakt; licht is de hoofdrol (moving heads, pinspots,
-// lasers, ledlijnen, strobe) in 2-3 verzadigde kleuren, op de tel en per sectie anders (break donker, opbouw sneller/feller,
-// drop explosie). Geen extra lampen: hooguit de twee van ctx.licht (figuren); de rest is additief/shader/instanced. ---
+// Geen enkel stilstaand vlak: elke muur, vloer, plafond en elk podium is een bewegend ledoppervlak (doolhof.led uit led.js:
+// scherm/vloer/strip; zolang die er niet is de terugval in boiler.js) of zwart. De muurschilderingen (tex/doolhof) zijn alleen nog beeld
+// op een ledscherm. Elke soort is een eigen club met een eigen sfeer (VELVET, GOO, STUDIO 54, TRIP, CAGE, CIGAR CLUB, ALLEY, NEON BAR,
+// UPSIDE DOWN). Daarbovenop licht in 2-3 verzadigde kleuren (moving heads, pinspots, lasers, ledlijnen, strobe), op de tel en per sectie
+// anders (break donker, opbouw sneller/feller, drop explosie). Geen extra lampen: hooguit de twee van ctx.licht (figuren). ---
 (() => {
   const DH = window.doolhof;
+  // loting: de 9 sferen samen ~1 op 4 kamers (met gewicht 1 kwamen ze naast 8 stijlkamers x 4 en de effectkamers maar 1 op 8 langs)
+  const MIXGEW = 2.2;
   if (!DH) return;
 
   // --- kleine hulpjes ---
@@ -15,7 +18,6 @@
   const klem = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
   const glad = x => x * x * (3 - 2 * x);
   const hex = c => '#' + new THREE.Color(c).getHexString();
-  const rgba = (c, a) => { const k = new THREE.Color(c); return `rgba(${Math.round(k.r * 255)},${Math.round(k.g * 255)},${Math.round(k.b * 255)},${a})`; };
   const M4 = new THREE.Matrix4(), V3 = new THREE.Vector3(), Q = new THREE.Quaternion(), S3 = new THREE.Vector3(), C3 = new THREE.Color();
   const DIR = new THREE.Vector3(), ZAS = new THREE.Vector3(0, 0, 1), WIT = new THREE.Color(1, 1, 1);
   const PLAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);  // cirkel plat op de vloer
@@ -24,17 +26,21 @@
   const basic = (color, extra) => new THREE.MeshBasicMaterial(Object.assign({ color }, extra || {}));
   const lam = (color, extra) => new THREE.MeshLambertMaterial(Object.assign({ color }, extra || {}));
   const gloei = (color, op = 1) => additive(color, op);
-  const dubbel = m => { m.side = THREE.DoubleSide; return m; };  // werkt hoe de kern de wanden ook opbouwt
   const metMap = (m, map) => { m.map = map; return m; };
 
   // lichtshow-gereedschap uit boiler.js (doolhof.lichtshow): stand van de show, showvlakken, bundels, lijnen, punten, moving heads
   const LS = DH.lichtshow;
   if (!LS) { console.warn('mix: doolhof.lichtshow ontbreekt (boiler.js)'); return; }
-  // vier showvlak-wanden (x-, x+, z-, z+) met één textuur, herhaald naar de lengte van de wand
-  function wandShow(sp, tex, w, d, stuk, kleur) {
-    const mat = n => { const t = tex.clone(); t.repeat.set(n, 1); t.needsUpdate = true; return sp.mat(t, kleur); };
-    const a = mat(Math.max(1, Math.round(d / stuk))), b = mat(Math.max(1, Math.round(w / stuk)));
-    return [a, a, b, b];
+  // leds: zwart vlak (de kern ruimt het op), zaad per kamer, ronde ledvlakken (podia) samen in één mesh: [[x, y, z, straal]]
+  const zwart = () => new THREE.MeshBasicMaterial({ color: 0x010101 });
+  const zaadVan = r => Math.floor(r() * 997);
+  // inhoud van grote wanden: vooral beeld en patronen; tekst en de oscilloscoop (veel zwart) af en toe
+  const WAND = (beeld, patroon, tekst = 0.6, golf = 0.25) => ({ beeld, patroon, tekst, golf });
+  function ledSchijven(parent, mat, lijst) {
+    const delen = lijst.map(([x, y, z, rr]) => [new THREE.CircleGeometry(rr, 40), LS.mat4(x, y, z, 1, 1, 1, -Math.PI / 2, 0, 0)]);
+    const m = new THREE.Mesh(LS.samen(delen), mat); m.frustumCulled = false; parent.add(m);
+    for (const [geo] of delen) geo.dispose();
+    return m;
   }
   // veel gelijke vaste stukken in één draw call: lijst van [x, y, z, sx, sy, sz, rx?]
   const EUL = new THREE.Euler();
@@ -95,68 +101,6 @@
   }, 0);
 
   // --- schilders voor de texturen ---
-  function plooien(c, w, h, r, kleur) {  // fluwelen gordijn: verticale plooien, donker naar plafond en vloer
-    const k = new THREE.Color(kleur), st = f => `rgb(${Math.round(k.r * 255 * f)},${Math.round(k.g * 255 * f)},${Math.round(k.b * 255 * f)})`;
-    const gr = c.createLinearGradient(0, 0, w, 0), n = 16;
-    for (let i = 0; i <= n; i++) gr.addColorStop(i / n, st(i % 2 ? 0.22 + 0.12 * r() : 0.7 + 0.3 * r()));
-    c.fillStyle = gr; c.fillRect(0, 0, w, h);
-    const v = c.createLinearGradient(0, 0, 0, h);
-    v.addColorStop(0, 'rgba(0,0,0,0.8)'); v.addColorStop(0.3, 'rgba(0,0,0,0)'); v.addColorStop(0.85, 'rgba(0,0,0,0.15)'); v.addColorStop(1, 'rgba(0,0,0,0.75)');
-    c.fillStyle = v; c.fillRect(0, 0, w, h);
-  }
-  function sterren(c, w, h, r, kleur, n) {  // donker plafond met lichtpuntjes
-    c.fillStyle = '#050307'; c.fillRect(0, 0, w, h);
-    for (let i = 0; i < n; i++) { c.fillStyle = r() < 0.3 ? '#ffffff' : kleur; c.globalAlpha = 0.4 + r() * 0.6; c.beginPath(); c.arc(r() * w, r() * h, 0.8 + r() * 2.2, 0, TAU); c.fill(); }
-    c.globalAlpha = 1;
-  }
-  function glansvloer(c, w, h, r, kleur) {  // glimmende vloer met zachte gekleurde weerschijn (showvlak: alleen te zien waar licht valt)
-    c.fillStyle = '#2a2630'; c.fillRect(0, 0, w, h);
-    for (let i = 0; i < 6; i++) {
-      const x = r() * w, y = r() * h, rr = 60 + r() * 160, gr = c.createRadialGradient(x, y, 0, x, y, rr);
-      gr.addColorStop(0, rgba(kleur, 0.16)); gr.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = gr; c.fillRect(x - rr, y - rr, rr * 2, rr * 2);
-    }
-    c.strokeStyle = 'rgba(255,255,255,0.05)'; c.lineWidth = 2;
-    for (let i = 0; i <= 8; i++) { c.beginPath(); c.moveTo(i * w / 8, 0); c.lineTo(i * w / 8, h); c.stroke(); c.beginPath(); c.moveTo(0, i * h / 8); c.lineTo(w, i * h / 8); c.stroke(); }
-  }
-  function rots(c, w, h, r, basis, slijm) {  // grotwand met vlekken en slijm dat van boven druipt
-    c.fillStyle = basis; c.fillRect(0, 0, w, h);
-    for (let i = 0; i < 90; i++) {
-      const x = r() * w, y = r() * h, rr = 10 + r() * 70, gr = c.createRadialGradient(x, y, 0, x, y, rr);
-      gr.addColorStop(0, r() < 0.55 ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.07)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-      c.fillStyle = gr; c.fillRect(x - rr, y - rr, rr * 2, rr * 2);
-    }
-    for (let i = 0; i < 30; i++) {
-      const x = r() * w, len = 40 + r() * h * 0.6, gr = c.createLinearGradient(0, 0, 0, len);
-      gr.addColorStop(0, slijm); gr.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = gr; c.fillRect(x, 0, 3 + r() * 6, len);
-    }
-  }
-  function plassen(c, w, h, r, kleur, n, achter) {  // plassen/vlekken op een achtergrond (zwart = voor een additieve laag)
-    c.fillStyle = achter; c.fillRect(0, 0, w, h);
-    for (let i = 0; i < n; i++) {
-      const x0 = r() * w, y0 = r() * h, rx = 20 + r() * 90, sy = 0.4 + r() * 0.6;
-      for (const ox of [-w, 0, w]) for (const oy of [-h, 0, h]) {  // ook over de rand heen tekenen: naadloos herhaalbaar (geen streep over de vloer)
-        const x = x0 + ox, y = y0 + oy;
-        if (x + rx < 0 || x - rx > w || y + rx < 0 || y - rx > h) continue;
-        const gr = c.createRadialGradient(x, y, 0, x, y, rx);
-        gr.addColorStop(0, kleur); gr.addColorStop(0.7, kleur.replace(/[\d.]+\)$/, '0.25)')); gr.addColorStop(1, 'rgba(0,0,0,0)');
-        c.save(); c.translate(x, y); c.scale(1, sy); c.translate(-x, -y); c.fillStyle = gr; c.fillRect(x - rx, y - rx, rx * 2, rx * 2); c.restore();
-      }
-    }
-  }
-  function raster(c, w, h, n, lijn, achter) {
-    c.fillStyle = achter; c.fillRect(0, 0, w, h); c.strokeStyle = lijn; c.lineWidth = 2;
-    for (let i = 0; i <= n; i++) { const x = i * w / n, y = i * h / n; c.beginPath(); c.moveTo(x, 0); c.lineTo(x, h); c.stroke(); c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); }
-  }
-  function panelen(c, w, h, r, tint) {  // spiegelpanelen met een schuine glimstreep
-    c.fillStyle = '#05060a'; c.fillRect(0, 0, w, h);
-    const nx = 8, ny = 4, pw = w / nx, ph = h / ny;
-    for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
-      const gr = c.createLinearGradient(x * pw, y * ph, (x + 1) * pw, (y + 1) * ph), s = 0.42 + r() * 0.2;
-      gr.addColorStop(0, `rgba(${tint},0.2)`); gr.addColorStop(s, `rgba(${tint},${0.05 + r() * 0.1})`);
-      gr.addColorStop(s + 0.03, `rgba(255,255,255,${0.12 + r() * 0.18})`); gr.addColorStop(s + 0.07, `rgba(${tint},0.06)`); gr.addColorStop(1, `rgba(${tint},0.16)`);
-      c.fillStyle = gr; c.fillRect(x * pw + 3, y * ph + 3, pw - 6, ph - 6);
-    }
-  }
   function matcap(c, w, h, r) {  // spiegelbol: grijze bol vol felle glimpjes
     c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
     const gr = c.createRadialGradient(w * 0.4, h * 0.38, 0, w / 2, h / 2, w / 2);
@@ -166,40 +110,6 @@
       const a = r() * TAU, rr = Math.sqrt(r()) * w * 0.47, x = w / 2 + Math.cos(a) * rr, y = h / 2 + Math.sin(a) * rr, s = 2 + r() * 6;
       const g2 = c.createRadialGradient(x, y, 0, x, y, s * 2); g2.addColorStop(0, 'rgba(255,255,255,1)'); g2.addColorStop(1, 'rgba(255,255,255,0)');
       c.fillStyle = g2; c.fillRect(x - s * 2, y - s * 2, s * 4, s * 4);
-    }
-  }
-  function paddo(c, w, h, r, kleur) {  // paddenstoelhoed: kleur met witte stippen (boven = top van de hoed)
-    c.fillStyle = kleur; c.fillRect(0, 0, w, h);
-    const gr = c.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, 'rgba(255,255,255,0.25)'); gr.addColorStop(1, 'rgba(0,0,0,0.5)');
-    c.fillStyle = gr; c.fillRect(0, 0, w, h);
-    c.fillStyle = '#ffffff';
-    for (let i = 0; i < 26; i++) { const s = 4 + r() * 10; c.beginPath(); c.ellipse(r() * w, 10 + r() * h * 0.8, s, s * 0.7, 0, 0, TAU); c.fill(); }
-  }
-  function ringen(c, w, h, kleuren) {  // tripvloer: neonringen en stralen vanuit het midden
-    c.fillStyle = '#030208'; c.fillRect(0, 0, w, h); c.lineWidth = 3;
-    for (let i = 1; i < 14; i++) { c.strokeStyle = kleuren[i % kleuren.length]; c.globalAlpha = 0.35; c.beginPath(); c.arc(w / 2, h / 2, i * w / 28, 0, TAU); c.stroke(); }
-    for (let i = 0; i < 24; i++) { const a = i / 24 * TAU; c.strokeStyle = kleuren[i % kleuren.length]; c.globalAlpha = 0.18; c.beginPath(); c.moveTo(w / 2, h / 2); c.lineTo(w / 2 + Math.cos(a) * w, h / 2 + Math.sin(a) * h); c.stroke(); }
-    c.globalAlpha = 1;
-  }
-  function behang(c, w, h, r, a, b) {  // behang met ornamenten, houten lambrisering onder
-    c.fillStyle = a; c.fillRect(0, 0, w, h);
-    c.fillStyle = b; c.globalAlpha = 0.55;
-    for (let y = 0; y < 3; y++) for (let x = 0; x < 4; x++) {
-      const cx = x * w / 4 + (y % 2) * w / 8 + w / 16, cy = y * h * 0.21 + h * 0.1;
-      c.beginPath(); c.ellipse(cx, cy, w / 22, h / 12, 0, 0, TAU); c.fill();
-      for (let k = 0; k < 4; k++) { const an = k * Math.PI / 2; c.beginPath(); c.ellipse(cx + Math.cos(an) * w / 14, cy + Math.sin(an) * h / 14, w / 40, h / 60, an, 0, TAU); c.fill(); }
-    }
-    c.globalAlpha = 1;
-    const y0 = h * 0.66; c.fillStyle = '#2a170c'; c.fillRect(0, y0, w, h - y0);
-    for (let x = 0; x < w; x += w / 8) { c.fillStyle = 'rgba(0,0,0,0.35)'; c.fillRect(x, y0, 3, h - y0); c.fillStyle = 'rgba(255,200,140,0.08)'; c.fillRect(x + 8, y0 + 12, w / 8 - 16, h - y0 - 24); }
-    c.fillStyle = '#5a3a1a'; c.fillRect(0, y0 - 6, w, 10);
-  }
-  function planken(c, w, h, r) {  // houten vloerdelen met verspringende naden
-    c.fillStyle = '#120a05'; c.fillRect(0, 0, w, h);
-    const n = 8, ph = h / n;
-    for (let y = 0; y < n; y++) {
-      let x = -r() * 200;
-      while (x < w) { const L = 120 + r() * 200; c.fillStyle = `rgb(${70 + r() * 30 | 0},${40 + r() * 18 | 0},${20 + r() * 10 | 0})`; c.fillRect(x, y * ph + 1, L - 2, ph - 2); x += L; }
     }
   }
   function tapijt(c, w, h, r, a, b, cc) {  // perzisch kleed: veld met ruitjes, brede rand met motiefjes, gekarteld medaillon, hoekstukken
@@ -222,52 +132,14 @@
     c.fillStyle = 'rgba(0,0,0,0.18)';  // slijtage
     for (let i = 0; i < 30; i++) c.fillRect(r() * w, r() * h, 2 + r() * 10, 1 + r() * 3);
   }
-  function baksteen(c, w, h, r, kleur, voeg) {
-    const k = new THREE.Color(kleur);
-    c.fillStyle = voeg; c.fillRect(0, 0, w, h);
-    const bw = w / 8, bh = h / 16;
-    for (let y = 0; y < 16; y++) for (let x = -1; x < 8; x++) {
-      const f = 0.6 + 0.5 * r(), ox = (y % 2) * bw / 2;
-      c.fillStyle = `rgb(${Math.min(255, k.r * 255 * f) | 0},${Math.min(255, k.g * 255 * f) | 0},${Math.min(255, k.b * 255 * f) | 0})`;
-      c.fillRect(x * bw + ox + 2, y * bh + 2, bw - 4, bh - 4);
-    }
-  }
-  function asfalt(c, w, h, r) {  // nat asfalt met plassen en een gestreepte middellijn
-    c.fillStyle = '#16161a'; c.fillRect(0, 0, w, h);
-    for (let i = 0; i < 400; i++) { c.fillStyle = r() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.25)'; c.fillRect(r() * w, r() * h, 2 + r() * 4, 2 + r() * 4); }
-    for (let i = 0; i < 6; i++) {
-      const x = r() * w, y = r() * h, rr = 30 + r() * 60, gr = c.createRadialGradient(x, y, 0, x, y, rr);
-      gr.addColorStop(0, 'rgba(70,80,110,0.35)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = gr; c.fillRect(x - rr, y - rr, 2 * rr, 2 * rr);
-    }
-    c.strokeStyle = 'rgba(230,200,40,0.35)'; c.lineWidth = 8; c.setLineDash([60, 40]);
-    c.beginPath(); c.moveTo(w / 2, 0); c.lineTo(w / 2, h); c.stroke(); c.setLineDash([]);
-  }
-  function dambord(c, w, h, a, b, n) { for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { c.fillStyle = (x + y) % 2 ? a : b; c.fillRect(x * w / n, y * h / n, w / n, h / n); } }
   function vlam(c, w, h) {
     const gr = c.createRadialGradient(w / 2, h * 0.75, 2, w / 2, h * 0.6, h * 0.6);
     gr.addColorStop(0, 'rgba(255,240,180,1)'); gr.addColorStop(0.35, 'rgba(255,150,40,0.85)'); gr.addColorStop(1, 'rgba(255,40,0,0)');
     c.fillStyle = gr; c.beginPath(); c.moveTo(w / 2, 0); c.quadraticCurveTo(w * 0.98, h * 0.62, w / 2, h); c.quadraticCurveTo(w * 0.02, h * 0.62, w / 2, 0); c.fill();
   }
 
-  // graffiti van de club (tex/graffiti-N.jpg): eigen textuur per kamer; in laag/minimaal een verkleinde kopie (1024 breed)
-  const GRAF = ['tex/graffiti-1.jpg', 'tex/graffiti-2.jpg', 'tex/graffiti-3.jpg'].map(src => { const im = new Image(); im.src = src; return im; });
-  const kleinGraf = [];
-  function graffitiTex(i, rx, zwaar) {
-    i %= GRAF.length;
-    const im = GRAF[i], t = new THREE.Texture();
-    t.wrapS = THREE.RepeatWrapping; t.repeat.set(rx, 1);
-    const zet = () => {
-      try {
-        if (zwaar && !kleinGraf[i]) { const c = document.createElement('canvas'); c.width = 1024; c.height = 512; c.getContext('2d').drawImage(im, 0, 0, 1024, 512); kleinGraf[i] = c; }
-        t.image = zwaar ? kleinGraf[i] : im; t.needsUpdate = true;
-      } catch (e) { console.error('doolhof graffiti', e); }
-    };
-    if (im.complete && im.naturalWidth) zet(); else im.addEventListener('load', zet, { once: true });
-    return t;
-  }
-  // dezelfde plaatjes hangen al als textuur op de clubmuren (repeat -2, 1; al op de gpu). Een eigen textuur per kamer betekende elke keer
-  // twee uploads van 3168x1344 (~50 ms per stuk in één beeld) en ~22 MB per stuk. Die van de club dus gebruiken, de herhaling zit dan in de
-  // uv's van een eigen vlak: zelfde beeld.
+  // graffiti van de club (tex/graffiti-N.jpg) hangt al als textuur op de clubmuren (al op de gpu): die dient als beeld voor de ledschermen
+  // van de graffitigang (een eigen kopie kostte twee uploads van 3168x1344, ~50 ms per stuk in één beeld)
   function clubGraf(i) {
     const naam = 'graffiti-' + (i + 1) + '.jpg', kand = [];
     if (typeof room !== 'undefined' && room && Array.isArray(room.material)) kand.push(...room.material);
@@ -278,14 +150,6 @@
     }
     return null;
   }
-  function graffitiVlak(i, rx, zwaar) {  // { geo, map }: geo null = het gewone vlak van de kamer
-    const t = zwaar ? null : clubGraf(i % GRAF.length);
-    if (!t) return { geo: null, map: graffitiTex(i, rx, zwaar) };
-    const geo = new THREE.PlaneGeometry(1, 1), uv = geo.attributes.uv;
-    for (let k = 0; k < uv.count; k++) uv.setX(k, uv.getX(k) * rx / t.repeat.x);  // na de uv-transformatie van de textuur: u * rx
-    return { geo, map: t };
-  }
-
   // figuur via de kern; lukt het met filter niet, dan elk figuur
   const fig = (ctx, o) => ctx.figuur(o) || (o.filter ? ctx.figuur({ x: o.x, z: o.z, face: o.face, rol: o.rol }) : null);
   // n vrije plekken in [-xmax, xmax] x [-zmax, zmax], buiten het looppad (|x| < vrij) en niet te dicht op elkaar
@@ -371,30 +235,6 @@
     p.frustumCulled = false; g.add(p);
     return p;
   }
-  // tegelvloer (zoals de dansvloer van de club) met vier patronen die om de 8 tellen wisselen (drop: elke maat), als ledvloer in de show:
-  // break = alleen een trage ring, opbouw = dambord steeds sneller, niveau volgt de stand
-  function tegelvloer(parent, w, d, PAL) {
-    const cols = Math.max(1, Math.floor(w)), rows = Math.max(1, Math.floor(d)), n = cols * rows;
-    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.94, 0.02, 0.94), basic(0xffffff), n);
-    for (let i = 0; i < n; i++) { M4.makeTranslation(-cols / 2 + 0.5 + (i % cols), 0.012, -rows / 2 + 0.5 + Math.floor(i / cols)); mesh.setMatrixAt(i, M4); mesh.setColorAt(i, C3.setRGB(0, 0, 0)); }
-    parent.add(mesh);
-    return (b, s, f = 1) => {  // f: niveau van deze vloer (een ledplafond dat het hele beeld vult: lager)
-      const st = s ? s.stand : 'groove', niv = (s ? s.niv : 1) * f;
-      const mode = st === 'break' ? 1 : st === 'opbouw' ? 0 : Math.floor(b.pos / (st === 'drop' ? 4 : 8)) % 4;
-      const bt = Math.floor(st === 'opbouw' ? b.pos * (s.opb < 0.5 ? 1 : 2) : st === 'break' ? b.pos / 4 : b.pos), fr = b.pos - Math.floor(b.pos);
-      const licht = st === 'break' ? 0.22 * f : (0.25 + 0.5 * (1 - fr) * b.energy + 0.25 * b.pulse) * niv;
-      for (let i = 0; i < n; i++) {
-        const cx = i % cols, cz = (i / cols) | 0, x = cx - cols / 2 + 0.5, z = cz - rows / 2 + 0.5;
-        let k, ci;
-        if (mode === 0) { k = (cx + cz + bt) % 2 ? 1 : 0.06; ci = (cx + cz) % 3; }
-        else if (mode === 1) { const dd = Math.hypot(x, z) - (b.pos % 4) * 2.5; k = 0.05 + Math.exp(-dd * dd * 0.6); ci = bt % 3; }  // ring vanuit het midden
-        else if (mode === 2) { const hs = Math.sin(i * 12.9898 + bt * 78.233) * 43758.5453, f = hs - Math.floor(hs); k = f > 0.72 ? 1 : 0.05; ci = Math.floor(f * 30) % 3; }
-        else { k = (cz + bt) % 4 === 0 ? 1 : 0.08; ci = cz % 3; }
-        mesh.setColorAt(i, C3.copy(PAL[ci % PAL.length]).multiplyScalar(k * licht));
-      }
-      mesh.instanceColor.needsUpdate = true;
-    };
-  }
   // Points en Sprites zelf opruimen (de kern ruimt in elk geval de meshes op; dubbel opruimen kan geen kwaad)
   function ruimDeeltjes(g) {
     g.traverse(o => {
@@ -405,7 +245,7 @@
   }
 
   // ============ 1. Paalkamer: donker fluweel, paaldanseressen in een pinspot, ledpalen, moving heads over het publiek op de banken ============
-  DH.registreer('paalkamer', { gewicht: 1, maak(ctx) {
+  DH.registreer('paalkamer', { gewicht: 1 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const [A, B, C, BANK] = kies(r, [[0xff1f3d, 0xff5fa2, 0x7a2cff, 0x2a0610], [0xff2d95, 0xb36bff, 0x2a5cff, 0x220a2a], [0xff4a1c, 0xffb347, 0xff1f6a, 0x2a0e04], [0xb04dff, 0xff3fa4, 0x3d5afe, 0x160828]]);
     const PAL = [A, B, C].map(c => new THREE.Color(c));
@@ -418,11 +258,15 @@
     const kopPlek = [[0, h - 0.3, -d / 2 + 2.5], [0, h - 0.3, d / 2 - 2.5], [0, h - 0.3, -d / 6], [0, h - 0.3, d / 6], [-(w / 2 - 0.5), h - 0.3, 0], [w / 2 - 0.5, h - 0.3, 0]].slice(0, [6, 4, 2][Z]);
     const midden = new THREE.Vector3(palen[nP - 1][0], 1.2, palen[nP - 1][1]);
     const L = lichtset(ctx, { koppen: kopPlek, extra: nP, rig: { maat: { w, d, h }, pal: PAL, focus: midden, spreid: 0.04, patronen: ['waaier', 'cirkel', 'kruis', 'zwaai', 'publiek'] } });
-    const gordijn = T(ctx, 1024, 512, (c, cw, ch) => plooien(c, cw, ch, r, new THREE.Color(A).lerp(new THREE.Color(BANK), 0.35)));
-    ctx.doos({ w, d, h,
-      vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => glansvloer(c, cw, ch, r, A), 2, 2), new THREE.Color(1.3, 1.3, 1.3)),
-      muur: wandShow(L.sp, gordijn, w, d, 4, 0xd0d0d0),
-      plafond: dubbel(basic(0x5a5a5a, { map: T(ctx, 512, 512, (c, cw, ch) => sterren(c, cw, ch, r, hex(B), 160), 2, 2) })) });
+    // VELVET: zijwanden hoge ledpanelen (luxe beeld, woorden op de tel) met zwart fluweel ertussen, kopwanden een gedimd ledscherm,
+    // ledvloer, ronde ledvlakken op de podia; plafond zwart (lampionnen)
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, new THREE.Color(BANK).multiplyScalar(0.25)), BRON = kies(r, ['chroom', 'bass-tempel', 'kosmos']), zw = zwart();
+    const zij = led.scherm({ bron: BRON, palet: P4, maat: { w: d, h: h - 0.6 }, zaad, modi: WAND(2, 1, 0.8), helder: 0.6 });
+    const kop = led.scherm({ bron: BRON, palet: P4, maat: { w, h }, zaad: zaad + 5, modi: WAND(0.6, 2, 0.8), helder: 0.4 });
+    ctx.doos({ w, d, h, vloer: zw, muur: [zw, zw, kop, kop], plafond: zw });
+    const pz = wand => LS.paneelLijst(wand, w, d, { n: Math.max(3, Math.round(d / 2.2)), vul: 0.72, y0: 0.3, y1: h - 0.3 });
+    LS.vlakken(g, zij, [...pz('x-'), ...pz('x+')]);
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.6, zaad, helder: 0.6 });
     const gloed = gloedTex(ctx);
     const NSEG = [16, 12, 8][Z], paalLed = LS.lijnen(g, nP * NSEG, Z < 2, 2.5, 0.05);
     const torus = new THREE.TorusGeometry(0.95, 0.03, 6, 40), ringMat = gloei(B, 0.9), podMat = basic(0x060507), paalMat = basic(0x0a0a0c);
@@ -436,6 +280,7 @@
       const pd = ctx.figuur({ x, z, face: r() * TAU, rol: 'paal' }) || fig(ctx, { x, z, face: r() * TAU, rol: 'dans', filter: /burlesque|showgirl/ });
       if (pd) { pd.root.position.y = 0.06; pd.yOff = 0.06; }
     }
+    ledSchijven(g, led.scherm({ palet: P4, maat: { w: 1.9, h: 1.9 }, zaad: zaad + 9, modi: ['patroon', 'golf'], helder: 0.9, pitch: 0.05 }), palen.map(([x, z]) => [x, 0.064, z, 0.92]));
     // banken langs de zijwanden, publiek kijkt naar de podia (donker fluweel: silhouetten)
     const fluweel = lam(BANK, { emissive: new THREE.Color(BANK).multiplyScalar(0.15) });
     let zit = [];
@@ -517,7 +362,7 @@
   } });
 
   // ============ 2. Slakkenhol: donkere grot met gloeiend slijm, een uitvergrote slak, lichtschachten uit het plafond, een groen laserplafond ============
-  DH.registreer('slakkenhol', { gewicht: 0.8, maak(ctx) {
+  DH.registreer('slakkenhol', { gewicht: 0.8 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const GROEN = kies(r, [0x7dff3c, 0x3cff9a, 0xb8ff2a]), gC = new THREE.Color(GROEN);
     const F = tussen(r, 1.25, 1.55), sH = 2.6 * F;  // de club-slak is 2,6 m hoog
@@ -529,22 +374,22 @@
     const focus = new THREE.Vector3(sx, 0, 0);
     const gaten = [[sx * 0.6, h - 0.05, -d / 4], [-sx * 0.5, h - 0.05, d / 5], [sx * 0.2, h - 0.05, d / 3], [-sx * 0.8, h - 0.05, -d / 3]].slice(0, [4, 3, 2][Z]);
     const L = lichtset(ctx, { koppen: gaten, rig: { maat: { w, d, h }, pal: PAL, focus, spreid: 0.11, vlek: 0.5, patronen: ['midden', 'zwaai', 'cirkel', 'kruis'] } });
-    const rotsT = T(ctx, 1024, 512, (c, cw, ch) => rots(c, cw, ch, r, '#141a10', rgba(GROEN, 0.5)));
-    ctx.doos({ w, d, h,
-      vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => plassen(c, cw, ch, r, rgba(GROEN, 0.35), 24, '#0c120a'), 2, 2), 0xffffff),
-      muur: wandShow(L.sp, rotsT, w, d, 6, 0xb0c0a4),
-      plafond: L.sp.mat(rotsT, 0x6a7a60) });
+    // GOO: de hele grot is een ledkoepel met het slijmhol als beeld (golven, kleur naar groen en paars), een gedimd ledplafond achter de
+    // druipstenen (silhouetten) en een ledvloer in slijmgroen
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, 0x010601);
+    const wand = led.scherm({ bron: 'slijmhol', palet: P4, maat: { w: d, h }, zaad, modi: WAND(2.5, 1, 0.3, 0.4), helder: 0.8, pitch: 0.07 });
+    const kop = led.scherm({ bron: 'slijmhol', palet: P4, maat: { w, h }, zaad: zaad + 3, modi: WAND(2, 1, 0.4, 0.4), helder: 0.7, pitch: 0.07 });
+    const dak = led.scherm({ bron: 'slijmhol', palet: P4, maat: { w, h: d }, zaad: zaad + 6, modi: WAND(2, 1, 0, 0), helder: 0.35, pitch: 0.1 });
+    ctx.doos({ w, d, h, vloer: zwart(), muur: [wand, wand, kop, kop], plafond: dak });
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.7, zaad });
     const gloed = gloedTex(ctx);
-    // gloeiende slijmlaag over de vloer (additief: zwart doet niets), deint op de bas
-    const glimMat = metMap(gloei(GROEN, 0.5), T(ctx, 512, 512, (c, cw, ch) => plassen(c, cw, ch, r, 'rgba(255,255,255,0.9)', 14, '#000000'), 2, 2));
-    add(g, K.plane, glimMat, [0, 0.015, 0], [w - 0.2, d - 0.2, 1]).rotation.x = -Math.PI / 2;
     // druipstenen met gloeiende druppelpuntjes
     const nS = [16, 10, 6][Z], kegel = new THREE.ConeGeometry(1, 1, 7); kegel.rotateX(Math.PI);
     const stal = new THREE.InstancedMesh(kegel, basic(0xffffff), nS), tips = new THREE.InstancedMesh(K.sph, gloei(0xffffff, 0.9), nS), tipPos = [];
     for (let i = 0; i < nS; i++) {
       const x = tussen(r, -w / 2 + 0.6, w / 2 - 0.6), z = tussen(r, -d / 2 + 0.6, d / 2 - 0.6), len = tussen(r, 0.6, Math.min(2, h - 3.2)), rad = len * tussen(r, 0.12, 0.2);
       M4.compose(V3.set(x, h - len / 2, z), Q.identity(), S3.set(rad, len, rad)); stal.setMatrixAt(i, M4);
-      stal.setColorAt(i, C3.setRGB(0.1, 0.14, 0.08).multiplyScalar(0.8 + 0.6 * r()));
+      stal.setColorAt(i, C3.setRGB(0.025, 0.035, 0.02).multiplyScalar(0.8 + 0.6 * r()));  // silhouet tegen het ledplafond (lichtgrijs stond stil in beeld)
       M4.compose(V3.set(x, h - len - 0.03, z), Q, S3.setScalar(0.04 + rad * 0.15)); tips.setMatrixAt(i, M4);
       tips.setColorAt(i, C3.copy(gC).multiplyScalar(0.5 + 0.5 * r()));
       tipPos.push([x, h - len - 0.03, z]);
@@ -682,7 +527,6 @@
       blijf: 15,
       update(dt, now) {
         const b = ctx.beat(), s = L.begin(), st = s.stand, pu = s.kick;
-        glimMat.opacity = (0.05 + 0.22 * b.bas) * s.niv + (st === 'drop' ? 0.12 * pu : 0);
         slakDoet(dt, b);
         wormenDoen(dt);
         const bu = sl && sl.burp > 0 ? Math.sin((1 - sl.burp) * Math.PI) : 0;
@@ -735,7 +579,7 @@
   } });
 
   // ============ 3. Spiegeldisco: donkere zaal, twee pinspots op de spiegelbol, lichtvlekjes over alle wanden, ledvloer, moving heads ============
-  DH.registreer('spiegeldisco', { gewicht: 1, maak(ctx) {
+  DH.registreer('spiegeldisco', { gewicht: 1 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const PAL = kies(r, [[0xff2d95, 0x00e5ff, 0xffe600], [0xff6b00, 0xff1744, 0xffd400], [0x7cff00, 0xb967ff, 0x00e5ff], [0xff00e5, 0x304ffe, 0x00e5ff], [0xffab00, 0x00bfa5, 0xff3fa4]]).map(c => new THREE.Color(c));
     const w = Math.round(tussen(r, 12, 15)), d = Math.round(tussen(r, 12, 16)), h = +tussen(r, 5, 6).toFixed(2);
@@ -745,9 +589,14 @@
     // moving heads in de vier hoeken van het plafond (minimaal: twee) + twee pinspots op de bol
     const kopPlek = [[-1, -1], [1, 1], [1, -1], [-1, 1]].slice(0, Z === 2 ? 2 : 4).map(([x, z]) => [x * (w / 2 - 0.6), h - 0.2, z * (d / 2 - 0.6)]);
     const L = lichtset(ctx, { koppen: kopPlek, extra: 2, rig: { maat: { w, d, h }, pal: PAL, focus: { x: 0, y: 0, z: 0 }, spreid: 0.045, patronen: ['waaier', 'kruis', 'cirkel', 'zwaai', 'publiek'] } });
-    const panT = T(ctx, 1024, 512, (c, cw, ch) => panelen(c, cw, ch, r, kies(r, ['120,140,200', '200,120,180', '140,200,190'])));
-    ctx.doos({ w, d, h, vloer: dubbel(basic(0x050507)), muur: wandShow(L.sp, panT, w, d, 7, new THREE.Color(1.6, 1.6, 1.6)), plafond: L.sp.mat(null, 0x15151c) });
-    const tegels = tegelvloer(g, w, d, PAL);
+    // STUDIO 54: wanden van ledtegels (1 m, zwarte voegen) met patronen en woorden, een ledvloer van grote tegels zoals Saturday Night
+    // Fever; plafond zwart (daar vallen de vlekjes van de bol op)
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, 0x020103), zw = zwart();
+    ctx.doos({ w, d, h, vloer: zw, muur: zw, plafond: zw });
+    const tegelLed = led.scherm({ bron: kies(r, ['chroom', 'arcade', null]), palet: P4, maat: { w: Math.max(w, d), h: h - 0.5 }, zaad, modi: WAND(0.6, 2, 1, 0.3), helder: 0.45 });
+    const tl = wand => LS.paneelLijst(wand, w, d, { n: Math.round((wand[0] === 'x' ? d : w) / 1.1), vul: 0.9, rijen: Math.max(2, Math.round((h - 0.5) / 1.1)), vulY: 0.9, y0: 0.2, y1: h - 0.3, uit: 0.03 });
+    LS.vlakken(g, tegelLed, [...tl('x-'), ...tl('x+'), ...tl('z-'), ...tl('z+')]);
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 1.0, zaad });
     const bol = new THREE.Group(); bol.position.copy(BOL); g.add(bol);
     const bolMat = new THREE.MeshMatcapMaterial({ matcap: T(ctx, 256, 256, (c, cw, ch) => matcap(c, cw, ch, r), 0), side: THREE.DoubleSide });
     bol.add(new THREE.Mesh(mirrorBallGeometry(R, Z === 2 ? 16 : 22, 0.9), bolMat));
@@ -782,7 +631,6 @@
       blijf: 14,
       update(dt, now) {
         const b = ctx.beat(), s = L.begin(), st = s.stand, pu = s.kick;
-        tegels(b, s);
         // pinspots op de bol: altijd (de break is het moment van de bol), in de drop kleur op de tel
         const pk = st === 'break' ? 0.9 : st === 'drop' ? 1.1 + 0.5 * s.knal : 0.7 + 0.2 * pu;
         pin.forEach((q, i) => {
@@ -793,7 +641,7 @@
         bolMat.color.setScalar(0.25 + 0.6 * pk);
         // de bol draait; break traag en de vlekjes zijn het enige licht, opbouw steeds sneller, drop feller en op de tel
         hoek += dt * (st === 'break' ? 0.18 : st === 'opbouw' ? 0.25 + 0.8 * s.opb : st === 'drop' ? 0.55 : 0.25 + 0.2 * s.en); bol.rotation.y = hoek;
-        const ca = Math.cos(hoek), sa = Math.sin(hoek), hw = w / 2 - 0.02, hd = d / 2 - 0.02;
+        const ca = Math.cos(hoek), sa = Math.sin(hoek), hw = w / 2 - 0.05, hd = d / 2 - 0.05;  // net vóór de ledtegels
         for (let i = 0; i < nF; i++) {
           const f = fDir[i], dx = f.x * ca + f.z * sa, dz = -f.x * sa + f.z * ca, dy = f.y;
           let t = 1e9, n = 0;
@@ -839,13 +687,12 @@
       vec3 c = t < 1.0 ? mix(uA, uB, t) : t < 2.0 ? mix(uB, uC, t - 1.0) : mix(uC, uA, t - 2.0);
       float ring = exp(-pow((r - uRing) * 4.0, 2.0)) * uRingK;  // ring die op elke tel vanuit het midden van de wand uitdijt
       float pan = uPan > 0.0 ? step(0.25, fract(vUv.x * uPan)) : 1.0;  // losse ledpanelen met zwart ertussen
-      gl_FragColor = vec4(c * ((smoothstep(1.1, 2.4, v) * (0.5 + 0.7 * uBas) + ring) * led * pan * uNiv), 1.0);
+      gl_FragColor = vec4(c * (((0.12 + 0.55 * v) * (0.55 + 0.6 * uBas) + ring) * led * pan * uNiv), 1.0);
     }`;
-  DH.registreer('kaleidoscoop', { gewicht: 1, maak(ctx) {
+  DH.registreer('kaleidoscoop', { gewicht: 1 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const w = Math.round(tussen(r, 12, 16)), d = Math.round(tussen(r, 12, 16)), h = +tussen(r, 5, 6.2).toFixed(2);
     const kcam = camHulp(ctx, d);
-    const hues = [r(), r(), r()], kleurS = hues.map(x => '#' + new THREE.Color().setHSL(x, 1, 0.6).getHexString());
     const h0 = r(), PAL = [h0, h0 + 0.33, h0 + 0.62].map(x => new THREE.Color().setHSL(x % 1, 1, 0.5));
     // bloem: één armatuur midden in het plafond met NB bundels die rondgaan
     const NB = [8, 6, 4][Z], BRON = new THREE.Vector3(0, h - 0.3, 0);
@@ -855,7 +702,12 @@
     const PITCH = Z === 2 ? 0.2 : 0.12;
     const led = (bw, bh, pan) => new THREE.ShaderMaterial({ uniforms: Object.assign({ uRep: { value: new THREE.Vector2(Math.round(bw / PITCH), Math.round(bh / PITCH)) }, uPan: { value: pan ? Math.max(3, Math.round(bw / 1.7)) : 0 } }, U), vertexShader: LED_VS, fragmentShader: LED_FS, side: THREE.DoubleSide });
     const zij = led(d, h, true), kop = led(w, h, true);
-    ctx.doos({ w, d, h, vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => ringen(c, cw, ch, kleurS), 0), 0x9a9a9a), muur: [zij, zij, kop, kop], plafond: led(w, d, false) });
+    // TRIP: wanden de kaleidoscoop (eigen ledshader, zoals zaal 2), plafond een ledscherm met kosmos/paddenstoelen/jungle, ledvloer;
+    // de hoeden van de reuzenpaddenstoelen zijn ook leds
+    const leds = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, 0x030108);
+    const dak = leds.scherm({ bron: kies(r, ['kosmos', 'paddenstoelen', 'uv-jungle']), palet: P4, maat: { w, h: d }, zaad, modi: WAND(2, 1.2, 0, 0.3), helder: 0.45 });
+    ctx.doos({ w, d, h, vloer: zwart(), muur: [zij, zij, kop, kop], plafond: dak });
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.8, zaad });
     const gloed = gloedTex(ctx);
     add(g, K.cyl, basic(0x0c0c10), [0, h - 0.15, 0], [0.35, 0.3, 0.35]);  // de bloem-armatuur
     // reuzenpaddenstoelen in de hoeken: hoed met stippen, gloeiende lamellen, gloed op de vloer
@@ -864,8 +716,9 @@
     for (const [hx, hz] of hoeken) {
       const H = tussen(r, 1.6, 3.2), cr = H * tussen(r, 0.45, 0.6), sr = cr * 0.22, hue = r();
       const x = hx * (w / 2 - cr - 0.3), z = hz * (d / 2 - cr - 0.5);
-      add(g, steelGeo, basic(new THREE.Color().setHSL(hue, 0.3, 0.12)), [x, H / 2, z], [sr, H, sr]);
-      const hoedMat = basic(0xffffff, { map: T(ctx, 256, 128, (c, cw, ch) => paddo(c, cw, ch, r, '#' + new THREE.Color().setHSL(hue, 0.9, 0.5).getHexString())) });
+      add(g, steelGeo, basic(new THREE.Color().setHSL(hue, 0.3, 0.03)), [x, H / 2, z], [sr, H, sr]);  // steel donker: silhouet
+      const hoedMat = leds.scherm({ palet: LS.palet([new THREE.Color().setHSL(hue, 1, 0.5), new THREE.Color().setHSL(hue + 0.15, 1, 0.55), new THREE.Color().setHSL(hue + 0.5, 1, 0.5)], 0x030103),
+        maat: { w: TAU * cr, h: cr * 1.6 }, zaad: zaad + paddos.length + 1, modi: ['patroon', 'golf'], helder: 0.8, pitch: 0.06 });
       add(g, hoedGeo, hoedMat, [x, H, z], [cr, cr * 0.6, cr]);
       const lamMat = gloei(new THREE.Color().setHSL(hue + 0.1, 0.8, 0.5), 0.8);
       add(g, K.disc, lamMat, [x, H - 0.01, z], [cr * 0.95, cr * 0.95, 1]).rotation.x = Math.PI / 2;  // lamellen: kijkt naar beneden
@@ -894,16 +747,16 @@
     const uit = uitgang(ctx, K, w, d, h, kies(r, ['TRIP', 'KOSMOS', 'ZWEEF', 'PSYCHE', 'WONDERLAND', 'DIEPER']), PAL[0]);
     const L1 = ctx.licht(PAL[0], 1.8, 14, -2, 3.5, -1), L2 = ctx.licht(PAL[1], 1.3, 14, 2, 3.5, 2);
     const maxR = Math.min(w, d) / 2 - 0.3, DIR = new THREE.Vector3(), E = new THREE.Vector3();
-    let ph = r() * TAU;
+    let ph = r() * TAU, kTijd = r() * 100;
     return {
       maat: { w, d, h },
       blijf: 13,
       update(dt, now) {
         const b = ctx.beat(), s = L.begin(), st = s.stand, pu = s.kick;
         // ledschermen: break bijna uit, opbouw loopt op, drop fel en kleuren per tel
-        U.uTijd.value = now * (st === 'drop' ? 1.6 : st === 'opbouw' ? 1 + s.opb : 1);
-        U.uNiv.value = st === 'break' ? 0.18 : st === 'opbouw' ? 0.25 + 0.5 * s.opb : st === 'drop' ? 0.65 + 0.3 * pu : 0.4 + 0.2 * pu;
-        U.uBas.value = s.bas; U.uRing.value = s.fase * 2.6; U.uRingK.value = st === 'break' ? 0 : st === 'drop' ? 0.7 : st === 'opbouw' ? 0.2 + 0.5 * s.opb : 0.3;
+        kTijd += dt * (st === 'drop' ? 3 : st === 'break' ? 1.4 : st === 'opbouw' ? 1.5 + 2 * s.opb : 2) * (1 + 0.6 * pu); U.uTijd.value = kTijd;  // draait sneller op de muziek (break: traag maar zichtbaar)
+        U.uNiv.value = st === 'break' ? 0.3 : st === 'opbouw' ? 0.3 + 0.55 * s.opb : st === 'drop' ? 0.7 + 0.35 * pu : 0.5 + 0.3 * pu;
+        U.uBas.value = s.bas; U.uRing.value = st === 'break' ? ((s.pos / 4) % 1) * 2.6 : s.fase * 2.6; U.uRingK.value = st === 'break' ? 0.3 : st === 'drop' ? 0.7 : st === 'opbouw' ? 0.2 + 0.5 * s.opb : 0.3;  // break: één trage ring per maat
         U.uA.value.copy(LS.kleur(PAL, 0)); U.uB.value.copy(LS.kleur(PAL, 1)); U.uC.value.copy(LS.kleur(PAL, 2));
         // bloem van bundels: groove draait en ademt per maat; break één bundel recht omlaag; opbouw sneller en smaller, looplicht;
         // drop wijd over het publiek, kleur per tel
@@ -922,7 +775,6 @@
         }
         L.pun.zet(NB, BRON.x, BRON.y - 0.1, BRON.z, s.flits > 0.5 ? LS.wit : LS.kleur(PAL, 0), 1.5 + pu);
         for (const p of paddos) {
-          p.hoedMat.color.setScalar((0.18 + 0.3 * pu + 0.05 * Math.sin(now * 1.3 + p.f)) * Math.max(0.5, s.niv));
           p.lamMat.opacity = (0.25 + 0.5 * s.mid) * Math.max(0.6, s.niv); p.vlMat.opacity = (0.12 + 0.25 * s.bas) * s.niv;
         }
         for (const m of vormen) {
@@ -955,7 +807,7 @@
   } });
 
   // ============ 5. Laserkooi: zwarte zaal met een kooi, laserwaaiers die op de tel zwiepen, een lasertunnel in de break, laaghangende rook ============
-  DH.registreer('laserkooi', { gewicht: 1, maak(ctx) {
+  DH.registreer('laserkooi', { gewicht: 1 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const LP = kies(r, [[0x22ff55, 0xff1840, 0x2a5cff], [0x00e5ff, 0xff2d95, 0x7a2cff], [0xb04dff, 0x7cff00, 0x00e5ff], [0x2a5cff, 0xffd400, 0xff1840], [0xff2d95, 0x00ffb0, 0x7a2cff]]).map(c => new THREE.Color(c));
     const w = Math.round(tussen(r, 10, 13)), d = Math.round(tussen(r, 12, 16)), h = +tussen(r, 4.6, 5.6).toFixed(2);
@@ -964,10 +816,14 @@
     const plekB = [[0, d / 2 - 0.25], [-w / 2 + 0.25, -d / 2 + 0.25], [w / 2 - 0.25, d / 2 - 0.25], [w / 2 - 0.25, -d / 2 + 0.25], [-w / 2 + 0.25, d / 2 - 0.25], [-w / 2 + 0.25, 0], [w / 2 - 0.25, 0]];
     const nBron = [6, 4, 3][Z], perBron = [6, 4, 3][Z], NT = [16, 12, 8][Z], NL = Math.max(nBron * perBron, NT);
     const L = lichtset(ctx, { lenzen: nBron });
-    const wandT = T(ctx, 512, 512, (c, cw, ch) => raster(c, cw, ch, 8, 'rgba(255,255,255,0.08)', '#08080b'));
-    ctx.doos({ w, d, h,
-      vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => raster(c, cw, ch, 8, rgba(LP[0], 0.5), '#020203'), Math.round(w / 4), Math.round(d / 4)), new THREE.Color(1.8, 1.8, 1.8)),
-      muur: wandShow(L.sp, wandT, w, d, 4, new THREE.Color(1.5, 1.5, 1.5)), plafond: L.sp.mat(null, 0x0c0c10) });
+    // CAGE: zwarte zaal, wanden horizontale ledlamellen (staal/bunker, scanbalken en woorden) met zwart ertussen zodat de lasers er scherp
+    // voor staan, ledvloer als fijn raster; plafond zwart
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(LP, 0x010102), zw = zwart();
+    ctx.doos({ w, d, h, vloer: zw, muur: zw, plafond: zw });
+    const lamel = led.scherm({ bron: kies(r, ['staal', 'beton-bunker']), palet: P4, maat: { w: Math.max(w, d), h: h - 0.6 }, zaad, modi: WAND(0.8, 2, 0.8, 0.3), helder: 0.75 });
+    const lm = wand => LS.paneelLijst(wand, w, d, { n: 1, rijen: Math.max(4, Math.round((h - 0.6) / 0.42)), vulY: 0.42, y0: 0.3, y1: h - 0.3 });
+    LS.vlakken(g, lamel, [...lm('x-'), ...lm('x+'), ...lm('z+')]);
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.5, zaad });
     // de kooi: staven rondom (open in het looppad) en een neon bovenrand
     const cw = w - 3.5, cd = d - 4, kooiH = Math.min(h - 0.6, 3.6), staven = [];
     for (let x = -cw / 2; x <= cw / 2 + 1e-6; x += 0.55) for (const z of [-cd / 2, cd / 2]) if (Math.abs(x) > 1.3) staven.push([x, z]);
@@ -1056,7 +912,7 @@
   } });
 
   // ============ 6. Rokerslounge: donker en warm; lichtkegels van hanglampjes door de rook, open haard, wandwassers en één trage bundel ============
-  DH.registreer('rokerslounge', { gewicht: 0.9, maak(ctx) {
+  DH.registreer('rokerslounge', { gewicht: 0.9 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const [WA, WB, LEER, WARM, ACC] = kies(r, [['#1d2a1c', '#3c5a34', 0x2a1408, 0xffa040, 0xff2a6a], ['#2a0f14', '#5a1e2a', 0x1a0c08, 0xff8a3c, 0x8a2cff], ['#101a2a', '#2a4060', 0x24140a, 0xffb060, 0x00c8ff], ['#20140a', '#4a3018', 0x301a0c, 0xff9a50, 0xff1f3d]]);
     const kW = new THREE.Color(WARM), kAcc = new THREE.Color(ACC), PAL = [kAcc, kW, new THREE.Color(ACC).lerp(new THREE.Color(0x3a00ff), 0.5)];
@@ -1068,15 +924,38 @@
     const kant = r() < 0.5 ? -1 : 1;  // kant van de open haard; de camera staat aan de overkant, de trage bundel ook (schijnt door het beeld)
     const L = lichtset(ctx, { koppen: [[-kant * (w / 2 - 0.5), h - 0.2, d / 2 - 0.6]], extra: tafels.length, lenzen: 0, sterk: 0.6,
       rig: { maat: { w, d, h }, pal: PAL, focus: { x: 0, y: 1, z: 0 }, spreid: 0.035, vlek: 0.5, sterk: 0.9, patronen: ['zwaai', 'midden', 'cirkel'] } });
-    const behT = T(ctx, 512, 512, (c, cw, ch) => behang(c, cw, ch, r, WA, WB));
-    ctx.doos({ w, d, h,
-      vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => planken(c, cw, ch, r), Math.round(w / 3), Math.round(d / 3)), new THREE.Color(1.6, 1.5, 1.4)),
-      muur: wandShow(L.sp, behT, w, d, 2.6, new THREE.Color(1.5, 1.45, 1.35)), plafond: dubbel(basic(0x0a0705)) });
-    const gloed = gloedTex(ctx), hout = basic(0x100a05);
-    const balken = []; for (let z = -d / 2 + 1.5; z < d / 2 - 1; z += 2.2) balken.push([0, h - 0.12, z, w, 0.24, 0.3]);
-    veel(g, K.box, hout, balken);  // balken
+    // CIGAR CLUB: donkere wanden met ingelijste ledschermen (bewegende kunst: tempel, chroom, kosmos, jungle), een digitaal perzisch kleed
+    // en een gedimde warme ledvloer; plafond zwart met balken
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, new THREE.Color(LEER).multiplyScalar(0.2)), zw = zwart();
+    ctx.doos({ w, d, h, vloer: zw, muur: zw, plafond: zw });
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.8, zaad, helder: 0.4 });  // lounge: gedimd
+    // digitaal behang: alle wanden een zwak, traag ledscherm achter de lijsten (de wanden waren zwart: de lounge zag er stil uit); deuren vrij
+    const behang = led.scherm({ bron: 'kosmos', palet: P4, maat: { w: d, h }, zaad: zaad + 21, modi: { beeld: 1.2, patroon: 1, golf: 0.5 }, helder: 0.3, pitch: 0.07 });
+    LS.vlakken(g, behang, ['x-', 'x+', 'z-', 'z+'].flatMap(wd => LS.paneelLijst(wd, w, d, { y0: 0, y1: h, uit: 0.012 })));
+    const kunst = ['bass-tempel', 'chroom', 'kosmos', 'uv-jungle'].sort(() => r() - 0.5), lijsten = [], ky0 = 1.7, ky1 = Math.min(h - 0.4, 3.4);
+    for (const sx of [-1, 1]) {  // per zijwand drie lijsten (boven de banken en in het midden, aan de haardkant boven de schoorsteenmantel), samen één mesh
+      const kx = sx * (w / 2 - 0.04), vl = [];
+      for (const z of [-d / 4, 0, d / 4]) {
+        vl.push({ w: 2.2, h: ky1 - ky0, x: kx, y: (ky0 + ky1) / 2, z, ry: -sx * Math.PI / 2 });
+        lijsten.push([kx, ky1 + 0.04, z, 0.06, 0.08, 2.36], [kx, ky0 - 0.04, z, 0.06, 0.08, 2.36], [kx, (ky0 + ky1) / 2, z - 1.14, 0.06, ky1 - ky0 + 0.16, 0.08], [kx, (ky0 + ky1) / 2, z + 1.14, 0.06, ky1 - ky0 + 0.16, 0.08]);
+      }
+      LS.vlakken(g, led.scherm({ bron: kunst[sx < 0 ? 0 : 1], palet: P4, maat: { w: 2.2, h: ky1 - ky0 }, zaad: zaad + 2 + sx, modi: ['beeld', 'golf'], helder: 0.6 }), vl);
+    }
+    const gloed = gloedTex(ctx), hout = basic(0x050302);
+    veel(g, K.box, basic(0x0c0702), lijsten);  // lijsten van donker messing
+    const balken = [], lijnen = []; for (let z = -d / 2 + 1.5; z < d / 2 - 1; z += 2.2) { balken.push([0, h - 0.12, z, w, 0.24, 0.3]); lijnen.push([-w / 2 + 0.05, h - 0.255, z, w / 2 - 0.05, h - 0.255, z]); }
+    veel(g, K.box, hout, balken);  // balken (zwart), met een ledstrip eronder
+    // ledlijst rondom op 1,5 m (boven de rugleuningen): deuren en de haard blijven vrij
+    const ly = 1.5, lx = w / 2 - 0.03, lz = d / 2 - 0.03;
+    for (const sx of [-1, 1]) {
+      if (sx === kant) lijnen.push([sx * lx, ly, -lz, sx * lx, ly, -1.3], [sx * lx, ly, 1.3, sx * lx, ly, lz]);
+      else lijnen.push([sx * lx, ly, -lz, sx * lx, ly, lz]);
+      lijnen.push([sx * lx, ly, -lz, sx * 1.15, ly, -lz], [sx * lx, ly, lz, sx * 1.15, ly, lz]);
+    }
+    LS.ledStrips(g, lijnen, { palet: P4, zaad: zaad + 11, helder: 0.75, dik: 0.03, diep: 0.03 });
     // kleed in het midden (ook een showvlak: alleen zichtbaar waar licht valt)
-    add(g, K.plane, L.sp.mat(T(ctx, 512, 256, (c, cw, ch) => tapijt(c, cw, ch, r, '#4a1410', '#9a7434', '#16203a'), 0), new THREE.Color(1.4, 1.4, 1.4)), [0, 0.008, 0], [d * 0.5, w * 0.4, 1]).rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+    add(g, K.plane, led.scherm({ bron: T(ctx, 512, 256, (c, cw, ch) => tapijt(c, cw, ch, r, '#4a1410', '#9a7434', '#16203a'), 0), palet: LS.palet([0x9a1a10, 0xd09a40, 0x1a3aa0], 0x080101),
+      maat: { w: d * 0.5, h: w * 0.4 }, zaad: zaad + 7, modi: ['beeld', 'patroon'], helder: 0.65 }), [0, 0.012, 0], [d * 0.5, w * 0.4, 1]).rotation.set(-Math.PI / 2, 0, Math.PI / 2);  // digitaal kleed
     // leren banken langs de zijwanden met een laag tafeltje ervoor (asbak, glazen)
     const leer = lam(LEER, { emissive: new THREE.Color(LEER).multiplyScalar(0.12) }), tafelMat = basic(0x120a06), asMat = gloei(0xff5a1a, 0.9);
     let zit = []; const bankDelen = [], tafelDelen = [], asDelen = [], gloedDelen = [], glazen = [];  // per soort één draw call
@@ -1097,10 +976,10 @@
       fig(ctx, { x: gx - 0.45, z: gz, face: Math.PI / 2, rol: 'staan' }); fig(ctx, { x: gx + 0.45, z: gz, face: -Math.PI / 2, rol: 'staan' });
     }
     // open haard aan één zijwand, tussen de banken
-    const fx = kant * (w / 2 - 0.3), haard = basic(0x0c0a08);
+    const fx = kant * (w / 2 - 0.3), haard = basic(0x020101);  // bijna zwart: lichte hex-waarden komen na de eindbewerking als grijs blok in beeld
     // open stookruimte: zwarte achterwand en vloer, wangen en een latei; de vlammen staan erin (een dichte doos verborg ze)
-    add(g, K.box, basic(0x050403), [fx + kant * 0.2, 0.55, 0], [0.1, 1.1, 1.4]);
-    add(g, K.box, basic(0x0a0806), [fx, 0.05, 0], [0.6, 0.1, 1.4]);
+    add(g, K.box, basic(0x010101), [fx + kant * 0.2, 0.55, 0], [0.1, 1.1, 1.4]);
+    add(g, K.box, basic(0x010101), [fx, 0.05, 0], [0.6, 0.1, 1.4]);
     add(g, K.box, haard, [fx, 1.1, 0], [0.6, 0.2, 1.4]);
     for (const dz of [-0.85, 0.85]) add(g, K.box, haard, [fx, 0.6, dz], [0.6, 1.2, 0.3]);
     add(g, K.box, haard, [fx - kant * 0.05, 1.27, 0], [0.75, 0.14, 2.1]);
@@ -1166,7 +1045,7 @@
   } });
 
   // ============ 7. Graffitigang: donkere steeg; scanners vegen over de graffiti (alleen te zien waar het licht valt), neon, strobe aan het eind ============
-  DH.registreer('graffitigang', { gewicht: 1, maak(ctx) {
+  DH.registreer('graffitigang', { gewicht: 1 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const w = Math.round(tussen(r, 5, 7)), d = Math.round(tussen(r, 18, 24)), h = +tussen(r, 4, 4.8).toFixed(2);
     const NEO = kies(r, [[0xff2d95, 0x00e5ff], [0xffe600, 0xff3d00], [0x7cff00, 0xb967ff], [0x00ffb0, 0xff1744]]);
@@ -1176,18 +1055,15 @@
     const nS = [5, 4, 2][Z], kopPlek = [];
     for (let i = 0; i < nS; i++) kopPlek.push([(i % 2 ? 1 : -1) * 0.7, h - 0.2, -d / 2 + 2.5 + i * (d - 5) / Math.max(1, nS - 1)]);
     const L = lichtset(ctx, { koppen: kopPlek, rig: { maat: { w, d, h }, pal: PAL, focus: { x: 0, y: 1.5, z: d / 4 }, spreid: 0.09, vlek: 0.75, patronen: ['kruis', 'zwaai', 'waaier', 'publiek'] } });
-    const steen = T(ctx, 512, 512, (c, cw, ch) => baksteen(c, cw, ch, r, 0x3a2a26, '#151212'));
-    ctx.doos({ w, d, h,
-      vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => asfalt(c, cw, ch, r), 1, Math.max(1, Math.round(d / w))), new THREE.Color(1.6, 1.6, 1.6)),
-      muur: wandShow(L.sp, steen, w, d, 3, new THREE.Color(1.4, 1.4, 1.4)), plafond: dubbel(basic(0x060608)) });
-    const gloed = gloedTex(ctx);
-    // graffiti op beide zijwanden (vlak tegen de muur, leesbaar van binnen); in het donker, alleen waar een scanner of neon valt
-    const gi = Math.floor(r() * 3);
-    for (const s of [-1, 1]) {
-      const gv = graffitiVlak(gi + (s > 0 ? 1 : 0), Math.max(1, Math.round(d / (h * 2.2))), Z);
-      const m = add(g, gv.geo || K.plane, L.sp.mat(gv.map, new THREE.Color(1.5, 1.45, 1.4)), [s * (w / 2 - 0.03), h / 2, 0], [d - 0.1, h - 0.05, 1]);
-      m.rotation.y = -s * Math.PI / 2;
-    }
+    // ALLEY: een steeg van ledschermen (zoals een nachtstraat in Tokio): de graffiti van de club als beeld op beide zijwanden (schuift,
+    // kaleido, kleur naar het neon, woorden op de tel), een ledvloer, kopwanden ledpatronen; plafond zwart (tl-buizen)
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, 0x020103), gi = Math.floor(r() * 3);
+    const graf = i => (Z ? null : clubGraf(i % 3)) || kies(r, ['rave-flyers', 'neonsteeg', 'arcade']);
+    const zijL = led.scherm({ bron: graf(gi), palet: P4, maat: { w: d, h }, zaad, modi: WAND(2.5, 0.6, 0.8, 0.2), helder: 0.75 });
+    const zijR = led.scherm({ bron: graf(gi + 1), palet: P4, maat: { w: d, h }, zaad: zaad + 13, modi: WAND(2.5, 0.6, 0.8, 0.2), helder: 0.75 });
+    const kop = led.scherm({ palet: P4, maat: { w, h }, zaad: zaad + 4, modi: WAND(0, 2, 1, 0), helder: 0.5 });
+    ctx.doos({ w, d, h, vloer: zwart(), muur: [zijL, zijR, kop, kop], plafond: zwart() });
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.5, zaad });
     // tl-buizen aan het plafond, een paar zijn kapot en flikkeren (in de kleuren van de steeg)
     const buizen = [];
     for (let z = -d / 2 + 2; z < d / 2 - 1; z += 4) buizen.push({ m: add(g, K.box, basic(0xd8f0ff), [kies(r, [-1.2, 1.2]), h - 0.08, z], [0.06, 0.04, 1.5]), kapot: r() < 0.35, f: r() * 10, k: Math.floor(r() * 3) });
@@ -1220,12 +1096,6 @@
     add(box, K.box, basic(0x1a1a1e), [0, 0.15, 0], [0.62, 0.3, 0.18]);
     const speakerMat = gloei(NEO[0], 0.8);
     for (const sx of [-0.18, 0.18]) add(box, K.disc, speakerMat, [sx, 0.15, 0.095], [0.09, 0.09, 1]);
-    // plassen die het neon weerkaatsen
-    const plasMats = [];
-    for (let i = 0; i < [5, 3, 2][Z]; i++) {
-      const m = metMap(gloei(NEO[i % 2], 0.25), gloed); plasMats.push(m);
-      add(g, K.disc, m, [tussen(r, -w / 2 + 1, w / 2 - 1), 0.012, tussen(r, -d / 2 + 1, d / 2 - 1)], [tussen(r, 0.6, 1.3), tussen(r, 0.4, 0.9), 1]).rotation.x = -Math.PI / 2;
-    }
     // strobe-balk boven de uitgang aan het eind van de steeg
     const strobeMat = basic(0x000000);
     add(g, K.box, strobeMat, [0, Math.min(h - 0.25, 3.95), d / 2 - 0.1], [1.6, 0.14, 0.06]);
@@ -1248,7 +1118,6 @@
         }
         strobeMat.color.setScalar(Math.min(1, s.flits * 1.2 + (st === 'opbouw' ? 0.15 * s.opb * pu : 0)));
         box.scale.setScalar(1 + 0.08 * b.bas); speakerMat.opacity = (0.3 + 0.6 * pu) * Math.min(1, s.niv);
-        for (const m of plasMats) m.opacity = (0.12 + 0.2 * pu) * Math.min(1, s.niv);
         lampShow(L1, LS.kleur(PAL, 0), (0.3 + 0.6 * pu) * s.niv, s);
         lampShow(L2, LS.kleur(PAL, 1), (0.4 + 0.8 * pu) * s.niv, s);
         uit.puls(b, s);
@@ -1263,7 +1132,7 @@
   } });
 
   // ============ 8. Barkamer: donkere kroeg; een flessenwand van achteren verlicht met een looplicht op de tel, ledstrips, lampkegels op de toog ============
-  DH.registreer('barkamer', { gewicht: 0.9, maak(ctx) {
+  DH.registreer('barkamer', { gewicht: 0.9 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const [LED, WARM, DERDE] = kies(r, [[0xff2d95, 0xffa860, 0x7a2cff], [0x00e5ff, 0xffb347, 0x2a5cff], [0xb967ff, 0xff8a3c, 0xff2d95], [0x7cff00, 0xffc070, 0x00e5ff]]);
     const kLED = new THREE.Color(LED), kW = new THREE.Color(WARM), PAL = [kLED, new THREE.Color(DERDE), kW];
@@ -1274,18 +1143,22 @@
     // twee moving heads aan de overkant: trage accenten over de zaal (in de drop meer)
     const L = lichtset(ctx, { koppen: Z === 2 ? [] : [[-s * (w / 2 - 0.6), h - 0.2, -d / 2 + 0.8], [-s * (w / 2 - 0.6), h - 0.2, d / 2 - 0.8]], extra: lampZ.length,
       rig: { maat: { w, d, h }, pal: PAL, focus: { x: -s * (w / 2 - 2.4), y: 1, z: 0 }, spreid: 0.04, sterk: 0.7, patronen: ['zwaai', 'cirkel', 'kruis'] } });
-    const steen = T(ctx, 512, 512, (c, cw, ch) => baksteen(c, cw, ch, r, 0x6a3020, '#1e1410'));
-    ctx.doos({ w, d, h,
-      vloer: L.sp.mat(T(ctx, 512, 512, (c, cw, ch) => dambord(c, cw, ch, '#141414', '#7a7670', 8), Math.round(w / 4), Math.round(d / 4)), 0xffffff),
-      muur: wandShow(L.sp, steen, w, d, 3, new THREE.Color(1.3, 1.25, 1.2)), plafond: dubbel(basic(0x070605)) });
+    // NEON BAR: achter de flessen een gedimd ledscherm (tegenlicht: de flessen als silhouet), tegenover de bar een grote ledwand (arcade,
+    // flyers, woorden op de tel), ledvloer; kopwanden en plafond zwart
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, 0x020101), zw = zwart();
+    const achter = led.scherm({ palet: P4, maat: { w: d, h }, zaad, modi: WAND(0, 2, 0, 0.5), helder: 0.4 });
+    const tv = led.scherm({ bron: kies(r, ['arcade', 'rave-flyers', 'neonsteeg']), palet: P4, maat: { w: d, h }, zaad: zaad + 9, modi: WAND(2, 1, 0.8, 0.3), helder: 0.7 });
+    // kopwanden: gedimde ledwand met woorden en patronen (een zwarte kopwand vulde in de schuine shots de halve beeldrand)
+    const kop = led.scherm({ palet: P4, maat: { w, h }, zaad: zaad + 17, modi: WAND(0, 1.5, 1.2, 0.4), helder: 0.32 });
+    ctx.doos({ w, d, h, vloer: zw, muur: s > 0 ? [tv, achter, kop, kop] : [achter, tv, kop, kop], plafond: zw });
+    LS.ledVloer(g, w, d, { palet: P4, tegel: 0.6, zaad });
     const gloed = gloedTex(ctx);
     // toog (blad op 1,01 m zoals de bar van de club), ledstrips aan de voorkant (looplicht)
     add(g, K.box, lam(0x1a0e08, { emissive: 0x040201 }), [bx, 0.475, 0], [0.6, 0.95, Lb]);
     add(g, K.box, new THREE.MeshPhongMaterial({ color: 0x15100c, emissive: 0x020101, shininess: 120, specular: 0x777777 }), [bx, 0.98, 0], [0.78, 0.06, Lb + 0.1]);
     const NSTRIP = [16, 12, 8][Z], strip = LS.lijnen(g, NSTRIP * 2, Z < 2, 4, 0.05), ZAS2 = new THREE.Vector3(0, 0, 1), SP = new THREE.Vector3();
-    // achterwand: donkere spiegel, drie planken met flessen die van achteren oplichten
+    // achterwand: het ledscherm, drie planken met flessen die van achteren oplichten
     const ax = s * (w / 2 - 0.2);
-    add(g, K.plane, basic(0x07080c), [s * (w / 2 - 0.04), 1.85, 0], [Lb * 0.95, 1.6, 1]).rotation.y = -s * Math.PI / 2;
     const plankMat = basic(0x140c06), plankLed = gloei(WARM, 0.8), nb = Math.floor(Lb * 0.9 / 0.18), plankY = [1.3, 1.75, 2.2];
     const flessen = new THREE.InstancedMesh(K.cyl, basic(0xffffff), nb * 3), FK = [0x3fbf38, 0xd08a2a, 0x3a7aff, 0xe8e8ff, 0xff3f6a, 0xffd23f], fles = [];
     plankY.forEach((y, j) => {
@@ -1345,18 +1218,18 @@
         const lk = st === 'break' ? 0.35 : 0.45 + 0.1 * sh.bas;
         lampZ.forEach((z, i) => { LP.set(bx, 2.2, z); L.bun.zet(L.nK + i, LP, NEER, 1.2, 0.55, kW, lk * 0.6); L.sp.zet(bx, 1.0, z, 1.0, kW, lk * 1.1); });
         // flessenwand: groove = een golf licht loopt per maat langs de flessen; opbouw sneller; drop = alles op de tel; break = zacht
-        const golf = st === 'break' ? -99 : ((sh.pos / (st === 'opbouw' ? (sh.opb < 0.5 ? 2 : 1) : 4)) % 1) * Lb * 1.3 - Lb * 0.65;
+        const golf = ((sh.pos / (st === 'break' ? 8 : st === 'opbouw' ? (sh.opb < 0.5 ? 2 : 1) : 4)) % 1) * Lb * 1.3 - Lb * 0.65;  // break: trage golf per 2 maten
         for (let i = 0; i < fles.length; i++) {
           const f = fles[i], dz = (f.z - golf) / 0.7;
-          const k = st === 'break' ? 0.18 : st === 'drop' ? 0.5 + 0.9 * Math.exp(-sh.fase * 4) * ((f.j + sh.tel) % 3 === 0 ? 1 : 0.5) : 0.22 + 1.1 * Math.exp(-dz * dz);
+          const k = st === 'break' ? 0.1 + 0.06 * Math.sin(now * 1.7 + i * 1.3) + 0.5 * Math.exp(-dz * dz * 0.5) : st === 'drop' ? 0.5 + 0.9 * Math.exp(-sh.fase * 4) * ((f.j + sh.tel) % 3 === 0 ? 1 : 0.5) : 0.22 + 1.1 * Math.exp(-dz * dz);
           flessen.setColorAt(i, C3.copy(f.c).multiplyScalar(k * (sh.flits > 0.5 ? 1.6 : 1)));
         }
         flessen.instanceColor.needsUpdate = true;
-        L.sp.zet(ax, 1.75, golf, 1.6, LS.kleur(PAL, 0), st === 'break' ? 0 : 0.35);  // de golf licht ook de muur achter de flessen op
+        L.sp.zet(ax, 1.75, golf, 1.6, LS.kleur(PAL, 0), st === 'break' ? 0.15 : 0.35);  // de golf licht ook de muur achter de flessen op
         // ledstrips onder de toog: looplicht op de tel (heen en terug per maat), drop = knipperen op de tel
         for (let i = 0; i < NSTRIP; i++) {
-          const u = (i + 0.5) / NSTRIP, run = (sh.pos % 2) / 2, dd = Math.min(Math.abs(u - run), Math.abs(1 - u - run));
-          const k = st === 'break' ? 0.12 : st === 'drop' ? (0.6 + 0.8 * pu) : 0.15 + 1.0 * Math.exp(-dd * dd * 60) + (st === 'opbouw' ? 0.4 * sh.opb : 0);
+          const u = (i + 0.5) / NSTRIP, run = st === 'break' ? (sh.pos % 8) / 8 : (sh.pos % 2) / 2, dd = Math.min(Math.abs(u - run), Math.abs(1 - u - run));
+          const k = st === 'break' ? 0.08 + 0.45 * Math.exp(-dd * dd * 30) : st === 'drop' ? (0.6 + 0.8 * pu) : 0.15 + 1.0 * Math.exp(-dd * dd * 60) + (st === 'opbouw' ? 0.4 * sh.opb : 0);
           const c = sh.flits > 0.5 ? LS.wit : LS.kleur(PAL, st === 'drop' ? i % 2 : 0);
           for (const [j, y] of [[0, 0.88], [1, 0.07]]) { SP.set(bx - s * 0.31, y, -Lb / 2 + (i / NSTRIP) * Lb); strip.zet(j * NSTRIP + i, SP, ZAS2, Lb / NSTRIP - 0.03, c, k, 0.03); }
         }
@@ -1379,7 +1252,7 @@
   } });
 
   // ============ 9. Omgekeerd: de ledvloer zit aan het plafond, de mensen dansen ondersteboven, uplights schijnen omhoog, de spiegelbol staat op de grond ============
-  DH.registreer('omgekeerd', { gewicht: 0.7, maak(ctx) {
+  DH.registreer('omgekeerd', { gewicht: 0.7 * MIXGEW, maak(ctx) {
     const r = () => ctx.rnd(), Z = ctx.zwaar, g = ctx.groep, K = kit();
     const PAL = kies(r, [[0x00e5ff, 0xff2d95, 0xffe600], [0xffe600, 0x7a2cff, 0xff3d00], [0x7cff00, 0xff6b00, 0x00e5ff]]).map(c => new THREE.Color(c));
     const w = Math.round(tussen(r, 11, 13)), d = Math.round(tussen(r, 12, 14)), h = +tussen(r, 6, 6.6).toFixed(2);
@@ -1387,13 +1260,16 @@
     // staande lampen op de vloer = uplights (moving heads die omhoog schijnen, naar de dansers aan het plafond)
     const lampPlek = [[-(w / 2 - 2), -d / 4], [w / 2 - 2, d / 4], [-(w / 2 - 2), d / 3], [w / 2 - 2, -d / 3]].slice(0, [4, 3, 2][Z]);
     const L = lichtset(ctx, { koppen: lampPlek.map(([x, z]) => [x, 1.35, z]), extra: 1, rig: { maat: { w, d, h }, pal: PAL, focus: { x: 0, y: h, z: 0 }, spreid: 0.07, sterk: 1.3, omhoog: true, patronen: ['omhoog', 'waaier', 'kruis', 'zwaai'] } });
-    // behang op z'n kop: de lambrisering zit boven
-    const omgT = T(ctx, 512, 512, (c, cw, ch) => { c.translate(0, ch); c.scale(1, -1); behang(c, cw, ch, r, '#141024', '#3a2a6a'); });
-    ctx.doos({ w, d, h, vloer: L.sp.mat(null, 0x121218), muur: wandShow(L.sp, omgT, w, d, 2.6, new THREE.Color(1.5, 1.5, 1.5)), plafond: dubbel(basic(0x050507)) });
+    // UPSIDE DOWN: de ledvloer hangt aan het plafond, de wanden zijn ledschermen (kosmos/jungle/chroom), de echte vloer een gedimd ledscherm
+    const led = LS.led(), zaad = zaadVan(r), P4 = LS.palet(PAL, 0x020104), BRON = kies(r, ['kosmos', 'uv-jungle', 'chroom']);
+    const zij = led.scherm({ bron: BRON, palet: P4, maat: { w: d, h }, zaad, modi: WAND(2, 1, 0.4, 0.3), helder: 0.55 });
+    const kop = led.scherm({ bron: BRON, palet: P4, maat: { w, h }, zaad: zaad + 2, modi: WAND(2, 1.2, 0.4, 0), helder: 0.5 });
+    const grond = led.scherm({ palet: P4, maat: { w, h: d }, zaad: zaad + 8, bron: null, modi: WAND(0, 2, 0, 0.4), helder: 0.3 });
+    ctx.doos({ w, d, h, vloer: grond, muur: [zij, zij, kop, kop], plafond: zwart() });
     const gloed = gloedTex(ctx);
     // de omgekeerde wereld: een groep met de 'vloer' tegen het plafond (y = 0 lokaal = plafond, x gespiegeld)
     const omg = new THREE.Group(); omg.position.y = h; omg.rotation.z = Math.PI; g.add(omg);
-    const tegels = tegelvloer(omg, w, d, PAL);
+    LS.ledVloer(omg, w, d, { palet: P4, tegel: 1.0, zaad, helder: 0.6 });  // vult het halve beeld: gedimd
     const bankMat = lam(0x1a0a22, { emissive: 0x040206 });
     const bankDelen = [];
     bank(omg, K, bankMat, w / 2 - 0.85, -d / 4, -Math.PI / 2, 2.4, 0, bankDelen);
@@ -1442,7 +1318,6 @@
       blijf: 13,
       update(dt, now) {
         const b = ctx.beat(), s = L.begin(), st = s.stand, pu = s.kick;
-        tegels(b, s, 0.55);  // het ledplafond vult het halve beeld: lager niveau
         // pinspot op de bol (vanaf de vloer)
         const pk = st === 'break' ? 0.8 : st === 'drop' ? 1 + 0.4 * s.knal : 0.6 + 0.2 * pu, pc = s.flits > 0.5 ? LS.wit : st === 'break' ? WIT : LS.kleur(PAL, 2);
         L.bun.zet(L.nK, PIN, PIND, PINL, 0.2, pc, pk * 0.8);
