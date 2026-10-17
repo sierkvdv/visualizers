@@ -19,6 +19,11 @@
 // doolhof.strand.shot = 'zee' zet de camera vast op één shot (null = weer op de tel kiezen). Burning Man (17-10 avond): shots 'brand' (wijd vanaf het
 // publiek) en 'brandOmhoog' (laag, omhoog); de camera knipt erheen bij aansteken en instorten; doolhof.strand.brand = het handvat van de
 // actieve kamer (.ontsteek()), doolhof.strand.info().laatste.brand = welk kunstwerk waar.
+// Op de muziek (17-10 avond, Sierk: "buiten licht gaat niet echt op de muziek"): alles slaat op de lichtklok van buiten-basis (uSlag op elke
+// tel, uKick/uSnare op echte aanslagen, uMaat per maat). Lichtrig (B.lichtrig): 8 moving heads om en om op de nok en de dakrand van de hut
+// schieten bundels over het publiek de lucht boven zee in (nooit landinwaarts: daar staat de Burning Man), pars voor de toog en aan de voet
+// van de feestpalmen. Ledstrips, palmlampjes en slingers jagen in stappen per tel en flitsen op de klap, speakers pompen op de kick, de
+// hut-lamp klapt op de tel en wisselt per maat van kleur (drop: per tel). doolhof.strand.info().rig = patroon/jager van de laatste rig.
 (function () {
   'use strict';
   const doolhof = window.doolhof = window.doolhof || {};
@@ -31,6 +36,7 @@
   const schud = (a, r) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; };
   const geenStraal = B.geenStraal;
   const tel = { gebouwd: 0, knallen: 0, laatste: null };
+  let laatsteRig = null;  // lichtrig van de laatst gebouwde strandkamer (info)
   const shMat = (vs, fs, eigen, o) => new THREE.ShaderMaterial(Object.assign({ uniforms: Object.assign({}, U, eigen || {}), vertexShader: KOP + vs, fragmentShader: KOP + fs }, o || {}));
   const addMat = (vs, fs, eigen, o) => shMat(vs, fs, eigen, Object.assign({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }, o || {}));
   const QUAD_P = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), QUAD_I = [0, 1, 2, 0, 2, 3];
@@ -114,19 +120,19 @@ void main() {
       float mond = abs(length(max(abs(cq - vec2(0.0, -0.17)) - vec2(0.13, 0.025 + 0.035 * hh), 0.0)) - 0.012);
       float m = smoothstep(0.022, 0.006, min(omtrek, min(oog, mond)));
       float aan = exp(-((mod(uTel * 0.5, 8.0) - id.x - 1.0) * (mod(uTel * 0.5, 8.0) - id.x - 1.0)) * 0.7);
-      c += palK(id.x + floor(uTel / 4.0)) * m * (0.22 + 1.1 * aan * (0.5 + 0.5 * uEn) + 0.7 * uDrop * step(0.5, fract(uTel + hh))) * niv;
+      c += palK(id.x + floor(uTel / 4.0)) * m * (0.22 + 1.1 * aan * (0.5 + 0.5 * uEn) + 0.7 * uSlag + 0.7 * uDrop * step(0.5, fract(uTel + hh))) * niv;
       float zz = abs(fract(vUv.x * 46.0) - 0.5) * 0.12;
       c += kl(vUv.x + uT * 0.1) * (smoothstep(0.014, 0.0, abs(vUv.y - 0.08 - zz)) + smoothstep(0.014, 0.0, abs(vUv.y - 0.92 + zz))) * (0.3 + 0.6 * uPuls) * niv;
     }
   } else if (s < 5.5) {     // ledstrips (dakrand, toog, mixer): looplicht in het palet, break ademt, drop knippert op de tel
-    float a = vUv.y + vK.y * 0.25;
-    float jaag = pow(0.5 + 0.5 * cos(TAU * (a * 3.0 - uTel * 0.5)), 6.0);
-    float k = mix(0.25 + 1.2 * jaag, 0.12 + 0.12 * sin(uT * 1.3 + a * 6.0), isBreak());
-    k += isDrop() * pow(1.0 - fract(uTel), 3.0) * 1.4 + 0.5 * isOpb() * uOpb * step(0.5, fract(uTel * 2.0 + a * 3.0));
-    c = palK(vK.y + floor(uTel / 2.0) + floor(a * 4.0)) * k * 1.3 * niv;
+    float a = vUv.y + vK.y * 0.25, stap = floor(uTel * (1.0 + isOpb() * step(0.5, uOpb)));
+    float aan = step(mod(floor(a * 12.0) - stap, 3.0), 0.5);   // één op de drie segmenten aan, per tel een stap (eind opbouw: per achtste)
+    float k = mix(0.2 + 0.85 * aan + 1.3 * uSlag + 0.4 * uKick, 0.12 + 0.12 * sin(uT * 1.3 + a * 6.0) + 0.25 * uSlag, isBreak());
+    k += isDrop() * uSlag * 1.2;
+    c = palK(vK.y + uMaat + floor(a * 4.0) + isDrop() * floor(uTel)) * k * 1.3 * niv;
   } else if (s < 6.5) {     // flessen: van achteren verlicht, een golf loopt per maat langs het schap
     float golf = exp(-(((vK.x - fract(uTel * 0.25)) * 7.0) * ((vK.x - fract(uTel * 0.25)) * 7.0)));
-    float k = 0.16 + 0.9 * golf * (0.5 + 0.5 * uEn) + 0.5 * uDrop * step(0.5, fract(uTel + vK.y * 0.37));
+    float k = 0.16 + 0.9 * golf * (0.5 + 0.5 * uEn) + 0.45 * uSlag + 0.5 * uDrop * step(0.5, fract(uTel + vK.y * 0.37));
     c = neon(fract(vK.y * 0.17 + 0.05)) * k * (0.45 + 0.7 * rim) * niv;
   } else if (s < 7.5) {     // draaitafels: streepjesring die met de poi-klok meedraait, label pulst
     c = vec3(0.015);
@@ -144,7 +150,7 @@ void main() {
     c = vec3(0.012, 0.012, 0.016) * (0.3 + Lm) + randK * 0.15;
     if (voor > 0.5) {
       vec2 p = vec2((vUv.x - 0.5) * 0.95, vUv.y * 1.7);
-      float pomp = 0.6 * uBas + 0.4 * pow(1.0 - fract(uTel), 6.0) * uEn;
+      float pomp = max(uKick, 0.8 * uSlag) + 0.2 * uBas;   // de ringen pompen op de kick en op de tel
       float d1 = length(p - vec2(0.0, 0.5)), d2 = length(p - vec2(0.0, 1.15)), dm = min(d1, d2), dt = length(p - vec2(0.0, 1.56));
       c = mix(c, vec3(0.018) * (0.7 + 0.3 * sin(dm * 70.0 - pomp * 6.0)), smoothstep(0.33, 0.31, dm));
       float ring = smoothstep(0.025, 0.0, abs(dm - (0.34 + 0.025 * pomp)));
@@ -202,9 +208,10 @@ void main() {
       float Nd = vH * 9.0, kI = floor(t * Nd), dl = (fract(t * Nd) - 0.5) * vH / Nd;
       float lamp = exp(-(dw * dw + dl * dl) / 0.0005) * smoothstep(0.03, 0.08, t) * smoothstep(0.99, 0.93, t);
       float u = kI / Nd;
-      float jaag = 0.3 + 0.7 * pow(0.5 + 0.5 * cos(TAU * (u * 2.5 - uTel * 0.5 + vI.x)), 4.0);
+      float aanP = step(mod(kI - floor(uTel) * 3.0 + floor(vI.x * 9.0), 9.0), 2.5);   // drie lampjes aan, per tel drie hoger
+      float jaag = 0.22 + 0.75 * aanP + 1.1 * uSlag + 0.3 * uKick;
       float twinkel = 0.4 + 0.6 * sin(uT * (0.8 + h11(kI + vI.x * 40.0)) + kI * 3.7);
-      float k = mix(jaag, twinkel, isBreak()) + isDrop() * pow(1.0 - fract(uTel), 3.0) * 1.3 + 0.6 * isOpb() * uOpb * step(0.5, fract(uTel * 2.0 + u * 4.0)) + uFlits;
+      float k = mix(jaag, twinkel + 0.3 * uSlag, isBreak()) + isDrop() * uSlag * 0.9 + 0.6 * isOpb() * uOpb * step(0.5, fract(uTel * 2.0 + u * 4.0)) + uFlits;
       vec3 lk = soort < 0.5 ? vec3(1.0, 0.7, 0.36) : soort < 0.85 ? neon(fract(kI * 0.13 + vI.x)) : palK(kI + floor(uTel / 4.0));
       c += lk * lamp * k * 1.4 * (1.0 - 0.3 * uBlack);
     }
@@ -241,7 +248,7 @@ void main() {   // donkere plank, neon rand (tegenlicht) en een streep die op de
   float streep = smoothstep(0.1, 0.04, abs(vL.x)) + smoothstep(0.05, 0.0, abs(abs(vL.x) - 0.5)) * 0.6;
   float jaag = pow(0.5 + 0.5 * cos(TAU * (vL.y * 0.6 - uTel * 0.5 + vI.y)), 4.0);
   vec3 c = vec3(0.02, 0.018, 0.025) + palK(vI.x * 3.0 + 1.0) * rim * (0.35 + 0.5 * uPuls) * niv;
-  c += palK(vI.x * 3.0) * streep * (0.2 + 0.9 * jaag + 0.6 * uDrop) * niv;
+  c += palK(vI.x * 3.0) * streep * (0.2 + 0.9 * jaag + 0.8 * uSlag + 0.6 * uDrop) * niv;
   gl_FragColor = vec4(flitsWit(c), 1.0);
 }`;
   const ZAK_FS = PAL_GLSL + `varying vec3 vN, vW, vL, vI;
@@ -254,7 +261,7 @@ void main() {   // papieren zakje met een kaarsje: warm of in het palet, uitgekn
   float h = clamp(vL.y / 0.26, 0.0, 1.0);
   vec2 sc = vec2(atan(vL.x, vL.z) * 2.2, vL.y * 26.0), sf = fract(sc) - 0.5;
   float gat = step(0.8, h21(floor(sc) + vI.z * 9.0)) * smoothstep(0.32, 0.12, length(sf)) * step(0.15, h) * step(h, 0.85);
-  float sterk = (0.2 + 0.7 * pow(1.0 - h, 1.5) + 0.7 * gat) * fl * (0.55 + 1.3 * golf + 0.35 * uPuls * uEn + 0.4 * uDrop) * (1.0 - 0.4 * uBlack);
+  float sterk = (0.2 + 0.7 * pow(1.0 - h, 1.5) + 0.7 * gat) * fl * (0.5 + 1.3 * golf + 0.8 * uSlag + 0.4 * uDrop) * (1.0 - 0.4 * uBlack);
   vec3 c = n.y > 0.9 ? k * 1.4 * fl : k * sterk;
   gl_FragColor = vec4(flitsWit(c), 1.0);
 }`;
@@ -276,7 +283,7 @@ void main() {
 void main() {
   vec3 n = normalize(vN), V = normalize(cameraPosition - vW);
   float rib = 0.75 + 0.25 * smoothstep(0.0, 0.15, abs(fract(n.y * 4.0) - 0.5));
-  float k = (0.7 + 0.2 * sin(uT * 3.0 + vZ * 7.0) + 0.45 * uPuls * uEn + 0.5 * uDrop) * (1.0 - 0.4 * uBlack);
+  float k = (0.55 + 0.2 * sin(uT * 3.0 + vZ * 7.0) + 0.85 * uSlag + 0.3 * uKick + 0.5 * uDrop) * (1.0 - 0.4 * uBlack);
   gl_FragColor = vec4(flitsWit(vKl * (0.45 + 0.6 * abs(dot(n, V))) * rib * k * 1.3), 1.0);
 }`;
   // --- wensballonnen: stijgen traag op en drijven naar zee (alles als functie van de tijd), in de break de hoofdrol ---
@@ -951,6 +958,22 @@ void main() {
     B.lichtslingers(g, lijnen.map(l => l.map(xyz)), { kleur: 'show', zak: 0.7, afstand: 0.3 });
     B.lichtslingers(g, [-1, 1].map(c => RELU.map(u => xyz(pierP(u, PY + 0.97, c * (PIER.b - 0.04))))), { kleur: 'warm', zak: 0.12, afstand: 0.26, grootte: 0.055 });
 
+    // ---------- lichtrig (zie de kop): koppen om en om op de dakrand (laag, vlak over het publiek) en de nok (steiler), richting zee; pars voor
+    // de toog en aan de voet van de feestpalmen, gericht op de stam ----------
+    const AZ_ZEE = sx * Math.PI / 2, NKOP = [8, 6, 4][Z], koppen = [], pars = [];
+    for (let i = 0; i < NKOP; i++) {
+      const s = NKOP > 1 ? i / (NKOP - 1) * 2 - 1 : 0, nok = i % 2 === 1;
+      const p = nok ? hutP(0.3, NY + 0.16, s * 0.95) : hutP(EX + 0.12, EY + 0.1, s * (EZ - 0.3));
+      koppen.push({ x: p.x, y: p.y, z: p.z, az: AZ_ZEE, el: nok ? 0.55 : 0.3, s });
+    }
+    for (const zl of [-3.45, -1.15, 1.15, 3.45]) { const p = hutP(3.0, 0.05, zl); pars.push({ x: p.x, y: 0.05, z: p.z, az: AZ_ZEE, el: 1.2 }); }
+    palmLijst.filter(p => p.rol === 'A' || p.rol === 'B').concat(palmLijst.filter(p => !p.rol && padAf(p.x, p.z) < 5)).slice(0, 6).forEach(p => {
+      const dx = wachtW.x - p.x, dz = wachtW.z - p.z, l = Math.hypot(dx, dz) || 1, px = p.x + dx / l * 0.6, pz = p.z + dz / l * 0.6;
+      pars.push({ x: px, y: 0.05, z: pz, az: Math.atan2(p.x - px, p.z - pz), el: 1.3 });
+    });
+    const rig = B.lichtrig(g, koppen, pars, { breed: 0.85, lengte: 46, dik: 0.035, parLengte: 7.5, rnd: r, zwaar: Z });
+    laatsteRig = rig;
+
     // ---------- deeltjes: uv-sporen boven het feest, lichtjes tussen de palmen, gloeiende plekken plankton op zee ----------
     const xs = (a, b) => [Math.min(X(a), X(b)), Math.max(X(a), X(b))];
     const [sx0, sx1] = xs(-11, 8), [lx0, lx1] = xs(-15, -7);
@@ -1047,10 +1070,10 @@ void main() {
     return {
       maat, route, blijf: 12, cam, publiek,
       update(dt) {
-        const sh = doolhof.show || {}, st = sh.stand || 'groove', pu = U.uPuls.value, en = U.uEn.value;
-        if (lampHut) {
-          if (sh.kleur) sh.kleur(Math.floor(Math.max(0, typeof beatPos === 'number' ? beatPos : 0) / 2), lampHut.color);
-          lampHut.intensity = 1.5 * (0.7 + 0.8 * pu * Math.max(0.3, en) + 0.6 * U.uDrop.value) * (1 - 0.5 * U.uBlack.value) + 2 * U.uFlits.value;
+        const sh = doolhof.show || {}, st = sh.stand || 'groove';
+        if (lampHut) {  // klapt op de tel (lichtklok), kleur per maat, in de drop per tel
+          if (sh.kleur) sh.kleur(st === 'drop' ? Math.floor(U.uTel.value) : U.uMaat.value, lampHut.color);
+          lampHut.intensity = 1.5 * (0.4 + 1.5 * U.uSlag.value + 0.5 * U.uKick.value + 0.6 * U.uDrop.value) * (1 - 0.5 * U.uBlack.value) + 2 * U.uFlits.value;
         }
         // na de hut-lamp: de Burning Man mengt zijn vuur over de geleende lamp; loopt de loper al naar de lift, dan steekt/stort hij nu
         // de loper blijft kijken tot het kunstwerk is ingestort (+ ~4 s nasmeulen); lukt dat niet (al bij de lift), dan haast de brand
@@ -1059,8 +1082,9 @@ void main() {
         if (brand && brand.aan && camStaat.fase !== 'voor' && !(brand.val >= 1 && brand.na > 0.05) && doolhof.houdLoper) houdt = doolhof.houdLoper(2.5);
         if (brand) { if (doolhof.strand) doolhof.strand.brand = brand; brand.update(dt, { haast: camStaat.fase === 'na' && !houdt, voor: camStaat.fase === 'voor' }); }  // (test: doolhof.strand.brand.ontsteek())
         if (publiek) {
-          PZET.helder = 0.5 + 0.25 * U.uVlam.value; PZET.flits = U.uFlits.value * 0.5; PZET.rand = 0.8 + 0.6 * pu; PZET.armen = 0.35 * U.uDrop.value;
-          PZET.gloed = 0.85 + 0.5 * pu + 0.6 * U.uDrop.value; PZET.b = U.uK1.value;
+          const sl = U.uSlag.value;
+          PZET.helder = 0.5 + 0.25 * U.uVlam.value; PZET.flits = U.uFlits.value * 0.5; PZET.rand = 0.75 + 0.9 * sl; PZET.armen = 0.35 * U.uDrop.value;
+          PZET.gloed = 0.75 + 0.9 * sl + 0.3 * U.uKick.value + 0.6 * U.uDrop.value; PZET.b = U.uK1.value;
           if (brand) { const k = Math.min(1, brand.gloed); PZET.helder += 0.35 * k; PZET.licht.lerpVectors(PLICHT0, brand.lichtP, 0.8 * k); }
           publiek.zet(PZET);
         }
@@ -1072,5 +1096,5 @@ void main() {
   }
 
   doolhof.registreer('strand', { gewicht: 0.7, buiten: true, maak: ctx => maak(ctx) });
-  doolhof.strand = { shot: null, info: () => ({ gebouwd: tel.gebouwd, knallen: tel.knallen, laatste: tel.laatste }) };
+  doolhof.strand = { shot: null, info: () => ({ gebouwd: tel.gebouwd, knallen: tel.knallen, laatste: tel.laatste, rig: laatsteRig ? laatsteRig.info() : null }) };
 })();

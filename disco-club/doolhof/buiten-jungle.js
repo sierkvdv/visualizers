@@ -21,6 +21,10 @@
 // Zwaar (ctx.zwaar 0/1/2): planten, figuren (de kern geeft er 10/6/5), publiek, mist en deeltjes schalen mee.
 // Test (console): doolhof.start('jungle') of doolhof.volgende = 'jungle'; doolhof.jungle.info() = tellers van de laatst gebouwde jungle;
 // doolhof.actief.cam.zet('bloem') = vast shot (null = weer vrij), doolhof.actief.cam.shots() = wat kan.
+// Op de muziek (17-10 avond, Sierk: "buiten licht gaat niet echt op de muziek"): alles slaat op de lichtklok van buiten-basis (uPuls = klap op
+// de tel of echte kick, uSlag, uKick, uMaat). Lichtrig (B.lichtrig): 8 moving heads in een boog achter de dj onder de reuzenbloem schieten
+// over de dj, het publiek en het vuur het bladerdak in; pars rond de open plek (omhoog) en tegen twee reuzenbomen. Nerven van varens en
+// palmbladen klappen op de tel, de dj-lamp klapt op de tel en wisselt per maat van kleur (drop: per tel). doolhof.jungle.info().rig.
 (function () {
   'use strict';
   const doolhof = window.doolhof = window.doolhof || {};
@@ -103,7 +107,7 @@ void main() {
   float ft = fract(uTel);
   float golf = mix(exp(-(((v - ft * 1.25 + 0.1) * 5.0) * ((v - ft * 1.25 + 0.1) * 5.0))) * (1.0 - 0.4 * ft), 0.5 + 0.5 * sin(v * 7.0 - uT * 1.6 + vI.y), isBreak());
   float niv = 1.0 - 0.65 * uBlack;
-  float k = (0.18 + 0.45 * uPuls * uEn + 0.9 * golf * (0.5 + 0.5 * uEn) + 0.25 * uOpb + 0.8 * uDrop) * niv;
+  float k = (0.16 + 0.35 * uPuls * uEn + 0.6 * uSlag + 0.9 * golf * (0.5 + 0.5 * uEn) + 0.25 * uOpb + 0.8 * uDrop) * niv;
   vec3 c = vec3(0.004, 0.016, 0.01) * (0.6 + 0.8 * v);
   c += gk * (hoofd * 1.1 + zij * 0.7 + rand * 0.3 + punt * 0.5) * k + gk * (0.06 + 0.05 * golf) * niv * blad;
   vec3 n = normalize(vN), Lv = uVuurW - vW;
@@ -404,7 +408,7 @@ void main() {
   vec3 kk = mix(neon(fract(acc * 0.2 + vR * 0.07 + stap * 0.17 + uT * 0.02)), jpal(vRing * 0.33 + v * 0.3), 0.35);
   float puls = exp(-((vR - fract(uTel) * 4.5) * (vR - fract(uTel) * 4.5)) * 3.0) * (1.0 - 0.6 * isBreak());
   float niv = 1.0 - 0.65 * uBlack;
-  float hel = (0.1 + 0.2 * uEn + 0.3 * uPuls * uEn + 0.8 * puls + 0.6 * uDrop) * (0.35 + 0.65 * clamp(uOpen, 0.0, 1.0)) * niv;
+  float hel = (0.1 + 0.2 * uEn + 0.3 * uPuls * uEn + 0.6 * puls + 0.5 * uSlag + 0.6 * uDrop) * (0.35 + 0.65 * clamp(uOpen, 0.0, 1.0)) * niv;   // klapt op de tel
   vec3 c = vec3(0.012, 0.003, 0.014) + kk * (0.06 + 0.4 * smoothstep(0.4, 2.6, acc) + 0.5 * smoothstep(0.05, 0.0, mn)) * hel;
   c += kk * (smoothstep(0.8, 1.0, abs(u)) + smoothstep(0.93, 1.0, v)) * (0.25 + 0.7 * puls + 0.4 * uDrop) * niv;
   c += mix(kk, vec3(1.0), 0.3) * exp(-u * u * 260.0) * (0.12 + 0.5 * puls) * niv;
@@ -710,7 +714,7 @@ void main() { vec2 c = gl_PointCoord * 2.0 - 1.0; float d = dot(c, c); if (d > 1
   // =====================================================================================================================================
   // de kamer (generator: de kern bouwt hem in stappen, elke yield = pauzeplek)
   // =====================================================================================================================================
-  let laatste = null;
+  let laatste = null, laatsteRig = null;
   function* bouw(ctx) {
     const r = ctx.rnd, Z = ctx.zwaar | 0, g = ctx.groep, sx = r() < 0.5 ? -1 : 1, X = x => sx * x;
     const maat = { w: KW_, d: KD, h: 12 };
@@ -1047,6 +1051,23 @@ void main() { vec2 c = gl_PointCoord * 2.0 - 1.0; float d = dot(c, c); if (d > 1
       const pil = IND.PIL.map(p => ({ x: X(p.x - Math.sin(p.kant) * p.h), y: p.h + 0.2, z: p.z }));
       B.lichtslingers(g, [boven, onder, [pil[0], onder[onder.length - 1]].filter(Boolean), [pil[1], boven[0]].filter(Boolean)].filter(l => l.length > 1), { kleur: 'neon', zak: 0.45 });
     }
+    // lichtrig (zie de kop): koppen op de grond in een boog achter de stronk (het midden blijft vrij voor de bloemsteel), richting het vuur;
+    // pars net buiten de open plek (iets naar buiten gekanteld, het bladerdak in) en op 3 m van twee reuzenbomen (strijklicht langs de stam)
+    {
+      const AZ_P = Math.atan2(-sx, 0), NKOP = [8, 6, 4][Z], koppen = [], pars = [], O = IND.OPEN;
+      const DZ = [-4.4, 4.4, -3.3, 3.3, -2.3, 2.3, -1.5, 1.5].slice(0, NKOP).sort((a, b) => a - b);
+      for (const dz of DZ) koppen.push({ x: X(12.75 - 0.2 * Math.abs(dz)), y: 0.3, z: DJ.z + dz, az: AZ_P, el: 0.62, s: dz / 4.4 });
+      for (const a of [55, 305, 105, 255, 155, 205]) {
+        const ar = a * Math.PI / 180, x = O.x + O.rx * 1.04 * Math.cos(ar), z = O.z + O.rz * 1.04 * Math.sin(ar);
+        if (routeAfstand(x, z) < 1.4 || Math.hypot(x - IND.WACHT.x, z - IND.WACHT.z) < 2.6 || fakkelB.some(q => Math.hypot(x - q.x, z - q.z) < 0.7) || FIG.some(q => Math.hypot(x - q.x, z - q.z) < 0.9)) continue;
+        pars.push({ x: X(x), y: 0.05, z, az: Math.atan2(sx * Math.cos(ar), Math.sin(ar)), el: 1.42 });
+      }
+      for (const [bx, bz] of [[13.8, 8.6], [14.2, -6.4]]) {
+        const dx = O.x - bx, dz = O.z - bz, l = Math.hypot(dx, dz), px = bx + dx / l * 3.0, pz = bz + dz / l * 3.0;
+        pars.push({ x: X(px), y: 0.05, z: pz, az: Math.atan2(X(bx) - X(px), bz - pz), el: 1.0 });
+      }
+      laatsteRig = B.lichtrig(g, koppen, pars, { breed: 0.75, lengte: 30, dik: 0.04, parLengte: 8, rnd: r, zwaar: Z });
+    }
     B.gloed(g, [{ x: X(voet.x), y: 0.06, z: voet.z, r: 2.6, kleur: 0x30e0ff }, { x: X(IND.ALTAAR.x - 0.05), y: ST.h + 0.97, z: DJ.z - 0.45, r: 0.3, kleur: PAL[1] },
       { x: X(IND.ALTAAR.x - 0.05), y: ST.h + 0.97, z: DJ.z + 0.45, r: 0.3, kleur: PAL[2] }], { plat: true, sterk: 0.75 });
     B.gloed(g, [{ x: X(F.x + 0.5), y: F.y, z: F.z, r: 6, kleur: PAL[0] }], { plat: false, sterk: 0.16 });
@@ -1168,20 +1189,21 @@ void main() { vec2 c = gl_PointCoord * 2.0 - 1.0; float d = dot(c, c); if (d > 1
         draai = (draai + dt * (st === 'break' ? 0.04 : st === 'opbouw' ? 0.12 + 0.5 * opb : st === 'drop' ? 0.35 + 0.9 * dr : 0.12 + 0.1 * pu)) % (TAU * 100);
         UB.uDraai.value = draai;
         // dj-licht in de showkleur (drop: elke tel een andere)
-        if (sh.kleur) sh.kleur(st === 'drop' ? Math.floor(typeof beatPos === 'number' ? beatPos : 0) : 0, kD); else kD.copy(PAL[0]);
+        if (sh.kleur) sh.kleur(st === 'drop' ? Math.floor(B.U.uTel.value) : B.U.uMaat.value, kD); else kD.copy(PAL[0]);   // per maat, drop per tel
         UJ.uDjK.value.copy(kD);
-        UJ.uDjI.value = (0.25 + 0.9 * pu * en + 0.7 * dr + 0.3 * opb) * (1 - 0.6 * bl) + 0.8 * fl;
+        const sl = B.U.uSlag.value, kk = B.U.uKick.value;
+        UJ.uDjI.value = (0.18 + 1.25 * sl + 0.4 * kk + 0.7 * dr + 0.3 * opb) * (1 - 0.6 * bl) + 0.8 * fl;   // klap op de tel (lichtklok)
         if (lampDj) { lampDj.color.copy(kD); lampDj.intensity = 0.3 + 1.4 * UJ.uDjI.value; }
         H.zet({ trip: 0.3 + (st === 'opbouw' ? 0.5 * opb : 0) + 0.7 * dr, aurora: 0.65 + 0.35 * dr });
         if (sh.kleur) sh.kleur(1, kB); else kB.copy(PAL[1]);
         const vl = B.U.uVlam.value;
-        if (publiek) publiek.zet({ a: VUURK, b: kB, helder: 0.5 + 0.25 * vl, flits: fl * 0.5, rand: 0.8 + 0.6 * pu, armen: 0.35 * dr + 0.15 * opb, gloed: 1 + 0.6 * dr });
-        if (vijverVolk) vijverVolk.zet({ b: kB, helder: 0.45, flits: fl * 0.5, rand: 0.9 + 0.5 * pu, armen: 0.3 * dr, gloed: 1 + 0.5 * dr });
+        if (publiek) publiek.zet({ a: VUURK, b: kB, helder: 0.5 + 0.25 * vl, flits: fl * 0.5, rand: 0.75 + 0.9 * sl, armen: 0.35 * dr + 0.15 * opb, gloed: 0.8 + 0.8 * sl + 0.25 * kk + 0.6 * dr });
+        if (vijverVolk) vijverVolk.zet({ b: kB, helder: 0.45, flits: fl * 0.5, rand: 0.8 + 0.8 * sl, armen: 0.3 * dr, gloed: 0.8 + 0.7 * sl + 0.5 * dr });
       },
       opruimen() { if (publiek) publiek.opruimen(); if (vijverVolk) vijverVolk.opruimen(); if (brand) brand.opruimen(); },
     };
   }
 
   doolhof.registreer('jungle', { gewicht: 0.7, buiten: true, maak: ctx => bouw(ctx) });
-  doolhof.jungle = { info: () => laatste, indeling: IND };
+  doolhof.jungle = { info: () => laatste && Object.assign({}, laatste, { rig: laatsteRig ? laatsteRig.info() : null }), indeling: IND };
 })();

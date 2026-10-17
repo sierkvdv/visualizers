@@ -51,7 +51,23 @@
 //       'volg' (schouderhoogte achter/naast de loper), 'held' (laag op een vuurdanser), 'drone' (hoog over alles), 'kraan' (stijgt op),
 //       'baan' (traag rond vuur/dj), 'ingang', 'toren' (omhoog langs de lift), 'vuur' (laag langs het kampvuur), 'tegen' (van de toren terug).
 //       shots = lijst namen (null = alles wat kan); o: { vuur: {x, z}, dj: {x, z}, dansers: [figs of {x, z}], hoog (max cam-hoogte, 18) }
-//   B.U  gedeelde uniforms (uT, uTel, uReis, uPuls, uEn, uBas, uMid, uHoog, uOpb, uDrop, uFlits, uBlack, uStand, uSpin, uVlam, uPx, uK0..2)
+//   B.lichtrig(groep, koppen, pars, o) -> { bundels, lampen, info() }   festival-lichtshow in 2 draws: moving heads (koppen [{ x, y, z, az, el,
+//       s (-1..1 plek in de rij) }]) schieten bundels die per frase een ander patroon draaien (waaier die op de tel opengaat, zwaai per maat,
+//       schaar, golf, cirkels, pomp omhoog op de tel, kruis; drop: wijd en wit), aan/uit-jagers per tel, kleur per maat (drop per tel);
+//       par-spots (pars [{ x, y, z, az, el }]) jagen per tel rond en flitsen samen op de kick, met grondgloed. Lens van elke lamp als
+//       stip (fel als hij naar de camera wijst). Break dim en traag, opbouw sneller (beweging x2/x4, jagers in achtsten), blackout telt.
+//       o: breed (halve waaier, rad), lengte (m, 40), dik (tan halve bundelhoek, 0.04), parLengte (7), parDik (0.2), sterk (1), zwaar.
+//       Geen stralen (moshpit/camera), frustumCulled uit (alles beweegt in de vertex-shader).
+//   B.U  gedeelde uniforms (uT, uTel, uReis, uPuls, uEn, uBas, uMid, uHoog, uOpb, uDrop, uFlits, uBlack, uStand, uSpin, uVlam, uPx, uK0..2,
+//       uSlag, uKick, uSnare, uMaat, uRigT). LICHTKLOK (17-10 avond, Sierk: "buiten licht gaat niet echt op de muziek"; gemeten op de tv:
+//       pulse kwam bij halftime-dubstep maar ~1x per 2 s): uTel = de tel van de lichtklok. Zonder geluid (demo) = de beatvolger; met geluid
+//       een eigen klok op clubStijl.bpm (onder 95 x2; de beatvolger zat bij dnb/dubstep ernaast), de fase vastgezet op eigen aanslagen
+//       (kick = bas-flux, snare = midden+hoog-flux, plus de kicks van de beatvolger) met een kleine PLL; 4x op rij op de halve tel = een
+//       halve tel opschuiven. uSlag = klap op elke tel van de lichtklok (hard aan, weg in ~40% van de tel), zo hard als de drums daar in de
+//       maat slaan (4 bakjes: halftime slaat op 1 en 3, four-on-the-floor elke tel); opbouw achtsten/zestienden, break zacht, drop vol.
+//       uKick/uSnare = echte aanslagen (0..1, snel weg), uPuls = max(uSlag, uKick) (alle oude uPuls-termen slaan nu op de tel),
+//       uMaat = maatteller (kleurstap per maat), uRigT = bewegingsklok van de lichtrig (break x0,5, opbouw x2/x4). flitsWit pompt alles
+//       wat zelf licht mee op de tel (0,86..1,3). Test: B.klok() = { tel, bpm, bron, fijn, een, bak, kicks, snares }.
 //   B.KOP  GLSL-kop (hashes, ruis, kleuren, standen) voor eigen shaders: vertexShader/fragmentShader = B.KOP + eigen code; uniforms:
 //       Object.assign({}, B.U, eigen)
 //   B.demo(ctx) -> kamer   voorbeeld/test met alles erin. Proef in de club (console): doolhof.registreer('buiten-demo', { gewicht: 0,
@@ -90,10 +106,82 @@
     uT: f(0), uTel: f(0), uReis: f(0), uPuls: f(0), uEn: f(0), uBas: f(0), uMid: f(0), uHoog: f(0), uOpb: f(0), uDrop: f(0),
     uFlits: f(0), uBlack: f(0), uStand: f(0), uSpin: f(0), uVlam: f(1), uPx: f(500), uZwaar: f(0),
     uK0: f(new THREE.Color(0xff0080)), uK1: f(new THREE.Color(0x00e5ff)), uK2: f(new THREE.Color(0x7a00ff)),
+    uSlag: f(0), uKick: f(0), uSnare: f(0), uMaat: f(0), uRigT: f(0),
   };
   const G = { tc: 0, spin: 0, reis: 0, tijd: 0, vlam: 1 };
   const BUF = new THREE.Vector2();
   const klokNaar = (x, doel, dt) => { let d = doel - x; d -= Math.round(d); return x + d * (1 - Math.exp(-dt * 1.5)); };  // fase bijtrekken zonder sprong
+  // lichtklok (zie de kop): tel, wachtende fasecorrectie, PLL-fijnregeling, aanslag-volgers, bakjes per plek in de maat (kick/alles)
+  const LK = { tel: 0, corr: 0, fijn: 0, bron: 'volger', bpm: 120, bPrev: 0, sPrev: 0, bGem: 0, sGem: 0, fB: 0.03, fS: 0.03, tK: -9, tS: -9,
+    kick: 0, snare: 0, slag: 0, scheef: 0, bak: [1, 1, 1, 1], kb: [1, 1, 1, 1], een: 0, puPrev: 0, kicks: 0, snares: 0, rigK: 1, rigOff: 0, rigT: 0 };
+  const VERTRAAG = 0.025, ACC_HALF = [1, 0.5, 0.9, 0.5], ACC_VOL = [1, 0.85, 0.9, 0.85];  // s: de banden zijn afgevlakt, een aanslag komt ~1-2 beelden na de klap binnen
+  function lichtklok(dt, st, opb, en, pu, B, per, tb) {
+    const nu = performance.now() / 1000, isLive = typeof live !== 'undefined' && !!live;
+    // aanslagen: positieve flux t.o.v. het eigen gemiddelde (drempel past zich aan: een wobble-bas maakt geen kicks), plus de beatvolger
+    let kickNu = 0, snareNu = 0;
+    if (B) {
+      const b = B[0].v, s = 0.6 * B[1].v + 0.4 * B[2].v, db = b - LK.bPrev, ds = s - LK.sPrev;
+      LK.bPrev = b; LK.sPrev = s;
+      const kg = 1 - Math.exp(-dt / 0.35), kf = 1 - Math.exp(-dt / 2);
+      LK.bGem += (b - LK.bGem) * kg; LK.sGem += (s - LK.sGem) * kg;
+      if (db > 0) LK.fB += (db - LK.fB) * kf;
+      if (ds > 0) LK.fS += (ds - LK.fS) * kf;
+      if (db > Math.max(0.03, 2.2 * LK.fB) && b > 0.25 && b > LK.bGem * 1.1 && nu - LK.tK > 0.2) { kickNu = klem(db * 4, 0.5, 1); LK.tK = nu; }
+      if (ds > Math.max(0.03, 2.2 * LK.fS) && s > 0.25 && s > LK.sGem * 1.1 && nu - LK.tS > 0.16 && nu - LK.tK > 0.06) { snareNu = klem(ds * 4, 0.4, 1); LK.tS = nu; }
+    }
+    if (pu > LK.puPrev + 0.5 && nu - LK.tK > 0.12) { kickNu = 1; LK.tK = nu; }  // de beatvolger zag een kick
+    LK.puPrev = pu;
+    if (kickNu) LK.kicks++;
+    if (snareNu) LK.snares++;
+    LK.kick = Math.max(LK.kick * Math.exp(-dt / 0.13), kickNu);
+    LK.snare = Math.max(LK.snare * Math.exp(-dt / 0.1), snareNu);
+    // tempo en fase
+    const cs = window.clubStijl;
+    let bpmS = isLive && cs && cs.bpm >= 60 && cs.bpm <= 200 ? cs.bpm : 0;
+    if (bpmS && bpmS < 95) bpmS *= 2;  // stijl in het halve octaaf (lounge 71 bij een set van 142): het licht slaat op het hele tempo
+    if (!bpmS) {  // demo of nog geen tempo: de beatvolger (G.tc, zonder sprongen); de klok glijdt erheen
+      LK.bron = 'volger'; LK.bpm = 60 / per; LK.fijn = 0;
+      LK.tel += dt / per;
+      const d = G.tc - LK.tel;
+      if (Math.abs(d) > 4) LK.tel = G.tc; else LK.tel += d * (1 - Math.exp(-dt * 8));
+    } else {
+      LK.bron = 'eigen'; LK.bpm = bpmS;
+      LK.tel += dt * bpmS / 60 * (1 + LK.fijn);
+      const w = kickNu ? 1 : snareNu ? 0.6 : 0;
+      if (w) {  // elke aanslag trekt de fase naar de dichtstbijzijnde tel; de PLL stelt het tempo een paar procent bij
+        const x = LK.tel + LK.corr - VERTRAAG * bpmS / 60, e = x - Math.round(x);
+        if (Math.abs(e) < 0.3) { LK.corr -= e * 0.5 * w; LK.fijn = klem(LK.fijn - e * 0.015 * w, -0.04, 0.04); LK.scheef = 0; }
+        else if (Math.abs(e) > 0.38 && ++LK.scheef >= 4) { LK.corr += 0.5; LK.scheef = 0; }  // klok stond op de halve tel
+      }
+      const stap = LK.corr * (1 - Math.exp(-dt * 14)); LK.tel += stap; LK.corr -= stap;
+    }
+    // waar in de maat slaan de drums: bakjes per plek (vergeten ~7% per aanslag); de kick-bakjes kiezen tel 1
+    const xg = LK.tel - VERTRAAG * LK.bpm / 60;
+    if ((kickNu || snareNu) && Math.abs(xg - Math.round(xg)) < 0.25) {  // alleen aanslagen op de tel (een snare op de achtste telt niet)
+      const pos = (((Math.round(xg) - LK.een) % 4) + 4) % 4;
+      for (let i = 0; i < 4; i++) { LK.bak[i] *= 0.93; if (kickNu) LK.kb[i] *= 0.93; }
+      LK.bak[pos] += kickNu ? 1 : 0.7;
+      if (kickNu) LK.kb[pos] += 1;
+      let m = 0; for (let i = 1; i < 4; i++) if (LK.kb[i] > LK.kb[m]) m = i;
+      if (m !== 0 && LK.kb[m] > 1.4 * LK.kb[0] && LK.kb[m] > 2) {  // tel 1 verschuift: bakjes meedraaien
+        LK.een = (LK.een + m) % 4;
+        LK.bak = LK.bak.slice(m).concat(LK.bak.slice(0, m)); LK.kb = LK.kb.slice(m).concat(LK.kb.slice(0, m));
+      }
+    }
+    // de klap op de tel: hard aan, weg in ~40% van de tel; hoe hard hangt af van de plek in de maat en van de stand
+    const tl = LK.tel - LK.een, b = Math.floor(tl), pos = ((b % 4) + 4) % 4, ph = tl - b;
+    const mx = Math.max(LK.bak[0], LK.bak[1], LK.bak[2], LK.bak[3]);
+    const half = !!(window.clubStijl && clubStijl.preset && clubStijl.preset.halveTel);
+    const acc = mx > 1.5 ? 0.35 + 0.65 * LK.bak[pos] / mx : (half ? ACC_HALF : ACC_VOL)[pos];   // nog geen gegevens: naar de stijl
+    let slag = Math.exp(-ph / 0.14) * acc * (pos === 0 ? 1 : 0.88);
+    if (st === 'opbouw' && opb > 0.5) { const n = opb < 0.75 ? 2 : 4; slag = Math.max(slag, Math.exp(-((tl * n) % 1) / 0.14) * (0.35 + 0.5 * opb)); }
+    const sf = st === 'break' ? 0.35 : st === 'opbouw' ? 0.7 + 0.3 * opb : st === 'drop' ? 1 : 0.9;
+    LK.slag = slag * sf * (0.6 + 0.4 * klem(en, 0, 1));
+    // bewegingsklok van de lichtrig: break half, opbouw x2/x4; bij een wissel springt hij hooguit een halve tel
+    const k = st === 'break' ? 0.5 : st === 'opbouw' ? (opb < 0.5 ? 1 : opb < 0.75 ? 2 : 4) : 1;
+    if (k !== LK.rigK) { LK.rigOff = Math.round(LK.rigT - LK.tel * k); LK.rigK = k; }
+    LK.rigT = LK.tel * k + LK.rigOff;
+  }
   clubHooks.push(dt => {
     dt = klem(+dt || 0, 0, 0.1);
     const sh = doolhof.show || {}, st = sh.stand || 'groove';
@@ -104,19 +192,23 @@
     const tc0 = G.tc;
     if (Math.abs(tb - G.tc) > 1.5) G.tc = tb; else { G.tc += dt / per; G.tc += (tb - G.tc) * (1 - Math.exp(-dt * 10)); }
     const dtb = klem(G.tc - tc0, 0, 2), opb = sh.opbouw || 0, drop = sh.drop || 0;
+    lichtklok(dt, st, opb, en, pu, B, per, tb);
+    const puls = Math.max(LK.slag, LK.kick);
     const rate = st === 'break' ? 0.5 : st === 'opbouw' && opb > 0.75 ? 2 : 1;  // 1 omwenteling per tel; break half, eind opbouw dubbel
     G.spin = klokNaar(G.spin + dtb * rate, G.tc * rate, dt);
-    // reis: de showklok (break traag, opbouw versnellend, drop hard, elke kick een duw)
+    // reis: de showklok (break traag, opbouw versnellend, drop hard, elke tel een duw)
     const v = st === 'break' ? 0.6 : st === 'opbouw' ? 0.8 + 2.2 * opb * opb : st === 'drop' ? 1.6 + 1.6 * drop : 1;
-    G.reis = (G.reis + dt * v * (0.6 + 0.8 * pu * Math.max(0.25, en) + 0.3 * bas)) % 3600;
+    G.reis = (G.reis + dt * v * (0.6 + 0.8 * puls * Math.max(0.25, en) + 0.3 * bas)) % 3600;
     G.tijd = (G.tijd + dt) % 3600;
-    // vlam: hoe hoog het vuur slaat (snel omhoog, traag omlaag)
-    const vd = (st === 'break' ? 0.6 : st === 'opbouw' ? 0.85 + 0.5 * opb : st === 'drop' ? 1.2 + 0.9 * drop : 1) + 0.45 * pu * en;
+    // vlam: hoe hoog het vuur slaat (snel omhoog, traag omlaag; echte kicks geven een steek)
+    const vd = (st === 'break' ? 0.6 : st === 'opbouw' ? 0.85 + 0.5 * opb : st === 'drop' ? 1.2 + 0.9 * drop : 1) + 0.45 * LK.kick * en;
     G.vlam += (vd - G.vlam) * Math.min(1, dt * (vd > G.vlam ? 9 : 2.5));
-    U.uT.value = G.tijd; U.uTel.value = tb % 512; U.uReis.value = G.reis; U.uSpin.value = G.spin % 256;
-    U.uPuls.value = pu; U.uEn.value = en; U.uBas.value = bas; U.uMid.value = B ? B[1].v : 0; U.uHoog.value = B ? B[2].v : 0;
+    U.uT.value = G.tijd; U.uTel.value = Math.max(0, LK.tel) % 512; U.uReis.value = G.reis; U.uSpin.value = G.spin % 256;
+    U.uPuls.value = puls; U.uEn.value = en; U.uBas.value = bas; U.uMid.value = B ? B[1].v : 0; U.uHoog.value = B ? B[2].v : 0;
     U.uOpb.value = st === 'opbouw' ? opb : 0; U.uDrop.value = drop; U.uFlits.value = sh.flits || 0; U.uBlack.value = sh.blackout || 0;
     U.uStand.value = STAND[st] || 0; U.uVlam.value = G.vlam; U.uZwaar.value = zwaarNu();
+    U.uSlag.value = LK.slag; U.uKick.value = LK.kick; U.uSnare.value = LK.snare;
+    U.uMaat.value = ((Math.floor((LK.tel - LK.een) / 4) % 256) + 256) % 256; U.uRigT.value = ((LK.rigT % 512) + 512) % 512;
     U.uPx.value = renderer.getDrawingBufferSize(BUF).y * 0.5;
     if (sh.kleur) { sh.kleur(0, U.uK0.value); sh.kleur(1, U.uK1.value); sh.kleur(2, U.uK2.value); }
   });
@@ -124,6 +216,7 @@
   // ---------- GLSL-kop (ShaderMaterial: three zet precisie en de standaard-attributen/matrices er zelf voor) ----------
   const KOP = `
 uniform float uT, uTel, uReis, uPuls, uEn, uBas, uMid, uHoog, uOpb, uDrop, uFlits, uBlack, uStand, uSpin, uVlam, uPx, uZwaar;
+uniform float uSlag, uKick, uSnare, uMaat, uRigT;
 uniform vec3 uK0, uK1, uK2;
 #define TAU 6.2831853
 #define PI 3.1415927
@@ -145,7 +238,8 @@ vec3 vuurKleur(float l) {  // 0 = kern (wit-geel), dan oranje, rood, donker
   c = mix(c, vec3(0.85, 0.11, 0.03), smoothstep(0.3, 0.75, l));
   return c * (1.35 - l);
 }
-vec3 flitsWit(vec3 c) { return mix(c, vec3(0.03 + 1.2 * max(c.r, max(c.g, c.b))), uFlits * 0.6); }
+// alles wat zelf licht pompt mee op de tel (ledscherm-gevoel; donker blijft donker, in de break bijna niet), strobe = wit
+vec3 flitsWit(vec3 c) { c *= 0.86 + 0.32 * uSlag + 0.14 * uKick; return mix(c, vec3(0.03 + 1.2 * max(c.r, max(c.g, c.b))), uFlits * 0.6); }
 `;
   // materiaal-fabrieken: eigen exemplaar per aanroep (de kern ruimt het op), zelfde bron = zelfde programma
   const shMat = (vs, fs, eigen, o) => new THREE.ShaderMaterial(Object.assign({ uniforms: Object.assign({}, U, eigen || {}), vertexShader: KOP + vs, fragmentShader: KOP + fs }, o || {}));
@@ -604,7 +698,7 @@ void main() {
   }
   if (uPad > 0.0) {  // rune bovenop, een golf licht loopt langs het pad naar de uitgang
     float per = mix(mix(8.0, 2.0, isDrop()), 16.0, isBreak());
-    float gp = fract(uTel / per) * 1.3 - 0.15, golf = 0.3 + 1.6 * exp(-(((vS.x - gp) * 9.0) * ((vS.x - gp) * 9.0)));
+    float gp = fract(uTel / per) * 1.3 - 0.15, golf = 0.25 + 1.4 * exp(-(((vS.x - gp) * 9.0) * ((vS.x - gp) * 9.0))) + 1.2 * uSlag + 0.3 * uKick;   // + klap op de tel
     float rr = length(vL.xz);
     float lijn = smoothstep(0.07, 0.0, abs(rr - 0.55)) + smoothstep(0.06, 0.0, abs(vL.x * 0.7 + vL.z * 0.7)) * step(rr, 0.55);
     c += kl(vS.x + uT * 0.05) * smoothstep(0.4, 0.8, n.y) * lijn * golf * uPad * niv;
@@ -1275,7 +1369,7 @@ void main() {
   vec4 v = mix(va, vb, position.y * 0.5 + 0.5);
   v.xy += dir * position.y * uDik + nr * position.x * uDik;
   vC = position.xy; vL = L / uDik;
-  vKl = iK * uHelder * (0.85 + 0.3 * uPuls * uEn + 0.4 * uDrop) * (1.0 - 0.25 * uBlack) * step(1e-4, distance(uA[i], uB[i]));
+  vKl = iK * uHelder * (0.62 + 0.75 * uSlag + 0.3 * uKick + 0.4 * uDrop) * (1.0 - 0.25 * uBlack) * step(1e-4, distance(uA[i], uB[i]));
   gl_Position = projectionMatrix * v;
 }`;
   const STICK_FS = `varying vec2 vC; varying vec3 vKl; varying float vL;
@@ -1373,9 +1467,12 @@ varying vec3 vKl; varying float vA;
 void main() {
   float s = aI.x, z = aI.y;
   vec3 col = uKleur < 0.5 ? vec3(1.0, 0.72, 0.38) : uKleur < 1.5 ? neon(fract(floor(s * 400.0) * 0.17 + 0.92)) : klH(floor(s * 400.0) + floor(uTel / 4.0));
-  float jaag = 0.35 + 0.65 * pow(0.5 + 0.5 * cos(TAU * (s * 6.0 - uTel * 0.5)), 4.0);
+  // jager in stappen: 2 van elke 6 groepjes aan, per tel 2 groepjes verder (opbouw: per achtste); alles flitst op de klap van de tel
+  float grp = floor(s * 120.0), stap = floor(uTel * (1.0 + isOpb() * step(0.5, uOpb)));
+  float aan = step(mod(grp - stap * 2.0, 6.0), 1.5) + isDrop() * step(0.5, fract((grp + floor(uTel)) * 0.5)) * 0.6;
+  float jaag = 0.22 + 0.7 * aan + 1.15 * uSlag + 0.35 * uKick;
   float twinkel = 0.45 + 0.55 * sin(uT * (0.7 + z) + z * 30.0);
-  float k = mix(jaag, twinkel, isBreak()) + isDrop() * pow(1.0 - fract(uTel), 3.0) * 1.5 + uFlits;
+  float k = mix(jaag, twinkel + 0.3 * uSlag, isBreak()) + isDrop() * uSlag * 0.8 + uFlits;
   vKl = col * 1.3; vA = k * (1.0 - 0.4 * uBlack);
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_PointSize = clamp(uGrootte * projectionMatrix[1][1] * uPx / max(0.1, -mv.z), 1.5, 40.0);
@@ -1413,7 +1510,7 @@ uniform float uPlat, uSterk, uGolf;
 varying vec2 vC; varying vec3 vKl;
 void main() {
   vec3 b = (modelMatrix * vec4(iP.xyz, 1.0)).xyz;
-  float k = uSterk * (0.55 + 0.45 * uPuls * uEn) * (1.0 - 0.5 * uBlack) + 0.4 * uDrop * uSterk;
+  float k = uSterk * (0.42 + 0.8 * uSlag + 0.35 * uKick) * (1.0 - 0.5 * uBlack) + 0.4 * uDrop * uSterk;   // klap op de tel
   if (uGolf > 0.5) { float per = mix(mix(8.0, 2.0, isDrop()), 16.0, isBreak()); k *= 0.35 + 1.4 * exp(-(((iK.w - (fract(uTel / per) * 1.3 - 0.15)) * 9.0) * ((iK.w - (fract(uTel / per) * 1.3 - 0.15)) * 9.0))); }
   vKl = iK.rgb * k; vC = position.xy;
   if (uPlat > 0.5) gl_Position = projectionMatrix * viewMatrix * vec4(b + vec3(position.x, 0.0, position.y) * iP.w, 1.0);
@@ -1444,7 +1541,7 @@ void main() {
 void main() {   // papieren lantaarn: licht van binnen, ribben, onderkant feller
   vec3 n = normalize(vN), V = normalize(cameraPosition - vW);
   float rib = 0.75 + 0.25 * smoothstep(0.0, 0.15, abs(fract(n.y * 4.0) - 0.5));
-  float k = (0.7 + 0.25 * sin(uT * 3.0 + vZ * 40.0) + 0.4 * uPuls * uEn + 0.5 * uDrop) * (1.0 - 0.4 * uBlack);
+  float k = (0.55 + 0.2 * sin(uT * 3.0 + vZ * 40.0) + 0.85 * uSlag + 0.3 * uKick + 0.5 * uDrop) * (1.0 - 0.4 * uBlack);
   gl_FragColor = vec4(flitsWit(vKl * (0.45 + 0.6 * abs(dot(n, V))) * rib * k * 1.3), 1.0);
 }`;
   function gloeiPad(groep, route, o) {
@@ -1549,6 +1646,147 @@ void main() {   // papieren lantaarn: licht van binnen, ribben, onderkant feller
   }
 
   // =====================================================================================================================================
+  // 9. LICHTRIG: festival-lichtshow op de lichtklok. Moving heads met bundels (open kegel, felste in het hart, dooft naar het eind) en
+  //    par-spots (korte brede kegel omhoog) in één draw; de lenzen (stip, fel als de lamp naar de camera wijst) en de grondgloed onder
+  //    de pars in een tweede. Richting, kleur en sterkte rekent de vertex-shader uit (rig()), JS kiest alleen per frase het patroon.
+  // =====================================================================================================================================
+  const RIG_GLSL = `attribute vec4 iR, iS;   // iR: plek (kamer-ruimte) + index in de rij; iS: az, el (basis), s (-1..1 in de rij), soort (0 kop, 1 par)
+uniform float uN, uBreed, uPatA, uPatB, uPatMix, uChase, uSterk, uLang, uDik, uParLang, uParDik;
+vec3 richtV(float az, float el) { return vec3(cos(el) * sin(az), sin(el), cos(el) * cos(az)); }
+vec2 rigPat(float p, float i, float s, float t, float ph) {   // (d-az, d-el) per patroon; t = bewegingsklok (tellen), ph = fase van de tel
+  float B = uBreed;
+  if (p < 0.5) return vec2(s * B * (0.3 + 0.7 * exp(-ph * 3.5)), 0.06 * sin(TAU * t / 8.0));                        // waaier: open op de tel
+  if (p < 1.5) return vec2(s * B * 0.3 + B * 0.7 * sin(TAU * t / 4.0), 0.05 * sin(TAU * t / 2.0));                  // zwaai: heen en weer per maat
+  if (p < 2.5) return vec2(s * B * 0.25 + (mod(i, 2.0) * 2.0 - 1.0) * B * 0.7 * sin(TAU * t / 4.0), 0.0);          // schaar
+  if (p < 3.5) return vec2(s * B * 0.8, 0.3 * sin(TAU * t / 2.0 - s * 2.6));                                        // golf door de rij
+  if (p < 4.5) { float a = TAU * t / 4.0 + i * 0.85; return vec2(s * B * 0.55 + 0.3 * cos(a), 0.22 * sin(a)); }     // cirkels
+  if (p < 5.5) return vec2(s * B * 0.9, 0.45 * exp(-ph * 4.0) - 0.14);                                              // pomp: omhoog op de tel
+  if (p < 6.5) return vec2(-s * B * (0.1 + 0.9 * abs(sin(TAU * t / 8.0))), 0.08);                                    // kruis: door elkaar
+  return vec2(s * B * 1.2 + 0.18 * sin(TAU * t / 8.0), 0.3 + 0.08 * sin(TAU * t / 2.0));                            // zon (drop): wijd en hoog
+}
+float rigChase(float c, float i, float s) {   // aan/uit per kop, op de tel
+  float b = floor(uTel), ph = fract(uTel);
+  if (c < 0.5) return 1.0;                                                                              // alles
+  if (c < 1.5) return 0.25 + 0.85 * step(0.5, fract((i + b) * 0.5));                                    // om en om
+  if (c < 2.5) { float k = mod(floor(uTel * 2.0), uN); return 0.22 + 0.9 * step(abs(i - k), 0.5) + 0.4 * step(abs(i - k + 1.0), 0.5); }   // loop in achtsten
+  if (c < 3.5) return 0.25 + 0.85 * step(abs(floor(abs(s) * 2.99) - mod(b, 3.0)), 0.5);                  // midden -> buiten
+  return 0.2 + 0.9 * step(ph, 0.45);                                                                     // aan op de tel, uit erna
+}
+void rig(out vec3 dir, out float I, out vec3 col) {
+  float i = iR.w, s = iS.z, b = floor(uTel);
+  vec2 a = iS.xy;
+  if (iS.w < 0.5) {   // kop
+    a += mix(rigPat(uPatA, i, s, uRigT, fract(uTel)), rigPat(uPatB, i, s, uRigT, fract(uTel)), uPatMix);
+    float basis = (0.32 + 0.1 * isDrop() + 0.2 * uOpb) * (1.0 - 0.55 * isBreak());   // altijd zichtbaar en in beweging, de tel klapt erbovenop
+    I = (basis + 1.05 * uSlag + 0.4 * uKick) * rigChase(uChase, i, s);
+    col = mix(klH(mod(i, 2.0) + uMaat), klH(i + b), isDrop());   // per maat (drop: per tel) een andere kleur
+    col = mix(col, kl(uTel * 0.25 + i * 0.13), isOpb() * 0.6);    // opbouw: de kleuren lopen
+    col = mix(col, vec3(1.0), isDrop() * uSlag * 0.55);           // drop: witte klap
+  } else {            // par: één op de drie aan, per tel een stap verder; samen op de kick, de rest licht op de snare
+    float aan = step(mod(i + b, 3.0), 0.5);
+    I = (0.1 + aan * (0.35 + 0.9 * uSlag) + 0.55 * uKick + 0.35 * uSnare * (1.0 - aan)) * (1.0 - 0.5 * isBreak());
+    col = klH(floor(i * 0.5) + floor(uTel * 0.5) + 1.0);
+  }
+  I *= (1.0 - 0.65 * uBlack) * uSterk;
+  I += 1.1 * uFlits * uSterk;
+  col = mix(col, vec3(1.0), min(uFlits, 1.0) * 0.7);
+  dir = normalize(mat3(modelMatrix) * richtV(a.x, a.y));
+}
+`;
+  const RIGB_VS = RIG_GLSL + `varying float vT, vF, vI; varying vec3 vKl, vW;
+void main() {
+  vec3 dir, col; float I;
+  rig(dir, I, col);
+  float par = step(0.5, iS.w), L = mix(uLang, uParLang, par), r0 = mix(0.05, 0.12, par), r1 = L * mix(uDik, uParDik, par);
+  vec3 org = (modelMatrix * vec4(iR.xyz, 1.0)).xyz;
+  vec3 zij = normalize(cross(dir, abs(dir.y) > 0.95 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0))), op = cross(zij, dir);
+  vec3 rn = position.x * zij + position.z * op;
+  vec3 w = org + dir * position.y * L + rn * (r0 + position.y * (r1 - r0));
+  vT = position.y; vF = abs(dot(rn, normalize(cameraPosition - w))); vI = I; vKl = col; vW = w;
+  gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
+}`;
+  const RIGB_FS = `varying float vT, vF, vI; varying vec3 vKl, vW;
+void main() {   // dooft naar het eind, het hart van de kegel het felst (daar kijk je door de meeste 'rook'), nooit fel vlak voor de camera
+  float a = vI * pow(max(1.0 - vT, 0.0), 1.1) * (0.15 + 0.85 * vF * vF) * smoothstep(0.6, 3.5, distance(cameraPosition, vW)) * 0.5;
+  gl_FragColor = vec4(vKl * (1.0 + max(a - 1.0, 0.0)), min(a, 1.0));
+}`;
+  const RIGL_VS = RIG_GLSL + `attribute float iT;   // 0 lens, 1 grondgloed (par)
+varying vec2 vC; varying vec3 vKl; varying float vA, vT;
+void main() {
+  vec3 dir, col; float I;
+  rig(dir, I, col);
+  vec3 org = (modelMatrix * vec4(iR.xyz, 1.0)).xyz;
+  vC = position.xy; vT = iT; vKl = col;
+  if (iT < 0.5) {   // lens: altijd een beetje zichtbaar, fel en groot als de lamp naar de camera wijst
+    float naar = max(dot(dir, normalize(cameraPosition - org)), 0.0), n2 = naar * naar, flare = n2 * n2 * n2;
+    vec4 mv = viewMatrix * vec4(org, 1.0);
+    mv.xy += position.xy * mix(0.17, 0.13, step(0.5, iS.w)) * (1.0 + 2.5 * flare) * (0.75 + 0.35 * min(I, 1.5));
+    vA = min(0.12 + I * (0.4 + 0.9 * flare), 2.2);
+    gl_Position = projectionMatrix * mv;
+  } else {          // gloed op de grond onder de par
+    vA = 0.45 * I;
+    gl_Position = projectionMatrix * viewMatrix * vec4(org + vec3(position.x, 0.0, position.y) * (1.0 + 0.5 * min(I, 1.0)) + vec3(0.0, 0.02, 0.0), 1.0);
+  }
+}`;
+  const RIGL_FS = `varying vec2 vC; varying vec3 vKl; varying float vA, vT;
+void main() {
+  float d = dot(vC, vC);
+  if (d > 1.0) discard;
+  float m = vT < 0.5 ? exp(-d * 3.0) * 0.6 + exp(-d * 14.0) : exp(-d * 2.5) * (1.0 - smoothstep(0.6, 1.0, d));   // (smoothstep nooit omgekeerd: ANGLE)
+  vec3 c = vT < 0.5 ? mix(vKl, vec3(1.0), exp(-d * 18.0) * 0.75) : vKl;
+  float a = m * vA;
+  gl_FragColor = vec4(c * (1.0 + max(a - 1.0, 0.0)), min(a, 1.0));
+}`;
+  function lichtrig(groep, koppen, pars, o) {
+    o = o || {}; tel.aanroepen++;
+    const Z = zwVan(o);
+    const K = (koppen || []).slice(0, [12, 8, 5][Z]), P = (pars || []).slice(0, [12, 6, 3][Z]), n = K.length + P.length;
+    if (!n) return null;
+    const iR = new Float32Array(n * 4), iS = new Float32Array(n * 4);
+    K.forEach((k, i) => { iR.set([k.x, k.y || 0, k.z, i], i * 4); iS.set([k.az || 0, k.el != null ? k.el : 0.5, k.s != null ? k.s : (K.length > 1 ? i / (K.length - 1) * 2 - 1 : 0), 0], i * 4); });
+    P.forEach((p, j) => { const i = K.length + j; iR.set([p.x, p.y != null ? p.y : 0.05, p.z, j], i * 4); iS.set([p.az || 0, p.el != null ? p.el : 1.4, 0, 1], i * 4); });
+    const ru = { uN: f(Math.max(1, K.length)), uBreed: f(o.breed || 0.8), uPatA: f(0), uPatB: f(0), uPatMix: f(1), uChase: f(0), uSterk: f(o.sterk || 1),
+      uLang: f(o.lengte || 40), uDik: f(o.dik || 0.04), uParLang: f(o.parLengte || 7), uParDik: f(o.parDik || 0.2) };
+    // bundels: open kegels (BUNDEL_GEO, y 0..1), één instantie per lamp
+    const bg = new THREE.InstancedBufferGeometry();
+    for (const k of ['position', 'normal']) bg.setAttribute(k, BUNDEL_GEO.attributes[k].clone());
+    bg.setIndex(BUNDEL_GEO.index.clone());
+    bg.setAttribute('iR', new THREE.InstancedBufferAttribute(iR, 4)); bg.setAttribute('iS', new THREE.InstancedBufferAttribute(iS, 4)); bg.instanceCount = n;
+    const bundels = geenStraal(new THREE.Mesh(bg, addMat(RIGB_VS, RIGB_FS, ru, { side: THREE.DoubleSide })));
+    bundels.frustumCulled = false; bundels.renderOrder = 4; bundels.name = 'buiten-lichtrig'; groep.add(bundels);
+    // lenzen (alle lampen) + grondgloed (pars; niet op de tv)
+    const nG = Z >= 2 ? 0 : P.length, nL = n + nG, lR = new Float32Array(nL * 4), lS = new Float32Array(nL * 4), lT = new Float32Array(nL);
+    lR.set(iR); lS.set(iS);
+    for (let j = 0; j < nG; j++) { const i = K.length + j; lR.set(iR.subarray(i * 4, i * 4 + 4), (n + j) * 4); lS.set(iS.subarray(i * 4, i * 4 + 4), (n + j) * 4); lT[n + j] = 1; }
+    const lampen = geenStraal(new THREE.Mesh(quadGeo(nL, { iR: [lR, 4], iS: [lS, 4], iT: [lT, 1] }), addMat(RIGL_VS, RIGL_FS, ru)));
+    lampen.frustumCulled = false; lampen.renderOrder = 6; lampen.name = 'buiten-lichtrig-lampen'; groep.add(lampen);
+    // per frase een ander bewegingspatroon (in een halve tel overvloeien) en een andere jager; JS zet alleen getallen (geen allocaties)
+    let laatst = -1, blok = -1, pA = 0, pB = 0, t0 = -9;
+    const kies = (L, niet) => { let x = L[Math.floor(Math.random() * L.length)]; if (L.length > 1 && x === niet) x = L[(L.indexOf(x) + 1) % L.length]; return x; };
+    const L_BREAK = [1, 3], L_ZON = [7], L_DROP = [0, 2, 5, 6, 4], L_OPB1 = [3, 2, 0, 4], L_OPB2 = [5, 0], L_GROOVE = [0, 1, 2, 3, 4, 6, 5];
+    const C_DROP = [0, 1, 4, 3], C_GROOVE = [0, 1, 2, 3, 0];
+    function beeld() {
+      const fn = beeldNr(); if (fn === laatst) return; laatst = fn;
+      const sh = doolhof.show || {}, st = sh.stand || 'groove', opb = sh.opbouw || 0, dr = sh.drop || 0, tl = LK.tel - LK.een;
+      const per = st === 'break' ? 16 : st === 'opbouw' ? (opb < 0.5 ? 8 : opb < 0.8 ? 4 : 2) : st === 'drop' ? (dr > 0.75 ? 4 : 8) : 16;
+      const nb = Math.floor(Math.max(0, tl) / per) * 64 + (STAND[st] || 0) * 16 + per;  // getal, geen string (geen afval per beeld)
+      if (nb !== blok) {
+        const L = st === 'break' ? L_BREAK : st === 'drop' ? (dr > 0.75 ? L_ZON : L_DROP) : st === 'opbouw' ? (opb > 0.6 ? L_OPB2 : L_OPB1) : L_GROOVE;
+        const nw = kies(L, pB);
+        if (blok < 0) { pA = pB = nw; t0 = -9; } else { pA = pB; pB = nw; t0 = tl; }
+        ru.uChase.value = st === 'break' ? 0 : st === 'opbouw' ? (opb > 0.75 ? 2 : opb > 0.4 ? 1 : 0) : st === 'drop' ? (dr > 0.75 ? 0 : kies(C_DROP, ru.uChase.value)) : kies(C_GROOVE, ru.uChase.value);
+        blok = nb;
+      }
+      ru.uPatA.value = pA; ru.uPatB.value = pB; ru.uPatMix.value = glad(tl - t0, 0, 0.5);
+      const F = doolhof.buiten.rigForceer;  // test: doolhof.buiten.rigForceer = { patroon: 0..7, jager: 0..4 } (null = vrij)
+      if (F) { if (F.patroon != null) { ru.uPatA.value = ru.uPatB.value = F.patroon; ru.uPatMix.value = 1; } if (F.jager != null) ru.uChase.value = F.jager; }
+    }
+    bundels.onBeforeRender = beeld; lampen.onBeforeRender = beeld;  // (ru vasthouden: zie steenMesh)
+    tel.rig = (tel.rig || 0) + n;
+    return { bundels, lampen, info: () => ({ koppen: K.length, pars: P.length, patroon: [pA, pB], jager: ru.uChase.value }) };
+  }
+
+  // =====================================================================================================================================
   // lift als uitgang + voorbeeldkamer
   // =====================================================================================================================================
   // De kern kiest de overgang achter een kamer direct ná maak() (kamerStappen: nieuweOvergang). doolhof.volgendeOvergang = 'lift' geldt
@@ -1602,7 +1840,9 @@ void main() {   // papieren lantaarn: licht van binnen, ribben, onderkant feller
 
   doolhof.buiten = {
     U, KOP, liftUitgang, hemel, rotsPoort, liftToren, vuur, kampvuur, fakkels, poi, vuurDansers, glowsticks, vuurvliegjes, lichtslingers, gloeiPad,
-    gloed, buitenCam, demo, botten, NEON, houd, geenStraal,
-    info: () => ({ aanroepen: tel.aanroepen, poiDansers: tel.poi, glowsticks: tel.sticks, spin: +G.spin.toFixed(2), vlam: +G.vlam.toFixed(2), liftVraag: !!liftVraag }),
+    gloed, buitenCam, demo, botten, NEON, houd, geenStraal, lichtrig, rigForceer: null,
+    klok: () => ({ tel: +LK.tel.toFixed(3), bpm: LK.bpm, bron: LK.bron, fijn: +LK.fijn.toFixed(3), een: LK.een, bak: LK.bak.map(v => +v.toFixed(2)),
+      kicks: LK.kicks, snares: LK.snares, slag: +LK.slag.toFixed(2), kick: +LK.kick.toFixed(2), maat: U.uMaat.value, rigT: +LK.rigT.toFixed(2) }),
+    info: () => ({ aanroepen: tel.aanroepen, poiDansers: tel.poi, glowsticks: tel.sticks, rigLampen: tel.rig || 0, spin: +G.spin.toFixed(2), vlam: +G.vlam.toFixed(2), liftVraag: !!liftVraag }),
   };
 })();
