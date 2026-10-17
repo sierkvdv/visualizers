@@ -245,7 +245,7 @@
 
   // --- oordeel: gladgestreken scores, pas wisselen als een andere stijl lang genoeg duidelijk wint ---
   const FAM = { house: 'vier', techno: 'vier', trance: 'vier', dubstep: 'bas', dnb: 'bas', hiphop: 'hiphop', afro: 'afro', lounge: 'lounge', rock: 'gitaar', metal: 'gitaar', punk: 'gitaar' };
-  let herkend = 'onbekend', voorsprong = 0, geoordeeld = 0, fRef = 0, fAfwijk = 0, nieuwTempo = true, fGlad = 0, fSprong = 0;
+  let herkend = 'onbekend', twijfel = 0, voorsprong = 0, geoordeeld = 0, fRef = 0, fAfwijk = 0, nieuwTempo = true, fGlad = 0, fSprong = 0;
   let zekerAuto = 0, bpmGlad = 120, laatstOordeel = -1;
   // stabiliteit (een set springt zelden binnen een minuut van genre):
   // vast = tellen dat de huidige stijl met hoge zekerheid won (max 256); hoe langer, hoe meer bewijs een wissel vraagt.
@@ -308,13 +308,16 @@
       if (gb - SCORE[herkend].glad > E.marge && zeker >= E.z) voorsprong += tellen; else voorsprong = 0;
       if (voorsprong >= E.tel) wissel(best, t, E.half ? 'half' : nieuwTempo ? 'tempo' : 'auto', zeker);
     } else voorsprong = 0;
+    // twijfel (17-10, experimentele sets zoals Aphex Twin): scoort de huidige stijl zelf al 64 tellen zwak en wint niemand duidelijk,
+    // dan 'onbekend' (gewoon dansen, geen mosh) in plaats van een verkeerd etiket vasthouden
+    if (herkend !== 'onbekend' && SCORE[herkend].glad < 0.25 && zeker < 0.3) { twijfel += tellen; if (twijfel >= 64) { twijfel = 0; wissel('onbekend', t, 'twijfel', 0); } } else twijfel = 0;
     if (best !== herkend) zekerAuto = herkend === 'onbekend' ? 0 : klem((SCORE[herkend].glad - gb + 0.12) / 0.24) * op(SCORE[herkend].glad, 0.3, 0.55);  // een ander wint: twijfel
   }
   function wissel(st, t, door, zeker) {
     voorsprong = 0; nieuwTempo = false; fRef = fGlad;
     if (st === herkend) return;
     const van = herkend;
-    herkend = st; zekerAuto = zeker; vast = 0; bpmVast = SCORE[st].B;
+    herkend = st; zekerAuto = zeker; vast = 0; if (SCORE[st]) bpmVast = SCORE[st].B;
     if (ST.auto) zet(st, door, van, t);
   }
 

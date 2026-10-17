@@ -1511,6 +1511,7 @@ const versier = (() => {
     if (!M || M.keep || !d.body || rol === 'paal') return;  // paaldanseressen: ware grootte (de grepen), niets op het hoofd
     // bouw: breder of smaller, dieper of platter (de lengte en spiegeling deden makeModelDancer of kern.maat al)
     d.body.scale.x *= rnd(0.9, 1.14); d.body.scale.z *= rnd(0.92, 1.1);
+    try { kleed(d, M, rol); } catch (e) { console.error('kleed', e); }  // kleding uit Blender (hieronder)
     const P = plek(M, d.body);
     if (!P) return;
     let head = null, neck = null;
@@ -1527,6 +1528,97 @@ const versier = (() => {
       const v = V[soort], bot = v.nek ? neck : head, mtx = v.nek ? P.nek : P.kop;
       if (v.stof) hang(d, bot, mtx, geo(soort, 'stof'), stof(soort === 'bril' ? 0x101012 : soort === 'koptelefoon' ? pick([0x111114, 0xf2f2f2, 0xc81e1e, 0x1b2a6b]) : kl));
       if (v.glans) hang(d, bot, mtx, geo(soort, 'glans'), glans(soort === 'hoorns' ? 0xff2b1a : soort === 'halo' ? pick([0xffe52b, 0xffffff]) : kg));
+    }
+  };
+})();
+// --- kledingkast uit Blender (17-10 nacht, deel/blender/kleding.py): per lijf models/kleding-<lijf>.glb met shirt, hoodie, puffer,
+// bodywarmer, short, broek en overall, afgeleid van het lijf zelf (zelfde huidgewichten). Per danser 0-2 stukken op zijn eigen skelet,
+// met eigen kleur en patroon (effen, strepen, blokken, mouwen, puffervakken: vertexkleuren op gedeelde geometrie). Laadt na de figuren;
+// wie al staat krijgt zijn kleding zodra de kast binnen is.
+const KAST_LIJF = ['man-1', 'pop-1', 'burlesque-1', 'showgirl-1', 'alien-1', 'alien-2'];
+const kleed = (() => {
+  const RAUW = {}, MAT = {}, mW = new THREE.Matrix4(), mI = new THREE.Matrix4(), v3 = new THREE.Vector3();
+  const H = x => { x.userData = x.userData || {}; x.userData.doolhofHouden = true; return x; };
+  const KLEUR = [0x111114, 0xf0f0f0, 0x1d2f5c, 0x2d4a8a, 0x556b2f, 0x8a7a5c, 0xc8b89a, 0xb01e2a, 0xff4fa0, 0xffd21f, 0xff6a13, 0x1fb5a8,
+    0x6b2fb3, 0x39ff14, 0x00e5ff, 0x7a7a80, 0x4a2c1a, 0xe8e0c8];
+  const mat = hex => MAT[hex] || (MAT[hex] = H(new THREE.MeshStandardMaterial({ color: hex, vertexColors: true, roughness: 0.85, metalness: 0.02, side: THREE.DoubleSide, skinning: true })));
+  for (const naam of KAST_LIJF) gltf.load('models/kleding-' + naam + '.glb', g => {
+    const lijst = [];
+    g.scene.updateMatrixWorld(true);
+    g.scene.traverse(o => { if (o.isSkinnedMesh) lijst.push({ naam: o.name.replace(/^kl_/, ''), geo: o.geometry, mw: o.matrixWorld.clone(), joints: o.skeleton.bones.map(b => b.name) }); });
+    RAUW['models/' + naam + '.glb'] = lijst;
+    for (const d of dancers) if (d.type === 'model' && d.M && d.M.file === 'models/' + naam + '.glb' && !d.gekleed && d.versier) kleed(d, d.M, d.rol);
+  }, undefined, () => {});
+  // per lijf één keer: kleding naar de ruimte van het lijf, botnummers naar die van het lijf, patronen als vertexkleur
+  function kast(M) {
+    if (M.kast) return M.kast;
+    const rauw = RAUW[M.file]; if (!rauw) return null;
+    let lijf = null; M.scene.traverse(o => { if (o.isSkinnedMesh && !lijf) lijf = o; });
+    if (!lijf) return (M.kast = []);
+    M.scene.updateMatrixWorld(true);
+    const idx = {}; lijf.skeleton.bones.forEach((b, i) => { idx[b.name] = i; });
+    mI.copy(lijf.matrixWorld).invert();
+    // omhoog in de ruimte van het lijf, en meters per eenheid (voor de patronen)
+    const op = v3.set(0, 1, 0).transformDirection(mI).clone(), schaal = new THREE.Vector3().setFromMatrixScale(lijf.matrixWorld).y;
+    const armBot = new Set(['LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm'].map(n => idx[n]));
+    M.kast = rauw.map(k => {
+      const g = k.geo.clone();
+      g.applyMatrix4(mW.multiplyMatrices(mI, k.mw));
+      const si = g.attributes.skinIndex, sw = g.attributes.skinWeight, map = k.joints.map(n => idx[n] != null ? idx[n] : 0);
+      for (let i = 0; i < si.count; i++) si.setXYZW(i, map[si.getX(i)], map[si.getY(i)], map[si.getZ(i)], map[si.getW(i)]);
+      g.computeBoundingSphere();
+      const n = g.attributes.position.count, p = g.attributes.position, hoogte = new Float32Array(n), mouw = new Uint8Array(n);
+      let lo = 1e9, hi = -1e9;
+      for (let i = 0; i < n; i++) {
+        const h = (p.getX(i) * op.x + p.getY(i) * op.y + p.getZ(i) * op.z) * schaal; hoogte[i] = h; lo = Math.min(lo, h); hi = Math.max(hi, h);
+        const W4 = [sw.getX(i), sw.getY(i), sw.getZ(i), sw.getW(i)], J4 = [si.getX(i), si.getY(i), si.getZ(i), si.getW(i)];  // (r128: geen getComponent)
+        let best = 0, bw = -1; for (let c = 0; c < 4; c++) if (W4[c] > bw) { bw = W4[c]; best = J4[c]; }
+        mouw[i] = armBot.has(best) ? 1 : 0;
+      }
+      const patroon = f => {  // zelfde buffers (ook op de gpu), alleen een eigen kleurbuffer
+        const c = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) { const v = f(hoogte[i], mouw[i], lo, hi); c[i * 3] = c[i * 3 + 1] = c[i * 3 + 2] = v; }
+        const pg = new THREE.BufferGeometry();
+        for (const [nm, a] of Object.entries(g.attributes)) pg.setAttribute(nm, a);
+        pg.setIndex(g.index); pg.boundingSphere = g.boundingSphere; pg.setAttribute('color', new THREE.BufferAttribute(c, 3));
+        return H(pg);
+      };
+      const P = { effen: patroon(() => 1) };
+      if (k.naam === 'puffer') { P.vakken = patroon(h => 0.62 + 0.38 * Math.abs(Math.sin(h / 0.085 * Math.PI))); P.vakkenMouw = patroon((h, m) => (m ? 0.5 : 1) * (0.62 + 0.38 * Math.abs(Math.sin(h / 0.085 * Math.PI)))); }
+      else {
+        P.strepen = patroon(h => (Math.floor(h / 0.07) % 2 ? 1 : 0.42));
+        P.blok = patroon((h, m, lo, hi) => (h > (lo + hi) / 2 ? 1 : 0.4));
+        if (/shirt|hoodie|overall/.test(k.naam)) P.mouwen = patroon((h, m) => (m ? 0.38 : 1));
+      }
+      return { naam: k.naam, P };
+    });
+    return M.kast;
+  }
+  const kies = (kast, naam) => kast.find(k => k.naam === naam);
+  return function kleed(d, M, rol) {
+    const K = kast(M); if (!K) return;  // kast nog niet binnen (zie het laden hierboven)
+    d.gekleed = true;
+    if (!K.length || rol === 'dj' && Math.random() < 0.5) return;
+    const sexy = SEXY.test(M.file);
+    if (Math.random() < (sexy ? 0.6 : 0.2)) return;  // een deel houdt de eigen outfit
+    let lijf = null; d.body.traverse(o => { if (o.isSkinnedMesh && !lijf && o.name !== 'versiering') lijf = o; });
+    if (!lijf) return;
+    const delen = [], alien = /alien/.test(M.file);  // aliens: alleen bovenstukken (hun broeken uit Blender rafelden)
+    if (!alien && Math.random() < 0.1 && kies(K, 'overall')) delen.push('overall');
+    else {
+      const boven = pick(['shirt', 'shirt', 'hoodie', 'hoodie', 'puffer', 'bodywarmer', null]), onder = alien ? null : pick(['broek', 'broek', 'short', null]);
+      if (boven) delen.push(boven); if (onder) delen.push(onder);
+    }
+    for (const naam of delen) {
+      const k = kies(K, naam); if (!k) continue;
+      const pat = Object.keys(k.P), geo = k.P[Math.random() < 0.4 ? 'effen' : pick(pat)] || k.P.effen;
+      const kleur = naam === 'broek' && Math.random() < 0.4 ? pick([0x1d2f5c, 0x2d4a8a, 0x111114, 0x556b2f, 0x8a7a5c]) : pick(KLEUR);
+      const m = new THREE.SkinnedMesh(geo, mat(kleur));
+      m.name = 'versiering'; m.castShadow = false; m.frustumCulled = false;
+      m.position.copy(lijf.position); m.quaternion.copy(lijf.quaternion); m.scale.copy(lijf.scale);
+      lijf.parent.add(m);
+      m.bind(lijf.skeleton, lijf.bindMatrix);
+      d.versier.push(m);
     }
   };
 })();
