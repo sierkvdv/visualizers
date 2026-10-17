@@ -1535,7 +1535,7 @@ const versier = (() => {
 // bodywarmer, short, broek en overall, afgeleid van het lijf zelf (zelfde huidgewichten). Per danser 0-2 stukken op zijn eigen skelet,
 // met eigen kleur en patroon (effen, strepen, blokken, mouwen, puffervakken: vertexkleuren op gedeelde geometrie). Laadt na de figuren;
 // wie al staat krijgt zijn kleding zodra de kast binnen is.
-const KAST_LIJF = ['man-1', 'pop-1', 'burlesque-1', 'showgirl-1', 'alien-1', 'alien-2'];
+const KAST_LIJF = [];  // UIT (17-10): Sierk vond de barstjes (lijf prikt door de plooien) niet mooi; terug: ['man-1', 'pop-1', 'burlesque-1', 'showgirl-1', 'alien-1', 'alien-2']
 const kleed = (() => {
   const RAUW = {}, MAT = {}, mW = new THREE.Matrix4(), mI = new THREE.Matrix4(), v3 = new THREE.Vector3();
   const H = x => { x.userData = x.userData || {}; x.userData.doolhofHouden = true; return x; };
