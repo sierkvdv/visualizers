@@ -1006,7 +1006,9 @@
     if (D === gezienDrop) return;
     gezienDrop = D;
     const c = cyclus;
-    if (!moshMag() || !c || !c.pit || c.open == null || c.D != null || c.kand || c.wacht) return;
+    if (!moshMag() || !c || !c.pit || c.open == null || c.D != null) return;
+    if ((c.kand || c.wacht) && D - c.open < ophypeMin()) return;
+    c.kand = null; c.wacht = null;  // lang genoeg opgehypet: de drop van de club gaat voor een lopende twijfel (die ging anders verloren)
     const mode = bevestig(), stilVoor = stilT >= D - 4, tel = Math.floor(beatPos);
     // lang genoeg opgehypet: de drop van de lichtregie (die van de hele club) is dan altijd goed
     if (stilVoor || mode === 'riff' || mode === 'kick' || D - c.open >= ophypeMin()) { herkend(D, !stilVoor, 'regie'); return; }
@@ -1059,6 +1061,8 @@
       else if (n > 0) { c.kand = { D: tel, n, bron: 'sprong', vanaf: tel }; noteer('kandidaat', { D: tel, n, b: +s.b.toFixed(2), rb: +s.rb.toFixed(2) }); }
     }
     if (c.D != null) return;
+    // de club zelf staat in de drop (lichtregie) en er is lang genoeg opgehypet: nu los, ook als de eigen meting twijfelt
+    if (st === 'drop' && opTel && tel - c.open >= om) { c.kand = null; c.wacht = null; noteer('drop van de club'); dropNu(tel, stilT < tel - 4); return; }
     // kring dicht: break (bas weg en de riser is weg), lange stilte, of te lang geen drop
     let dicht = null;
     if (inBreak(c)) {  // kring uit de break: wacht op de opbouw (of een drop recht uit de break)
@@ -1070,6 +1074,12 @@
     else if (stilRun > 24) dicht = 'stil';  // (was 8: de stilte vóór de drop sloot de kring, net voordat de pit los moest)
     else if (!c.kand && !c.wacht && st !== 'opbouw' && tel > Math.max(c.basis + WACHT, (c.opbouwEind != null ? c.opbouwEind : c.basis) + 24)) dicht = 'geen drop';
     else if (tel - c.basis > MAX_OPEN - 8) dicht = 'te lang';
+    // geen herkende drop, maar de muziek staat vol en ze hebben lang genoeg opgehypet: de pit gaat toch los (Sierk 17-10: anders
+    // stonden ze alleen in een kring en sprongen ze nooit op elkaar); op een maatgrens. Alleen bij rustige muziek gaat de kring dicht.
+    if ((dicht === 'geen drop' || dicht === 'te lang') && tel - c.open >= om && refB > 0 && ht(hB, tel - 1) >= 0.5 * refB && ht(hT, tel - 1) >= 0.55 * refT) {
+      if (!opTel || !opMaat(tel)) return;
+      noteer('pit zonder herkende drop'); dropNu(tel, true); return;
+    }
     if (dicht) { noteer('kring dicht', { waarom: dicht }); eindeCyclus(tel, dicht); return; }
     // spanning (hoe wild het ophypen is): loopt op met de tijd en de opbouw; vol bij een stilte of inzet vlak voor de drop
     let sp = 0.3 + 0.4 * klem((tb - c.open) / (om + 8), 0, 1) + (st === 'opbouw' && R ? 0.3 * klem(R.opbouwTel / 16, 0, 1) : c.opbouwEind != null || c.sinds == null ? 0.25 : 0);
