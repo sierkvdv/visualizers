@@ -10,13 +10,15 @@
 // vóór de gang, toren om de lift). Eigen in dit bestand: palmen (1 draw, wind en lichtjes in de shader), bouwwerk (hut, speakers, palen,
 // steiger, korven: 1 draw, één shader met soorten), lantaarns, surfplanken, lampionzakjes, wensballonnen, vuurwerk (1 Points-draw, alle banen
 // in de vertex-shader; JS zet per knal alleen 4 vectoren), waterreflecties (lampen en vuurwerk als trillende strepen op het water) en een
-// eigen camera met 17 shots die op de tel knipt (8 tellen, drop 4, break 16, opbouw 8 -> 4) en kiest op waar de loper is (voor/feest/na).
+// eigen camera met 19 shots die op de tel knipt (8 tellen, drop 4, break 16, opbouw 8 -> 4) en kiest op waar de loper is (voor/feest/na).
 // Alles licht zelf (ShaderMaterial met B.KOP, show-bus via B.U): break donker en traag, opbouw sneller, drop groot. Geometrie is per kamer
 // (de kern ruimt hem met de groep op; InstancedMeshes ruimen hun instantiebuffers mee op), alleen shaderbronnen zijn gedeeld.
 // ctx.zwaar (0 hoog, 1 laag, 2 minimaal/tv) schaalt palmen, publiek, fakkels, zakjes, ballonnen, vuurwerk en deeltjes.
 // Registreert 'strand' { gewicht 0.7, buiten: true } (maak is een generator: de kern bouwt het in stukjes); laden na buiten-basis.js.
 // Test (console): doolhof.start('strand') of doolhof.volgende = 'strand'; doolhof.strand.info() (laatste bouw, tellers);
-// doolhof.strand.shot = 'zee' zet de camera vast op één shot (null = weer op de tel kiezen).
+// doolhof.strand.shot = 'zee' zet de camera vast op één shot (null = weer op de tel kiezen). Burning Man (17-10 avond): shots 'brand' (wijd vanaf het
+// publiek) en 'brandOmhoog' (laag, omhoog); de camera knipt erheen bij aansteken en instorten; doolhof.strand.brand = het handvat van de
+// actieve kamer (.ontsteek()), doolhof.strand.info().laatste.brand = welk kunstwerk waar.
 (function () {
   'use strict';
   const doolhof = window.doolhof = window.doolhof || {};
@@ -448,10 +450,11 @@ void main() {
   }
 
   // =====================================================================================================================================
-  // camera: 17 shots, knipt op de tel; de lijst hangt af van waar de loper is (voor het feest, op het feest, erna) en van de stand
+  // camera: 19 shots (waarvan 2 op de Burning Man), knipt op de tel; de lijst hangt af van waar de loper is (voor het feest, op het feest, erna) en van de stand
   // =====================================================================================================================================
   function strandCam(ctx, o) {
     const r = ctx.rnd, { W, D, X, KUST } = o, HOOG = 18, VU = o.vuur, HU = o.hut, WT = o.wacht, PZ = o.pier.z;
+    const BM = o.brand || null, SX = X(1);  // Burning Man-handvat (doolhof/buiten-brand.js) of null; SX = kant van de zee (+1/-1)
     const cp = new THREE.Vector3(), cl = new THREE.Vector3(), uit = { pos: cp, look: cl, fov: 60 }, lp = new THREE.Vector3(), tp = new THREE.Vector3();
     const dansers = (o.dansers || []).filter(Boolean), palm = o.palm;
     const plekVan = (x, v) => {
@@ -461,6 +464,7 @@ void main() {
       return v;
     };
     let zij = 1, dir = 1, a0 = 0, idx = 0, yaw = null, tLaatst = 0, blokNu = null, t0 = 0, shot = 'volg', faseNu = null, tKnip = -99, telNu = -1;
+    let evGezien = BM ? BM.ev : 0, houdTot = -1, brandLaatst = -99;
     const recent = [];
     const S = {
       volg(u, lo, dt) {  // schouderhoogte achter en iets naast de loper
@@ -525,6 +529,23 @@ void main() {
         const a = a0 + dir * 0.05 * u;
         cp.set(palm.x + Math.sin(a) * 1.3, 0.45, palm.z + Math.cos(a) * 1.3); cl.copy(palm.top); return 78;
       },
+      // Burning Man (17-10 avond, Sierk: "niet echt een burning iets"): het kunstwerk zelf in beeld. Na het instorten kijken ze naar de hoop.
+      brand(u) {  // groothoek vanaf de kant van het publiek (koppen als silhouet ervoor): het hele kunstwerk tegen de lucht; schuift traag in
+        if (!BM) return S.baan(u);
+        const v = BM.val, fu = BM.fx * SX, maxD = (-0.5 - BM.x * SX) / Math.max(0.25, fu);   // nooit voorbij u -0,5 (vuurdansers, pad, wachtplek)
+        const d = Math.min(maxD, (BM.h * 1.08 + 3) * (1 - 0.4 * v)) - Math.min(3.5, 0.15 * u), zs = zij * (2.4 + 0.05 * BM.breed);
+        cp.set(BM.x + BM.fx * d - BM.fz * zs, 2.4 + 3.6 * v + 0.12 * Math.sin(u * 0.4), BM.z + BM.fz * d + BM.fx * zs);   // ingestort: hoger, over de koppen op de hoop
+        cl.set(BM.x + (BM.hoopX - BM.x) * v, BM.h * 0.42 * (1 - v) + 1.6 * v, BM.z + (BM.hoopZ - BM.z) * v);
+        return 58;
+      },
+      brandOmhoog(u) {  // laag en dichtbij, groothoek omhoog langs het hout: het vuur kruipt omhoog, vonken de lucht in; draait traag om
+        if (!BM) return S.palm(u);
+        const v = BM.val, a = zij * (0.12 + 0.02 * Math.min(u, 10)), ca = Math.cos(a), sa = Math.sin(a), vx = BM.fx * ca - BM.fz * sa, vz = BM.fx * sa + BM.fz * ca;
+        const d = Math.min(BM.voor + 8.5 - 1.5 * v, (-9.2 - BM.x * SX) / Math.max(0.25, BM.fx * SX));   // in de vrijgehouden strook, vóór het publiek
+        cp.set(BM.x + vx * d, 0.6 + 0.1 * Math.sin(u * 0.5), BM.z + vz * d);
+        cl.set(BM.x + (BM.hoopX - BM.x) * v, BM.h * (0.3 + 0.012 * Math.min(u, 10)) * (1 - v) + 1.2 * v, BM.z + (BM.hoopZ - BM.z) * v);
+        return 80;
+      },
       toren(u) { cp.set(zij * 2.6, 0.6, D - 2.2); cl.set(-zij * 0.3, 8 + Math.min(22, 1.6 * u), D + 5); return 74; },
       tegen(u) { cp.set(X(3.6), 2.3, D - 2.2 - Math.min(2.5, 0.12 * u)); cl.set(X(-1.5), 2.6, -D); return 58; },
       ingang(u) { cp.set(zij * 1.3, 1.6, -D + 1.3 + Math.min(2.5, 0.12 * u)); cl.set(X(3.0), 1.4, -4); return 64; },
@@ -536,9 +557,16 @@ void main() {
       drop: ['vuurwerk', 'held', 'zee', 'drone', 'kraan', 'dj', 'vuurwerk', 'baan'],
       break: ['lantaarns', 'zee', 'steiger', 'baan', 'branding', 'palm', 'achter'],
     };
-    function kiesShot(fase, st) {
+    // Burning Man: brandt hij (of smeult de hoop nog fel), dan vaak in de lijst (het moet gezien worden), tot het instorten minstens om de ~14 s;
+    // vooraf af en toe de wijde (hij staat er, met neon); op het aansteken en het instorten knipt de camera er meteen heen (zie cam)
+    const brandt = () => BM && BM.aan && BM.na < 0.6;
+    function kiesShot(fase, st, t) {
       let l = st === 'drop' ? LIJST.drop : st === 'break' ? LIJST.break : LIJST[fase];
       if (fase !== 'feest' && (st === 'drop' || st === 'break')) l = l.concat(['volg', 'volg', 'tegemoet']);
+      if (brandt()) {
+        if (BM.val < 1 && t - brandLaatst > 14 && recent.every(s => s.indexOf('brand') !== 0)) { const s = r() < 0.55 ? 'brand' : 'brandOmhoog'; recent.push(s); if (recent.length > 2) recent.shift(); return s; }
+        l = l.concat(['brand', 'brandOmhoog', 'brand']);
+      } else if (BM && !BM.aan && fase !== 'voor') l = l.concat(['brand']);
       let kand = l.filter(s => (s === 'volg' ? recent[recent.length - 1] !== s : recent.indexOf(s) < 0) && (s !== 'held' || dansers.length));
       if (!kand.length) kand = l;
       const s = kand[Math.floor(r() * kand.length)];
@@ -552,19 +580,32 @@ void main() {
       return Math.hypot(lp.x - X(WT.u), dz) < 2.6 ? 'feest' : dz < 0 ? 'voor' : 'na';
     };
     return function cam(t, loper) {
-      if (t < tLaatst - 0.5) { blokNu = null; tKnip = -99; }  // klok terug (nieuwe start): opnieuw beginnen
+      if (t < tLaatst - 0.5) { blokNu = null; tKnip = -99; houdTot = -1; brandLaatst = -99; }  // klok terug (nieuwe start): opnieuw beginnen
       const dt = klem(t - tLaatst, 0, 0.1); tLaatst = t;
       const sh = doolhof.show || {}, st = sh.stand || 'groove';
       const per = st === 'break' ? 16 : st === 'drop' ? 4 : st === 'opbouw' ? ((sh.opbouw || 0) < 0.5 ? 8 : 4) : 8;
       const bp = Math.max(0, typeof beatPos === 'number' ? beatPos : 0), blok = Math.floor(bp / per) + ':' + per, ht = Math.floor(bp);
       const nieuweTel = ht !== telNu; telNu = ht;
       const fase = faseVan(loper);
+      if (o.staat) o.staat.fase = fase;  // (de kamer geeft het door aan de Burning Man: loopt de loper weg, dan nu instorten)
       if (blok !== blokNu && blokNu !== null && t - tKnip <= 1.8) blokNu = blok;  // te snel na de vorige knip: dit blok overslaan
-      if (blokNu === null || blok !== blokNu || (fase !== faseNu && nieuweTel && t - tKnip > 2.0)) {
-        shot = blokNu === null && fase === 'voor' ? 'volg' : kiesShot(fase, st);
+      // Burning Man steekt aan of stort in (gebeurt op de tel): meteen erheen en even blijven (aansteken laag omhoog, instorten wijd)
+      if (BM && BM.ev !== evGezien) {
+        evGezien = BM.ev;
+        if (performance.now() / 1000 - BM.evTijd < 3) {
+          const val = BM.evSoort === 'val';
+          shot = val ? 'brand' : 'brandOmhoog'; recent.push(shot); if (recent.length > 2) recent.shift();
+          blokNu = blok; t0 = t; tKnip = t; faseNu = fase; houdTot = t + (val ? 9 : 7); brandLaatst = t;
+          zij = r() < 0.5 ? -1 : 1; dir = r() < 0.5 ? -1 : 1; a0 = r() * TAU; idx++; yaw = null;
+        }
+      }
+      if (t < houdTot && blokNu !== null) { blokNu = blok; faseNu = fase; }  // vasthouden: de brand moet gezien worden
+      else if (blokNu === null || blok !== blokNu || (fase !== faseNu && nieuweTel && t - tKnip > 2.0)) {
+        shot = blokNu === null && fase === 'voor' ? 'volg' : kiesShot(fase, st, t);
         if (blokNu === null) { recent.length = 0; recent.push(shot); }
         blokNu = blok; t0 = t; tKnip = t; faseNu = fase;
         zij = r() < 0.5 ? -1 : 1; dir = r() < 0.5 ? -1 : 1; a0 = r() * TAU; idx++; yaw = null;
+        if (shot.indexOf('brand') === 0) brandLaatst = t;
       }
       const vast = doolhof.strand && doolhof.strand.shot;  // test: doolhof.strand.shot = 'zee' (null = weer op de tel kiezen)
       if (vast && S[vast] && vast !== shot) { shot = vast; t0 = t; tKnip = t; yaw = null; }
@@ -632,6 +673,47 @@ void main() {
     const SURF = [[-9.6, 6.6], [-9.1, 7.05], [-8.6, 7.45], [-9.95, 7.55], [-9.35, 8.0], [-3.6, -D + 3.3], [-2.9, -D + 3.0]];
     SURF.forEach(([u, z]) => rond(X(u), z, 0.4));
     vak(-3.6, 3.6, -D - 1, -D + 2.4); vak(-8, 8, D - 1.4, D + 9);   // poort en lobby vrij
+
+    // ---------- Burning Man (doolhof/buiten-brand.js): plek kiezen vóór palmen, flora en publiek, zodat die de voet en de zichtlijn vrijlaten ----------
+    // Sierk (17-10): "ik zag wel vuur maar niet echt een burning iets". Stond op u -32 achter hut en palmen (bijna niet te zien); nu op open
+    // zand landinwaarts naast het feest, ~18-27 m van het vuur, ~24 m hoog (schaal 0,8-1,3 per kunstwerk), de voorkant naar het publiek.
+    // Eerst de -z-kant (zichtlijn langs de zuidkant van de hut; vanaf de steiger en de zee staat hij dan midden achter het feest, vanaf de
+    // lift ook in beeld); past hij daar niet (de rotswand buigt aan de uiteinden om de kamer heen): de +z-kant, zichtlijn langs de noordkant
+    // van de hut. Elke plek wordt getoetst op een raster over de voet: niet in de rotswand, de hut (+marge), het feest/pad/de zee (u > -9) of
+    // de lobby van de lift. In u/z: f = richting van het kunstwerk naar het publiek (voorkant).
+    const BRM = doolhof.brand, brandPlan = BRM && BRM.klaar && BRM.kiesNaam && BRM.maat ? (() => {
+      const naam = BRM.kiesNaam(), m = naam && BRM.maat(naam);
+      if (!m) return null;
+      const br = (m.x1 - m.x0) / 2, dp = (m.z1 - m.z0) / 2, s0 = klem(24 / Math.max(m.h, 1.6 * Math.max(br, dp)), 0.8, 1.3);
+      const muur = u => -D + Math.min(14, 0.03 * Math.pow(Math.max(0, Math.abs(u) - (W + 3)), 2));   // voet van de rotswand (buiten-basis, rotsPoort: buig)
+      const VERB = [[HUT.u - 3.5, HUT.u + 3.8, HUT.z - 5, HUT.z + 5], [-9, 99, -99, 99], [-8.5, 8.5, D - 0.6, 99]];
+      const plekVrij = (u, z) => z > muur(u) + 1 && VERB.every(([a, b, c, e]) => u < a || u > b || z < c || z > e);
+      const kand = [];
+      for (const a of [0.46, 0.4, 0.52, 0.58]) kand.push({ a, zs: 1, ref: VUUR });
+      for (const a of [0.35, 0.28, 0.42, 0.5]) kand.push({ a, zs: -1, ref: { u: -2, z: 8 } });
+      for (const sf of [1, 0.9, 0.8]) for (const k of kand) {
+        const s = s0 * sf, Dc = klem(13 + dp * s, 17, 27), fu = Math.cos(k.a), fz = k.zs * Math.sin(k.a), Eu = k.ref.u - fu * Dc, Ez = k.ref.z - fz * Dc;
+        let goed = true;
+        for (let i = 0; i <= 4 && goed; i++) for (let j = 0; j <= 4; j++) {
+          const a = (i / 2 - 1) * dp * s, b = (j / 2 - 1) * br * s;
+          if (!plekVrij(Eu + fu * a - fz * b, Ez + fz * a + fu * b)) { goed = false; break; }
+        }
+        if (goed) return { naam, schaal: s, u: Eu, z: Ez, fu, fz, br: br * s, dp: dp * s, x: X(Eu), ry: Math.atan2(sx * fu, fz) };
+      }
+      return null;
+    })() : null;
+    if (brandPlan) {  // voet + een strook ervoor vrijhouden (geen palmen, struiken, fakkels of zakjes); de strook stopt vóór het publiek
+      const P = brandPlan, pu = -P.fz, pz = P.fu;
+      for (let a = -P.dp; a <= P.dp + 0.01; a += 3.5) for (let b = -P.br; b <= P.br + 0.01; b += 3.5) {
+        const u = P.u + P.fu * a + pu * b, z = P.z + P.fz * a + pz * b, rr = Math.min(2.6, -8.6 - u);
+        if (rr > 0.5) rond(X(u), z, rr);
+      }
+      for (let a = P.dp + 2; a < P.dp + 30; a += 2.5) {
+        const u = P.u + P.fu * a, rr = Math.min(4.5, -8.8 - u);
+        if (rr < 1.2) break;
+        rond(X(u), P.z + P.fz * a, rr);
+      }
+    }
 
     // ---------- figuren: dj, vuurdraaiers, glowstick-dansers (kern: hooguit 10 / 6 / 5) ----------
     const djP = L(HUT.u + 0.85, HUT.z);
@@ -943,30 +1025,37 @@ void main() {
       if (st === 'groove' && ht % 16 === 0 && Math.random() < 0.7) { knal(2 * per); if (Math.random() < 0.4) knal(2 * per); }
     }
 
+    // ---------- Burning Man (doolhof/buiten-brand.js, plek zie boven): leent de hut-lamp zolang hij brandt (die schuift dan naar het
+    // kunstwerk en licht het publiek oranje aan; op laag/tv is er geen tweede lamp, dan doet alleen het silhouetpubliek mee) ----------
+    const brand = brandPlan && doolhof.brand.plaats ? doolhof.brand.plaats(ctx, g, { naam: brandPlan.naam, x: brandPlan.x, z: brandPlan.z, ry: brandPlan.ry, schaal: brandPlan.schaal, lamp: lampHut }) : null;
+    const camStaat = { fase: 'voor' };
+
     // ---------- camera, lift als uitgang ----------
-    const cam = strandCam(ctx, { W, D, X, KUST, vuur: VUUR, hut: HUT, wacht: WACHT, pier: PIER, palm: palmA || palmB || null, dansers: vd ? vd.figs : [] });
+    const cam = strandCam(ctx, { W, D, X, KUST, vuur: VUUR, hut: HUT, wacht: WACHT, pier: PIER, palm: palmA || palmB || null, dansers: vd ? vd.figs : [], brand, staat: camStaat });
     B.liftUitgang();  // de kern kiest de overgang direct na maak(): de uitgang wordt een lift (de lifttoren staat er al)
     tel.gebouwd++;
     tel.laatste = { lucht: soort + (paars ? ' (paars)' : ''), verte: vulkaan ? 'vulkaan' : 'bergen', zee: sx > 0 ? '+x' : '-x', kust: +KUST.toFixed(1), pad: +LEN.toFixed(1),
       palmen: palmLijst.length, publiek: publiek ? publiek.n : 0, glowsticksPubliek: publiek ? publiek.glowsticks : 0, dj: !!dj, vuurdansers: vd ? vd.figs.length : 0,
-      glowDansers: glow.length, fakkels: fak.length, zakjes: zak.length, ballonnen: NBAL, vuurwerkPunten: NP2, lampen: [!!lampVuur, !!lampHut] };
-    const PZET = { helder: 0.5, flits: 0, rand: 1, armen: 0, gloed: 1, b: null };
-    // Burning Man (doolhof/buiten-brand.js, 17-10): een ander gigantisch kunstwerk landinwaarts op het zand, kijkt naar zee; brandt af
-    // op de drop (of na ~24 s, alleen zolang de loper hier is) en stort in
-    const brand = doolhof.brand && doolhof.brand.plaats ? doolhof.brand.plaats(ctx, g, { x: X(-32), z: -4, ry: sx > 0 ? Math.PI / 2 : -Math.PI / 2, schaal: 1.25 }) : null;
+      glowDansers: glow.length, fakkels: fak.length, zakjes: zak.length, ballonnen: NBAL, vuurwerkPunten: NP2, lampen: [!!lampVuur, !!lampHut],
+      brand: brand ? { naam: brand.naam, schaal: +brandPlan.schaal.toFixed(2), kant: brandPlan.fz > 0 ? '-z' : '+z', u: +brandPlan.u.toFixed(1), z: +brandPlan.z.toFixed(1), hoog: +brand.h.toFixed(1) } : (doolhof.brand && doolhof.brand.klaar ? 'past niet' : 'model niet geladen') };
+    // publiek: het licht (randlicht in de shader) komt van het kampvuur; brandt de Burning Man, dan schuift het naar hem toe en wordt het feller
+    const PLICHT0 = new THREE.Vector3(VUURP.x, 1.4, VUURP.z);
+    const PZET = { helder: 0.5, flits: 0, rand: 1, armen: 0, gloed: 1, b: null, licht: PLICHT0.clone() };
     return {
       maat, route, blijf: 12, cam, publiek,
       update(dt) {
-        if (brand) brand.update(dt);
         const sh = doolhof.show || {}, st = sh.stand || 'groove', pu = U.uPuls.value, en = U.uEn.value;
-        if (publiek) {
-          PZET.helder = 0.5 + 0.25 * U.uVlam.value; PZET.flits = U.uFlits.value * 0.5; PZET.rand = 0.8 + 0.6 * pu; PZET.armen = 0.35 * U.uDrop.value;
-          PZET.gloed = 0.85 + 0.5 * pu + 0.6 * U.uDrop.value; PZET.b = U.uK1.value;
-          publiek.zet(PZET);
-        }
         if (lampHut) {
           if (sh.kleur) sh.kleur(Math.floor(Math.max(0, typeof beatPos === 'number' ? beatPos : 0) / 2), lampHut.color);
           lampHut.intensity = 1.5 * (0.7 + 0.8 * pu * Math.max(0.3, en) + 0.6 * U.uDrop.value) * (1 - 0.5 * U.uBlack.value) + 2 * U.uFlits.value;
+        }
+        // na de hut-lamp: de Burning Man mengt zijn vuur over de geleende lamp; loopt de loper al naar de lift, dan steekt/stort hij nu
+        if (brand) { if (doolhof.strand) doolhof.strand.brand = brand; brand.update(dt, { haast: camStaat.fase === 'na' }); }  // (test: doolhof.strand.brand.ontsteek())
+        if (publiek) {
+          PZET.helder = 0.5 + 0.25 * U.uVlam.value; PZET.flits = U.uFlits.value * 0.5; PZET.rand = 0.8 + 0.6 * pu; PZET.armen = 0.35 * U.uDrop.value;
+          PZET.gloed = 0.85 + 0.5 * pu + 0.6 * U.uDrop.value; PZET.b = U.uK1.value;
+          if (brand) { const k = Math.min(1, brand.gloed); PZET.helder += 0.35 * k; PZET.licht.lerpVectors(PLICHT0, brand.lichtP, 0.8 * k); }
+          publiek.zet(PZET);
         }
         H.uniforms.uNevel.value = nevel0 * (1 + 0.6 * U.uDrop.value + 0.3 * U.uOpb.value) * (st === 'break' ? 0.8 : 1);
         vuurwerkBeeld(sh, st);

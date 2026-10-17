@@ -20,6 +20,9 @@
 // klopt, geen deeltjes-meshes); de snelheid veegt alles verticaal uit.
 // Kern-contract: doolhof.lift.plan(van) -> L (op ov.L), bouw(parent, frame, ov) -> generator die de helft (Group) teruggeeft, stap(L, dt, info),
 // instap(L, camPos, camLook, half), cam(L, half, uitP, uitL) -> fov, licht(L, half, i, lamp), magWissel(L), info().
+// Vast doel (17-10, buitenkamers op level 0): zetNaar(L, naar) zet de rit vóór het vertrek (voorRit(L)) zo dat hij precies op naar
+// eindigt (L.vast); zetVan mikt dan opnieuw op dat doel en is de volgende kamer bij het remmen nog niet klaar, dan rijdt hij niet verder
+// maar wacht hij op het doel met de deuren dicht tot de wissel (aankomst opent pas na de wissel).
 // Test: doolhof.lift({ cabine, uitzicht, deur, thema, glasDak, glasVloer, richting: 1|-1, levels, kamer }) start het doolhof met een lift na de eerste kamer;
 // doolhof.volgendeOvergang = 'lift' | 'gang' (volgende overgang die gebouwd wordt), doolhof.liftKeus = {...} (vaste keuzes voor de
 // volgende lift), doolhof.liftInfo(), doolhof.level.
@@ -740,7 +743,7 @@ void main() {
     // schildering voor het uitzicht 'schilder' (zelfde gedeelde textuur als de gangen)
     const uitTex = uit === 'schilder' && kanTex ? doolhof.tex(TH.bron) : WIT;
     const uitAsp = TH.bron === 'staal' || TH.bron === 'baksteen' ? 1 : 2048 / 869, uitGain = doolhof.led && doolhof.led.bronGain ? doolhof.led.bronGain(TH.bron) : 1;
-    const L = { zaad, thema, TH, cab, uit, deur, vorm, W, D, H, R, WB, dw, dh, richting, afstand, levelH, vmax, acc, rem, van, naar: van + richting * afstand, level: van,
+    const L = { zaad, thema, TH, cab, uit, deur, vorm, W, D, H, R, WB, dw, dh, richting, afstand, levelH, vmax, acc, rem, kruis, vast: null, van, naar: van + richting * afstand, level: van,
       glasVloer, glasDak, pa, pb, pc, dispKl, camLijst: pool, ramen, camZij: rnd() < 0.5 ? -1 : 1, raamOp: rnd() < 0.5, camDraai: rnd() < 0.5 ? -1 : 1, camA: r(0, Math.PI * 2),
       schokK: cab === 'kooi' ? 1.6 : cab === 'messing' ? 1.2 : cab === 'capsule' ? 0.5 : 1, tDeur: deur === 'iris' ? 1.1 : deur === 'harmonica' ? 1.5 : deur === 'rol' ? 1.4 : r(0.9, 1.3),
       C0, LEN, STOP: C0 + D / 2 + ZL, camMin: C0 + CAM_ACHTER,
@@ -755,9 +758,29 @@ void main() {
   function zetVan(L, van) {
     if (L.van === van || L.fase !== 'wacht') return;
     L.van = L.level = van; L.U.van.value = van;
+    if (L.vast != null && L.vast !== van) { richt(L, L.vast); return; }  // vast doel (zetNaar): vanaf het nieuwe vertrek daarop mikken
+    L.vast = null;  // vertrek = doel kan geen rit zijn: dan een gewone rit (de kern voorkomt dit: vertrekLevel)
     if (Math.abs(van + L.richting * L.afstand) > 99) { L.richting = -L.richting; L.U.rolRicht.value = L.richting; }
     L.naar = van + L.richting * L.afstand;
     L.U.basis.value = (van - Math.min(van, L.naar)) * L.levelH + 25;
+  }
+  // vast doel (17-10): de kern weet pas ná het plannen dat de kamer erna een buitenkamer is (level 0). Dan, zolang de rit nog niet
+  // begon (pos 0: wacht/roep/open/instap/sluit/start), richting/afstand/doelPos/snelheid en de uniforms zo zetten dat hij precies op naar
+  // uitkomt. naar = van (geen rit) of te laat: false, dan blijft het plan zoals het was.
+  const VOOR_RIT = new Set(['wacht', 'roep', 'open', 'instap', 'sluit', 'start']);
+  const voorRit = L => !!L && VOOR_RIT.has(L.fase) && !(L.pos > 0) && !L.remt;
+  function zetNaar(L, naar) {
+    naar = Math.round(+naar);
+    if (!voorRit(L) || !isFinite(naar) || naar === L.van || Math.abs(naar) > 99) return false;
+    richt(L, naar); L.vast = naar;
+    return true;
+  }
+  function richt(L, naar) {  // zoals plan(): kruistijd en de verhoudingen optrekken/remmen blijven die van deze rit
+    const accT = L.vmax / L.acc, remK = L.rem / L.acc, afstand = Math.abs(naar - L.van), weg = afstand * L.levelH;
+    L.richting = naar > L.van ? 1 : -1; L.afstand = afstand; L.naar = naar; L.doelPos = weg;
+    L.vmax = Math.min(32, Math.max(2.4, weg / L.kruis)); L.acc = L.vmax / accT; L.rem = L.acc * remK;
+    L.U.rolRicht.value = L.richting;
+    L.U.basis.value = (L.van - Math.min(L.van, naar)) * L.levelH + 25;
   }
 
   // ---------- materialen ----------
@@ -1251,7 +1274,8 @@ void main() {
       case 'sluit': L.deurA = Math.max(0, L.deurA - dt / L.tDeur); if (L.deurA <= 0) zetFase(L, 'start'); break;
       case 'start': if (L.tFase > 0.25 && (opDeTel() || L.tFase > 0.7)) { zetFase(L, 'rit'); L.schok = Math.max(L.schok, 0.9); } break;
       case 'rit': rit(L, dt, info); break;
-      case 'aankomst': if (L.tFase > 0.6 && L.camAchter) zetFase(L, 'opent'); break;
+      // pas open na de wissel (info.wissel): een rit met vast doel kan aankomen terwijl de volgende kamer nog bouwt (zie rit)
+      case 'aankomst': if (L.tFase > 0.6 && L.camAchter && info.wissel) zetFase(L, 'opent'); break;
       case 'opent': L.deurV = Math.min(1, L.deurV + dt / L.tDeur); if (L.deurV >= 1) zetFase(L, 'uit'); break;
       case 'uit': if (info.kant === 'B' && info.d > L.LEN + 0.6) zetFase(L, 'klaar'); break;
       case 'klaar': if (L.tFase > 3) L.deurV = Math.max(0, L.deurV - dt / L.tDeur); break;
@@ -1272,6 +1296,9 @@ void main() {
     const vDoel = L.vmax * fct, rest = L.doelPos - L.pos;
     if (!L.remt && rest <= L.v * L.v / (2 * L.rem) + 0.02) {
       if (info.wissel) L.remt = true;
+      // vast doel (buitenkamer = level 0): niet verder rijden; remmen en met de deuren dicht wachten op de wissel. verlengd telt
+      // toch op: dan geeft de kern het na 10 s op als de kamer niet komt (liftLoper)
+      else if (L.vast != null) { L.remt = true; L.verlengd += 1; }
       else { L.doelPos += L.levelH; L.verlengd += 1; }  // de volgende kamer is nog niet klaar: een level verder
     }
     if (L.remt) L.a = rest > 1e-3 ? Math.max(-L.v * L.v / (2 * rest), -L.rem * 2.5) : -L.rem;
@@ -1494,14 +1521,14 @@ void main() {
     return 'lift na ' + (o.kamer || 'gang-kamer');
   };
   Object.assign(LIFT, {
-    klaar: () => true, plan, zetVan, bouw, stap, instap, cam, licht, magWissel, LEN: L => L.LEN,
+    klaar: () => true, plan, zetVan, zetNaar, voorRit, bouw, stap, instap, cam, licht, magWissel, LEN: L => L.LEN,
     CABINES, UITZICHT, DEUREN: ALLE_DEUREN, THEMAS: THEMA_NAMEN, U: LU,
     info() {
       const z = doolhof.toestand && doolhof.toestand(), X = z && z.lift, L = X ? X.L : [...alleL].pop();
       if (!L) return null;
       return { fase: L.fase, level: L.level, van: L.van, naar: L.naar, richting: L.richting, afstand: L.afstand, v: Math.round(L.v * 10) / 10, pos: Math.round(L.pos * 10) / 10,
         thema: L.thema, cabine: L.cab, uitzicht: L.uit, deur: L.deur, levelH: Math.round(L.levelH * 100) / 100, vmax: Math.round(L.vmax * 10) / 10, explosie: Math.round(L.explosie * 100) / 100,
-        cam: L.cam && L.cam.naar, verlengd: L.verlengd, glasVloer: L.glasVloer, glasDak: L.glasDak, gewisseld: !!(X && X.gewisseld) };
+        cam: L.cam && L.cam.naar, verlengd: L.verlengd, glasVloer: L.glasVloer, glasDak: L.glasDak, gewisseld: !!(X && X.gewisseld), vast: L.vast };
     },
   });
   doolhof.lift = LIFT;
