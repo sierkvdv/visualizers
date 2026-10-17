@@ -20,14 +20,14 @@
     house:    P(false, 'groove',   false, 8,  'kick',      0,  false, 0.5),
     techno:   P(false, 'groove',   false, 8,  'kick',      0,  false, 0.6),
     trance:   P(false, 'handen',   false, 16, 'na-stilte', 0,  false, 0.55),
-    dubstep:  P(true,  'halftime', true,  8,  'na-stilte', 16, true,  0.65),
-    dnb:      P(true,  'skank',    true,  8,  'bassprong', 32, true,  0.9),
+    dubstep:  P(true,  'halftime', true,  20, 'na-stilte', 16, true,  0.65),
+    dnb:      P(true,  'skank',    true,  20, 'bassprong', 32, true,  0.9),
     hiphop:   P(false, 'bounce',   false, 4,  'kick',      0,  false, 0.45),
     afro:     P(false, 'afro',     false, 4,  'kick',      0,  false, 0.45),
     lounge:   P(false, 'lounge',   false, 4,  'kick',      0,  false, 0.15),
-    rock:     P(true,  'headbang', false, 4,  'riff',      16, false, 0.7),
-    metal:    P(true,  'headbang', false, 4,  'riff',      32, true,  0.9),
-    punk:     P(true,  'pogo',     false, 4,  'riff',      16, false, 0.9),
+    rock:     P(true,  'headbang', false, 16, 'riff',      16, false, 0.7),
+    metal:    P(true,  'headbang', false, 16, 'riff',      32, true,  0.9),
+    punk:     P(true,  'pogo',     false, 12, 'riff',      16, false, 0.9),
     onbekend: P(false, 'groove',   false, 8,  'kick',      0,  false, 0.5),  // halveTel volgt de BPM (oude gedrag)
   };
   const NAMEN = ['house', 'techno', 'trance', 'dubstep', 'dnb', 'hiphop', 'afro', 'lounge', 'rock', 'metal', 'punk'];

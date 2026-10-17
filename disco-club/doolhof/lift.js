@@ -8,14 +8,19 @@
 // Onzichtbare wissel: met de deuren dicht zet de kern loper en camera van de lift achter kamer A naar dezelfde plek in de lift vóór kamer B.
 // Beide helften delen ALLE geometrie, materialen en de toestand (ov.L): ze zijn op elk moment gelijk. Tijdens de rit (deuren dicht) zijn de
 // kamers zelf onzichtbaar (kern: liftVerstop), dus de schacht hoeft niets af te schermen.
-// Variatie (zaad per rit, assen gecombineerd): cabine (glasbuis, spiegel, kooi, draad, capsule, messing, led, kristal) x uitzicht (beton,
-// ringen, ruimte, stad, water, lava, data, synth, wolken) x deur (schuif, tele, luik, rol, harmonica, iris) x palet (vast of uit het zaad)
-// x richting x afstand 1-40 levels x levelhoogte x topsnelheid x ledpatronen x camerabewegingen x displaykleur.
+// Variatie (zaad per rit, assen gecombineerd): stijl (de 12 gangstijlen van gangen.js: schildering + palet + passende uitzichten) x cabine
+// (glasbuis, spiegel, kooi, draad, capsule, messing, led, kristal, panorama, kusama, schilder, disco) x uitzicht (beton, ringen, ruimte,
+// stad, water, lava, data, synth, wolken, tunnel, spiegeltunnel, wormgat, laser, schilder) x deur (schuif, tele, luik, rol, harmonica,
+// iris) x palet (meestal dat van de stijl) x glazen dak en/of glazen vloer (altijd minstens één, panelen met ledvoegen) x richting x
+// afstand 1-40 levels x levelhoogte x topsnelheid x ledpatronen x camerabewegingen x displaykleur.
+// Ruim (17-10 avond): cabines 3,1-4,6 m breed/diep en 3,1-4 m hoog; de camera blijft 0,42 m van de wanden (near = 0,2 m: dichterbij
+// keek hij in de hoeken door de wand). Elke rit begint na de instap met een verticaal shot: 'omhoog' (laag, door het glazen dak de
+// oneindige schacht in, draaiend) of 'omlaag' (hoog, door de glazen vloer naar beneden).
 // Uitzicht = één raycast-shader op een doos rond de cabine: virtuele wanden, cilinders, vlakken en sterren op hun echte afstand (parallax
 // klopt, geen deeltjes-meshes); de snelheid veegt alles verticaal uit.
 // Kern-contract: doolhof.lift.plan(van) -> L (op ov.L), bouw(parent, frame, ov) -> generator die de helft (Group) teruggeeft, stap(L, dt, info),
 // instap(L, camPos, camLook, half), cam(L, half, uitP, uitL) -> fov, licht(L, half, i, lamp), magWissel(L), info().
-// Test: doolhof.lift({ cabine, uitzicht, deur, richting: 1|-1, levels, kamer }) start het doolhof met een lift na de eerste kamer;
+// Test: doolhof.lift({ cabine, uitzicht, deur, thema, glasDak, glasVloer, richting: 1|-1, levels, kamer }) start het doolhof met een lift na de eerste kamer;
 // doolhof.volgendeOvergang = 'lift' | 'gang' (volgende overgang die gebouwd wordt), doolhof.liftKeus = {...} (vaste keuzes voor de
 // volgende lift), doolhof.liftInfo(), doolhof.level.
 (function () {
@@ -24,7 +29,7 @@
   if (typeof THREE === 'undefined' || typeof renderer === 'undefined' || typeof clubHooks === 'undefined') return;
 
   // ---------- maten: frame van een helft begint bij de kamerdeur (0,0) en loopt langs +z: sas, spleet, cabine, spleet, sas ----------
-  const GW = 2.0, GH = 2.6, LV = 1.5, SG = 0.1, ZL = 0.1, CAM_ACHTER = 0.4, OOG = 1.7;
+  const GW = 2.0, GH = 2.6, LV = 1.5, SG = 0.1, ZL = 0.1, CAM_ACHTER = 0.45, OOG = 1.7;
   const glad = (x, a, b) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   const eas = t => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
   const reeks = zaad => { let s = zaad >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
@@ -89,6 +94,8 @@ float glyf(float g, vec2 c) {
   // --- het uitzicht: raycast vanuit de camera door de doos rond de cabine ---
   const F_UIT = KOP + `
 varying vec3 vP, vC;
+uniform sampler2D uitTex;
+uniform float uitAsp, uitGain;
 float VB, TMIN;
 float vlakT(float o, float d, float b) { float s = d >= 0.0 ? 1.0 : -1.0; return (s * b - o) / (s * max(abs(d), 1e-4)); }
 float cil(vec3 ro, vec3 rd, float R) { float a = max(dot(rd.xz, rd.xz), 1e-6), b = dot(ro.xz, rd.xz), c = dot(ro.xz, ro.xz) - R * R; return (-b + sqrt(max(b * b - a * c, 0.0))) / a; }
@@ -331,6 +338,108 @@ vec3 sWolken(vec3 ro, vec3 rd) {
   float binnen = 1.0 - smoothstep(1.5, 5.0, abs(Yc - s * floor(Yc / s + 0.5)));
   return mix(col, vec3(0.12, 0.12, 0.16) + A * 0.06, binnen * 0.85);
 }
+// --- 9 tunnel: oneindige lichttunnel, vierkante neonkaders om de schacht; omhoog/omlaag kijken = kader na kader tot in het verdwijnpunt ---
+vec3 sTunnel(vec3 ro, vec3 rd) {
+  float bx = cabW * 0.5 + 0.75, bz = cabD * 0.5 + 0.6;
+  float tx = vlakT(ro.x, rd.x, bx), tz = vlakT(ro.z, rd.z, bz), zij = step(tx, tz), t = min(tx, tz);
+  vec3 p = ro + rd * t;
+  float Y = p.y + rit, sp = max(0.9, levelH * 0.25), id = floor(Y / sp + 0.5), dy = abs(Y - id * sp);
+  float w = 0.025 + VB * 0.45 + t * 0.0012;
+  float kader = (1.0 - smoothstep(w, w + 0.015 + t * 0.0015, dy)) * (0.05 / (0.05 + VB));
+  float jacht = 0.25 + 1.3 * pow(fract(tel * 0.5 - id * 0.0625 * rolRicht), 4.0);
+  vec3 kl = pal3(id * 0.0833 + floor(tel / 4.0) * 0.25);
+  float u = zij > 0.5 ? p.z : p.x, hk = zij > 0.5 ? bz : bx;
+  float paal = 1.0 - smoothstep(0.015, 0.05, hk - abs(u));
+  float ver = 1.0 / (1.0 + abs(p.y - ro.y) * 0.01);
+  vec3 col = vec3(0.006, 0.005, 0.01) + kl * (kader * 1.7 + exp(-dy * 5.0) * 0.12) * jacht * ver;
+  col += mix(B, vec3(1.0), 0.3) * paal * 0.12 * ver * (0.6 + 0.6 * puls);
+  col += mix(A, B, 0.5 + 0.5 * sin(tijd * 0.3)) * pow(abs(rd.y), 30.0) * (0.35 + 0.5 * puls);  // het eind van de tunnel gloeit
+  return col;
+}
+// --- 10 spiegeltunnel: een oneindig veld lampjes (Kusama-spiegelzaal), lagen lampjes op steeds verdere cilinders, kleur per lampje ---
+vec3 lampjes(vec3 ro, vec3 rd, float R, float c, float zs) {
+  float t = cil(ro, rd, R);
+  vec3 p = ro + rd * t;
+  float u = atan(p.z, p.x) * R, Y = p.y + rit, cy = max(c, VB * 3.0);
+  vec2 g = vec2(u / c, Y / cy), id = floor(g), q = fract(g) - 0.5, o = (h22(id + zs) - 0.5) * 0.5;
+  vec2 d = vec2((q.x - o.x) * c, (q.y - o.y) * cy);
+  d.y = max(0.0, abs(d.y) - VB * 0.5);
+  float r = 0.03 + 0.0015 * t, l2 = dot(d, d), hh = h21(id * 1.37 + zs);
+  float s = exp(-l2 / (r * r)) + 0.12 * exp(-l2 / (r * r * 12.0));
+  float k = 0.35 + 1.1 * pow(fract(tel * 0.25 - hh), 5.0) + 0.3 * puls;
+  return pal3(hh * 1.7 + floor(tel / 8.0) * 0.33) * s * k * (r / (r + VB * 0.5)) / (1.0 + t * 0.03);
+}
+vec3 sSpiegel(vec3 ro, vec3 rd) {
+  float R0 = length(vec2(cabW, cabD)) * 0.5 + 0.6;
+  vec3 col = vec3(0.003, 0.002, 0.006);
+  col += lampjes(ro, rd, R0, 0.42, 1.0);
+  col += lampjes(ro, rd, R0 + 2.3, 0.5, 2.0) * 0.8;
+  col += lampjes(ro, rd, R0 + 5.5, 0.6, 3.0) * 0.6;
+  if (zwaar < 1.5) col += lampjes(ro, rd, R0 + 10.0, 0.8, 4.0) * 0.45;
+  col += mix(A, C, 0.5) * pow(abs(rd.y), 24.0) * 0.25;
+  return col;
+}
+// --- 11 wormgat: ronde tunnel met spiraalarmen en snelheidsstrepen, een gloeiende kern in het verdwijnpunt ---
+vec3 sWorm(vec3 ro, vec3 rd) {
+  float R = length(vec2(cabW, cabD)) * 0.5 + 1.2, t = cil(ro, rd, R);
+  vec3 p = ro + rd * t;
+  float Y = p.y + rit, a = atan(p.z, p.x), d = abs(p.y - ro.y);
+  float sp = a / 6.2831853 * 5.0 + Y * 0.09 - tijd * 0.35 * rolRicht;
+  float arm = pow(0.5 + 0.5 * cos(sp * 6.2831853), 5.0);
+  float n = fbm(vec2(a * 2.5, Y * 0.12 - tijd * 0.4) + zaad);
+  float kol = floor(a / 6.2831853 * 48.0);
+  float st = pow(h11(kol + floor(Y * 0.35 + tijd * 2.0 * rolRicht) * 7.13 + zaad), 14.0);
+  vec3 col = mix(C * 0.04, A * 0.5, n * n) + pal3(sp * 0.2 + tijd * 0.05) * arm * (0.35 + 0.4 * puls) + mix(B, vec3(1.0), 0.5) * st * (0.6 + VB * 3.0);
+  col *= 1.0 / (1.0 + d * 0.025);
+  col += mix(vec3(1.0), A, 0.35) * pow(abs(rd.y), 18.0) * (0.6 + 0.6 * puls);
+  return col;
+}
+// --- 12 laser: elke paar meter een waaier laserstralen dwars door de schacht (omhoog/omlaag: raster na raster), lijnen op de wand ---
+vec3 sLaser(vec3 ro, vec3 rd) {
+  float bx = cabW * 0.5 + 1.6, bz = cabD * 0.5 + 1.4;
+  float tx = vlakT(ro.x, rd.x, bx), tz = vlakT(ro.z, rd.z, bz), t = min(tx, tz);
+  vec3 p = ro + rd * t;
+  float Y = p.y + rit, s = max(1.5, levelH * 0.5), id = floor(Y / s + 0.5), dy = abs(Y - id * s), w = 0.015 + VB * 0.4;
+  vec3 col = vec3(0.004, 0.003, 0.007) * (0.6 + fbm(vec2(p.x + p.z, Y * 0.3) + zaad));
+  float aan = step(0.25, h11(id * 3.1 + floor(tel / 2.0)));
+  col += pal3(id * 0.37 + floor(tel / 4.0) * 0.5) * (1.0 - smoothstep(w, w + 0.02, dy)) * aan * 1.2 * (0.05 / (0.05 + VB));
+  float Yc = ro.y + rit, Yp = rd.y > 0.0 ? (floor(Yc / s) + 1.0) * s : floor(Yc / s) * s;
+  float ry = abs(rd.y) < 1e-4 ? 1e-4 : rd.y, schuin = smoothstep(0.02, 0.12, abs(rd.y));
+  for (int i = 0; i < 8; i++) {
+    float tt = (Yp - Yc) / ry;
+    if (tt > 0.0 && tt < t) {
+      vec3 q = ro + rd * tt;
+      float k = floor(Yp / s + 0.5), hk = h11(k * 3.1 + floor(tel / 2.0));
+      if (hk > 0.25) {
+        vec2 dq = q.xz - vec2((mod(k, 2.0) * 2.0 - 1.0) * bx, -bz);
+        float n = 5.0 + floor(hk * 5.0), x = (atan(dq.y, dq.x) + 0.35 * sin(tijd * (0.6 + hk) + k)) * n / 1.5708;
+        float dl = abs(fract(x) - 0.5) * length(dq) * 1.5708 / n, ww = 0.01 + tt * 0.0012;
+        col += pal3(k * 0.37 + floor(tel / 4.0) * 0.5) * (1.0 - smoothstep(ww, ww * 2.5, dl)) * exp(-tt * 0.015) * (0.8 + 0.6 * puls) * schuin;
+      }
+    }
+    Yp += rd.y > 0.0 ? s : -s;
+  }
+  return col;
+}
+// --- 13 schilder: de schildering van de gangstijl op de schachtwanden (gespiegeld getegeld: geen naden), vloerplaten die langs schieten ---
+vec3 sSchilder(vec3 ro, vec3 rd) {
+  float bx = cabW * 0.5 + 0.9, bz = cabD * 0.5 + 0.7;
+  float tx = vlakT(ro.x, rd.x, bx), tz = vlakT(ro.z, rd.z, bz), zij = step(tx, tz), t = min(tx, tz);
+  vec3 p = ro + rd * t;
+  float wnd = zij > 0.5 ? (p.x > 0.0 ? 0.0 : 1.0) : (p.z > 0.0 ? 2.0 : 3.0);
+  float u = (zij > 0.5 ? p.z * sign(p.x) : -p.x * sign(p.z)) + wnd * 5.3, Y = p.y + rit, Ht = 3.4;
+  vec2 m = abs(fract(vec2(u / (Ht * uitAsp), Y / Ht) * 0.5) * 2.0 - 1.0);
+  vec3 im = min(texture2D(uitTex, vec2(m.x, 1.0 - m.y), log2(1.0 + VB * 40.0)).rgb * uitGain, vec3(1.0));
+  float l = dot(im, vec3(0.3, 0.59, 0.11));
+  vec3 pk = mix(mix(C * 0.05, A * 0.9, smoothstep(0.15, 0.5, l)), B * 1.1, smoothstep(0.55, 0.9, l));
+  vec3 col = mix(pk, im, 0.55) * (0.45 + 0.35 * puls);
+  float j = floor((Y + 0.3) / levelH), rel = Y - j * levelH;
+  col = mix(col, vec3(0.015), step(0.0, rel) * step(rel, 0.18) * 0.85);
+  col += mix(A, vec3(1.0), 0.4) * (1.0 - smoothstep(0.0, 0.03 + VB * 0.4, abs(rel))) * 0.8 / (1.0 + VB * 4.0);
+  float hb = levelH * 0.5, Yb = Y - levelH * 0.25, kb = floor(Yb / hb + 0.5), db = abs(Yb - kb * hb);
+  col += pal3(kb * 0.27 + floor(tel / 4.0) * 0.33) * exp(-db * 3.0) * 0.25 * (0.6 + 0.6 * puls);
+  return col * exp(-abs(p.y - ro.y) * 0.03);
+}
 void main() {
   paletZet();
   VB = abs(snel) * 0.026;
@@ -345,7 +454,12 @@ void main() {
   else if (soort < 5.5) col = sLava(ro, rd);
   else if (soort < 6.5) col = sData(ro, rd);
   else if (soort < 7.5) col = sSynth(ro, rd);
-  else col = sWolken(ro, rd);
+  else if (soort < 8.5) col = sWolken(ro, rd);
+  else if (soort < 9.5) col = sTunnel(ro, rd);
+  else if (soort < 10.5) col = sSpiegel(ro, rd);
+  else if (soort < 11.5) col = sWorm(ro, rd);
+  else if (soort < 12.5) col = sLaser(ro, rd);
+  else col = sSchilder(ro, rd);
   col *= helder * (1.0 - 0.55 * blackout) * (1.0 + 0.8 * explosie);
   col += (pal3(floor(tel) * 0.37) * (0.15 + 0.4 * exp(-fract(tel) * 4.0)) + vec3(0.25) * exp(-fract(tel) * 9.0)) * explosie + vec3(0.25) * flits;
   gl_FragColor = vec4(col, 1.0);
@@ -451,6 +565,20 @@ vec3 deco(vec2 p) {
   c += A * 0.35 * exp(-r * 4.0) * (0.5 + 0.5 * puls);
   return c;
 }
+vec3 disco(vec2 p) {  // spiegeltegels: elke tegel een eigen glinstering, gekleurde lichtvlekken die over de wand trekken
+  vec2 g = p / 0.09, id = floor(g), q = fract(g);
+  float naad = smoothstep(0.0, 0.08, min(min(q.x, 1.0 - q.x), min(q.y, 1.0 - q.y)));
+  float h = h21(id + pzaad);
+  vec3 c = vec3(0.03, 0.03, 0.035) + tint * 0.02 + vec3(0.04) * h;
+  c += mix(vec3(1.0), pal3(h), 0.4) * pow(h21(id * 1.7 + floor(tijd * 9.0 + h * 5.0)), 30.0) * (1.5 + 2.0 * puls);
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    vec2 cp = vec2(sin(tijd * (0.31 + fi * 0.13) + fi * 2.1) * 0.5 * maat.x, sin(tijd * (0.23 + fi * 0.11) + fi * 1.3) * 0.35 * maat.y);
+    vec2 dd = p - cp;
+    c += palK(fi + floor(tel / 4.0)) * exp(-dot(dd, dd) * 2.5) * (0.35 + 0.5 * puls) * (0.4 + 0.6 * h);
+  }
+  return c * naad;
+}
 void main() {
   paletZet();
   vec2 p = vUv - midden;
@@ -464,7 +592,8 @@ void main() {
   else if (modus < 3.5) c = deur(p);
   else if (modus < 4.5) c = sas(p);
   else if (modus < 5.5) c = knoppen(p);
-  else c = deco(p);
+  else if (modus < 6.5) c = deco(p);
+  else c = disco(p);
   float vol = modus < 0.5 || modus > 5.5 ? 1.0 : 0.45;
   c *= 1.0 - 0.6 * blackout;
   c += (pal3(floor(tel) * 0.37) * (0.35 + 0.9 * exp(-fract(tel) * 4.0)) + vec3(0.5) * exp(-fract(tel) * 9.0)) * explosie * vol;
@@ -513,15 +642,33 @@ void main() {
 `;
 
   // ---------- keuzes per rit ----------
-  const CABINES = ['glasbuis', 'spiegel', 'kooi', 'draad', 'capsule', 'messing', 'led', 'kristal'];
-  const UITZICHT = ['beton', 'ringen', 'ruimte', 'stad', 'water', 'lava', 'data', 'synth', 'wolken'];
+  const CABINES = ['glasbuis', 'spiegel', 'kooi', 'draad', 'capsule', 'messing', 'led', 'kristal', 'panorama', 'kusama', 'schilder', 'disco'];
+  const UITZICHT = ['beton', 'ringen', 'ruimte', 'stad', 'water', 'lava', 'data', 'synth', 'wolken', 'tunnel', 'spiegeltunnel', 'wormgat', 'laser', 'schilder'];
   const DEUREN = { glasbuis: ['luik', 'rol'], spiegel: ['schuif', 'tele', 'luik', 'iris'], kooi: ['luik', 'rol', 'harmonica'], draad: ['schuif', 'tele', 'iris', 'luik'],
-    capsule: ['iris', 'iris', 'luik'], messing: ['harmonica', 'schuif'], led: ['schuif', 'tele', 'iris', 'rol'], kristal: ['schuif', 'iris', 'tele'] };
+    capsule: ['iris', 'iris', 'luik'], messing: ['harmonica', 'schuif'], led: ['schuif', 'tele', 'iris', 'rol'], kristal: ['schuif', 'iris', 'tele'],
+    panorama: ['schuif', 'tele', 'schuif'], kusama: ['schuif', 'iris', 'luik'], schilder: ['schuif', 'tele', 'rol', 'luik'], disco: ['schuif', 'harmonica', 'tele'] };
+  // stijlen: dezelfde als de S-gangen (gangen.js): schildering (tex/doolhof), palet en de uitzichten die erbij passen
+  const THEMAS = {
+    acid: { bron: 'baksteen', pal: [0xff1a08, 0xffd400, 0x30ff10], uit: ['data', 'synth', 'tunnel', 'laser', 'schilder'] },
+    'uv-jungle': { bron: 'uv-jungle', pal: [0x8a30ff, 0xff2bd6, 0x60ff20], uit: ['water', 'schilder', 'wormgat', 'spiegeltunnel'] },
+    'bass-tempel': { bron: 'bass-tempel', pal: [0x20ffe0, 0xffa018, 0xff3010], uit: ['lava', 'schilder', 'beton', 'tunnel'] },
+    paddenstoelen: { bron: 'paddenstoelen', pal: [0xff28c0, 0xff8a10, 0x8a30ff], uit: ['schilder', 'wolken', 'wormgat', 'water'] },
+    'rave-flyers': { bron: 'rave-flyers', pal: [0xff9a20, 0xff20c0, 0xffe010], uit: ['schilder', 'stad', 'beton', 'spiegeltunnel'] },
+    betonbunker: { bron: 'beton-bunker', pal: [0xff1208, 0xffa000, 0xff0038], uit: ['beton', 'schilder', 'laser', 'lava'] },
+    kosmos: { bron: 'kosmos', pal: [0x2a50ff, 0xb030ff, 0x20d8ff], uit: ['ruimte', 'wormgat', 'ringen', 'wolken', 'spiegeltunnel'] },
+    neonsteeg: { bron: 'neonsteeg', pal: [0xff1a88, 0x10d8ff, 0x8a30ff], uit: ['stad', 'schilder', 'spiegeltunnel', 'data'] },
+    slijmhol: { bron: 'slijmhol', pal: [0x30ff20, 0xc0ff10, 0x10ffa0], uit: ['schilder', 'water', 'lava', 'wormgat'] },
+    chroom: { bron: 'chroom', pal: [0x3070ff, 0xff40d8, 0x40e8ff], uit: ['spiegeltunnel', 'ringen', 'synth', 'tunnel'] },
+    arcade: { bron: 'arcade', pal: [0xff18d0, 0x18e0ff, 0x9a30ff], uit: ['synth', 'data', 'schilder', 'tunnel'] },
+    laserraster: { bron: 'staal', pal: [0xff1030, 0x20ff40, 0x2060ff], uit: ['laser', 'tunnel', 'data', 'ringen'] },
+  };
+  const THEMA_NAMEN = Object.keys(THEMAS);
+  const WIT = houd(new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)); WIT.needsUpdate = true;
   const ALLE_DEUREN = ['schuif', 'tele', 'luik', 'rol', 'harmonica', 'iris'];
   const PALETTEN = [[0xff2d95, 0x00e5ff, 0x7a00ff], [0xff5a00, 0xffc400, 0xff0055], [0x00ffa2, 0x0072ff, 0xff00c8], [0x8cff00, 0x00d5ff, 0xc050ff],
     [0xff0080, 0xffaa00, 0x00c8ff], [0x3cffc8, 0xff3cac, 0x784bff], [0xffd400, 0xff2a00, 0x8a00ff], [0x00b3ff, 0xff4fd8, 0x2bff88]];
   const DISP_KL = [0xffa020, 0xff2a1a, 0x30ff60, 0x30e0ff, 0xff40c0, 0xffffff];
-  const recent = { cab: [], uit: [], deur: [] };
+  const recent = { cab: [], uit: [], deur: [], thema: [] };
   function kiesNieuw(rnd, lijst, mem, n) {
     let k = lijst.filter(x => !mem.includes(x)); if (!k.length) k = lijst;
     const x = k[Math.min(k.length - 1, Math.floor(rnd() * k.length))];
@@ -533,15 +680,22 @@ void main() {
   function plan(van, keus, proef) {  // proef: voor het voorwarmen (raakt de testkeuzes en het geheugen van de loting niet)
     keus = Object.assign({}, proef ? {} : doolhof.liftKeus || {}, keus || {});
     if (!proef) doolhof.liftKeus = null;
-    const mem = proef ? { cab: [], uit: [], deur: [] } : recent;
+    const mem = proef ? { cab: [], uit: [], deur: [], thema: [] } : recent;
     const zaad = (Math.random() * 4294967296) >>> 0, rnd = reeks(zaad), r = (a, b) => a + (b - a) * rnd();
-    const cab = CABINES.includes(keus.cabine) ? keus.cabine : kiesNieuw(rnd, CABINES, mem.cab, 3);
-    const uit = UITZICHT.includes(keus.uitzicht) ? keus.uitzicht : kiesNieuw(rnd, UITZICHT, mem.uit, 4);
+    const thema = THEMAS[keus.thema] ? keus.thema : kiesNieuw(rnd, THEMA_NAMEN, mem.thema, 4), TH = THEMAS[thema];
+    const cab = CABINES.includes(keus.cabine) ? keus.cabine : kiesNieuw(rnd, CABINES, mem.cab, 4);
+    const kanTex = typeof doolhof.tex === 'function';
+    let uit = UITZICHT.includes(keus.uitzicht) ? keus.uitzicht : cab === 'kusama' && rnd() < 0.85 ? 'spiegeltunnel'
+      : rnd() < 0.7 ? kiesNieuw(rnd, TH.uit, mem.uit, 4) : kiesNieuw(rnd, UITZICHT, mem.uit, 4);
+    if (uit === 'schilder' && !kanTex) uit = 'tunnel';
     const deur = ALLE_DEUREN.includes(keus.deur) ? keus.deur : kiesNieuw(rnd, DEUREN[cab], mem.deur, 1);
+    // ruim: 3,1-4,6 m breed en diep (de oude 2,4-3 m gaf in de hoeken een gek beeld)
     let W, D, R = 0, WB, vorm = 'recht';
-    if (cab === 'glasbuis') { vorm = 'rond'; R = r(1.5, 1.68); D = r(2.2, 2.4); WB = 2 * Math.sqrt(R * R - D * D / 4); W = 2 * R; }
-    else { W = r(2.35, 2.95); D = r(2.4, 2.95); WB = W; }
-    const H = cab === 'kooi' ? r(2.75, 3.0) : r(2.7, 3.15);
+    if (cab === 'glasbuis') { vorm = 'rond'; R = r(1.95, 2.3); D = r(2.9, 3.3); WB = 2 * Math.sqrt(R * R - D * D / 4); W = 2 * R; }
+    else if (cab === 'panorama') { W = r(3.8, 4.6); D = r(3.6, 4.4); WB = W; }
+    else if (cab === 'kusama') { W = r(3.0, 3.6); D = r(3.0, 3.6); WB = W; }
+    else { W = r(3.2, 4.2); D = r(3.1, 4.0); WB = W; }
+    const H = cab === 'panorama' ? r(3.4, 4.0) : cab === 'kooi' ? r(3.0, 3.4) : r(3.1, 3.8);
     let dw, dh = r(2.2, 2.32);
     if (deur === 'schuif') dw = Math.min(1.75, (WB - 0.12) / 1.5);
     else if (deur === 'tele') dw = Math.min(1.7, (WB - 0.1) / 1.67);
@@ -553,35 +707,48 @@ void main() {
     const x = rnd();
     const afstand = keus.levels ? Math.max(1, Math.min(40, Math.round(keus.levels))) : x < 0.2 ? 1 + Math.floor(rnd() * 6) : x < 0.68 ? 7 + Math.floor(rnd() * 14) : 21 + Math.floor(rnd() * 20);
     if (Math.abs(van + richting * afstand) > 99) richting = -richting;
-    const levelH = r(3.3, 5.6), weg = afstand * levelH, kruis = r(5.5, 9.0);
+    const levelH = r(3.3, 5.6), weg = afstand * levelH, kruis = r(6.0, 10.0);
     const vmax = Math.min(32, Math.max(2.4, weg / kruis)), acc = vmax / r(0.9, 1.8), rem = acc * r(0.8, 1.25);
     // palet: vast (gecureerd) of een driehoek uit het zaad
     let pa, pb, pc;
-    if (rnd() < 0.45) { const p = PALETTEN[Math.floor(rnd() * PALETTEN.length)]; pa = new THREE.Color(p[0]); pb = new THREE.Color(p[1]); pc = new THREE.Color(p[2]); }
+    if (rnd() < 0.65) { pa = new THREE.Color(TH.pal[0]); pb = new THREE.Color(TH.pal[1]); pc = new THREE.Color(TH.pal[2]); }  // het palet van de stijl
+    else if (rnd() < 0.45) { const p = PALETTEN[Math.floor(rnd() * PALETTEN.length)]; pa = new THREE.Color(p[0]); pb = new THREE.Color(p[1]); pc = new THREE.Color(p[2]); }
     else { const h = rnd(); pa = new THREE.Color().setHSL(h, 1, 0.52); pb = new THREE.Color().setHSL((h + r(0.28, 0.4)) % 1, 1, 0.5); pc = new THREE.Color().setHSL((h + r(0.55, 0.7)) % 1, 0.95, 0.5); }
     const dispKl = new THREE.Color(cab === 'messing' ? 0xffa020 : cab === 'capsule' ? 0x30e0ff : cab === 'kooi' ? (rnd() < 0.5 ? 0xff2a1a : 0xffa020) : rnd() < 0.3 ? pa.getHex() : DISP_KL[Math.floor(rnd() * DISP_KL.length)]);
-    const glasVloer = cab === 'draad' || (cab === 'led' && rnd() < 0.6) || (cab === 'glasbuis' && rnd() < 0.45) || (cab === 'kristal' && rnd() < 0.4);
-    const glasDak = (cab === 'draad' && rnd() < 0.5) || (cab === 'glasbuis' && rnd() < 0.45);
-    // camerabewegingen tijdens de rit (volgorde uit het zaad)
+    // glazen dak en/of glazen vloer: altijd minstens één (omhoog de oneindige schacht in, of omlaag door de panelen)
+    let glasVloer = cab === 'panorama' || cab === 'draad' || rnd() < (cab === 'messing' ? 0.25 : 0.55);
+    let glasDak = cab === 'panorama' || rnd() < (cab === 'messing' ? 0.3 : 0.6);
+    if (!glasVloer && !glasDak) { if (rnd() < 0.5) glasVloer = true; else glasDak = true; }
+    if (typeof keus.glasVloer === 'boolean') glasVloer = keus.glasVloer;
+    if (typeof keus.glasDak === 'boolean') glasDak = keus.glasDak;
+    // camerabewegingen tijdens de rit (volgorde uit het zaad): eerst een verticaal shot, dan voor/achter
     const schud = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; };
+    const vert = schud([].concat(glasDak ? ['omhoog'] : [], glasVloer ? ['omlaag'] : []));
     const voor = schud(['gezicht', 'raamV', 'rond'].concat(glasDak ? ['dak'] : [])), achter = schud(['hoek', 'plafond', 'raamA'].concat(glasVloer ? ['vloer'] : []));
-    const pool = voor.concat(achter);
+    const pool = vert.slice(0, 1).concat(voor.slice(0, 2), vert.slice(1), achter, voor.slice(2));
     const C0 = LV + SG, LEN = 2 * LV + 2 * SG + D;
-    const ramen = cab === 'spiegel' ? { v: -D / 2 + 2 * D / 3, a: -D / 2 + D / 3, zw: 0.06, d: 0.75, kz: 0.15, y: 1.6, fov: 70 }
-      : cab === 'capsule' ? (D > 2.65 ? { v: -D / 2 + 2 * D / 3, a: -D / 2 + D / 3, zw: 0.04, d: 0.85, kz: 0.1, y: 1.55, fov: 64 } : { v: 0.2, a: -0.2, zw: 0.04, d: 0.85, kz: 0.1, y: 1.55, fov: 64 })
-      : cab === 'led' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.35, kz: 1, y: 1.6, fov: 76 }
-      : cab === 'messing' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.35, kz: 1, y: 1.7, fov: 76 }
-      : cab === 'kooi' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.6, kz: 1, y: 1.55, fov: 74 }
-      : { v: 0.62, a: -0.5, zw: 0.2, d: 0.32, kz: 1, y: 1.55, fov: 76 };
+    const ramen = cab === 'spiegel' ? { v: -D / 2 + 2 * D / 3, a: -D / 2 + D / 3, zw: 0.08, d: 0.8, kz: 0.15, y: 1.6, fov: 64 }
+      : cab === 'capsule' ? { v: -D / 2 + 2 * D / 3, a: -D / 2 + D / 3, zw: 0.04, d: 0.85, kz: 0.1, y: 1.55, fov: 62 }
+      : cab === 'led' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.75, kz: 1, y: 1.6, fov: 66 }
+      : cab === 'messing' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.75, kz: 1, y: 1.7, fov: 66 }
+      : cab === 'kooi' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.6, kz: 1, y: 1.55, fov: 68 }
+      : cab === 'panorama' ? { v: 0.9, a: -0.8, zw: 0.3, d: 0.5, kz: 1, y: 1.6, fov: 64 }
+      : cab === 'schilder' ? { v: 0.7, a: -0.7, zw: 0.2, d: 1.0, kz: 0.4, y: 1.65, fov: 62 }
+      : cab === 'disco' ? { v: 0.62, a: -0.5, zw: 0.2, d: 0.75, kz: 1, y: 1.55, fov: 64 }
+      : { v: 0.62, a: -0.5, zw: 0.2, d: 0.7, kz: 1, y: 1.55, fov: 66 };
     const minLvl = Math.min(van, van + richting * afstand);
-    const L = { zaad, cab, uit, deur, vorm, W, D, H, R, WB, dw, dh, richting, afstand, levelH, vmax, acc, rem, van, naar: van + richting * afstand, level: van,
+    // schildering voor het uitzicht 'schilder' (zelfde gedeelde textuur als de gangen)
+    const uitTex = uit === 'schilder' && kanTex ? doolhof.tex(TH.bron) : WIT;
+    const uitAsp = TH.bron === 'staal' || TH.bron === 'baksteen' ? 1 : 2048 / 869, uitGain = doolhof.led && doolhof.led.bronGain ? doolhof.led.bronGain(TH.bron) : 1;
+    const L = { zaad, thema, TH, cab, uit, deur, vorm, W, D, H, R, WB, dw, dh, richting, afstand, levelH, vmax, acc, rem, van, naar: van + richting * afstand, level: van,
       glasVloer, glasDak, pa, pb, pc, dispKl, camLijst: pool, ramen, camZij: rnd() < 0.5 ? -1 : 1, raamOp: rnd() < 0.5, camDraai: rnd() < 0.5 ? -1 : 1, camA: r(0, Math.PI * 2),
       schokK: cab === 'kooi' ? 1.6 : cab === 'messing' ? 1.2 : cab === 'capsule' ? 0.5 : 1, tDeur: deur === 'iris' ? 1.1 : deur === 'harmonica' ? 1.5 : deur === 'rol' ? 1.4 : r(0.9, 1.3),
       C0, LEN, STOP: C0 + D / 2 + ZL, camMin: C0 + CAM_ACHTER,
       fase: 'wacht', tFase: 0, deurA: 0, deurV: 0, pos: 0, v: 0, a: 0, veer: 0, veerV: 0, explosie: 0, schok: 0, doelPos: weg, remt: false, verlengd: 0, dropGezien: null,
       camBinnen: false, camAchter: false, cam: null, helften: new Set(), deel: null, stapBeeld: -1,
       U: { rit: f(0), snel: f(0), explosie: f(0), helder: f(1), zaad: f((zaad % 997) / 97), cabW: f(W), cabD: f(D), cabH: f(H), levelH: f(levelH), van: f(van),
-        basis: f((van - minLvl) * levelH + 25), soort: f(UITZICHT.indexOf(uit)), rolRicht: f(richting), pa: f(pa), pb: f(pb), pc: f(pc) } };
+        basis: f((van - minLvl) * levelH + 25), soort: f(UITZICHT.indexOf(uit)), rolRicht: f(richting), pa: f(pa), pb: f(pb), pc: f(pc),
+        uitTex: f(uitTex), uitAsp: f(uitAsp), uitGain: f(uitGain) } };
     return L;
   }
   // het level van vertrek bleek anders (een vorige rit reed verder): plan bijstellen voordat de rit begint
@@ -683,15 +850,20 @@ void main() {
     const D = L.deel = { m: {}, basis: [], cab: [], sas: [], deur: {}, strips: null, schacht: null };
     const m = D.m, W = L.W, Dd = L.D, H = L.H, dw = L.dw, dh = L.dh, rnd = reeks(L.zaad ^ 0x9e3779b9), c = L.cab;
     const pal = { a: L.pa, b: L.pb, c: L.pc, donker: 0x020004 }, LED = doolhof.led && doolhof.led.vloerMat ? doolhof.led : null;
-    const metaalKl = c === 'messing' ? 0x7a5520 : c === 'capsule' ? 0x5a5f69 : c === 'kooi' ? 0x3a3a40 : c === 'kristal' ? 0x405060 : 0x1e1e26;
+    const metaalKl = c === 'messing' ? 0x7a5520 : c === 'capsule' ? 0x5a5f69 : c === 'kooi' ? 0x3a3a40 : c === 'kristal' ? 0x405060 : c === 'disco' ? 0x6a6a74 : c === 'kusama' ? 0x0a0a0e : 0x1e1e26;
     m.metaal = basisMat(L, metaalKl);
     m.donker = basisMat(L, 0x050507, { k: 0.4 });
     m.uitzicht = rawMat(L, F_UIT, VERT_UIT, {}, { naam: 'uitzicht' });
-    m.glas = glasMat(L, { tint: c === 'kristal' ? 0x90b0ff : c === 'messing' ? 0x806040 : 0x6080a0, alfa: c === 'draad' ? 0.035 : c === 'kristal' ? 0.09 : 0.065, prisma: c === 'kristal' });
+    m.glas = glasMat(L, { tint: c === 'kristal' ? 0x90b0ff : c === 'messing' ? 0x806040 : c === 'kusama' ? 0x18101c : 0x6080a0,
+      alfa: c === 'draad' || c === 'panorama' ? 0.035 : c === 'kusama' ? 0.09 : c === 'kristal' ? 0.09 : 0.065, prisma: c === 'kristal' });
     m.dispLive = dispMat(L, 0.5); m.dispVan = dispMat(L, 0.5); m.dispNaar = dispMat(L, 1.2);
     const pz = () => Math.floor(rnd() * 997);
-    const wandSoort = { glasbuis: 'spiegel', spiegel: 'spiegel', kooi: 'metaal', draad: 'led', capsule: 'paneel', messing: 'hout', led: 'led', kristal: 'spiegel' }[c];
+    const SCH = LED && LED.scherm ? LED.scherm : null;  // ledscherm van de kamers/gangen (led.js) met de schildering van de stijl
+    const scherm = (w, h, helder) => SCH({ bron: L.TH.bron, palet: pal, maat: { w, h }, zaad: pz(), helder, modi: { beeld: 2.2, patroon: 1, tekst: 0.5, golf: 0.4 } });
+    const wandSoort = { glasbuis: 'spiegel', spiegel: 'spiegel', kooi: 'metaal', draad: 'led', capsule: 'paneel', messing: 'hout', led: 'led', kristal: 'spiegel',
+      panorama: 'spiegel', kusama: 'spiegel', schilder: SCH ? 'scherm' : 'led', disco: 'disco' }[c];
     const maakWand = (soort, w, h, mx, my) => soort === 'led' ? ledMat(L, 0, { w, h, mx, my, pzaad: pz() }) : soort === 'spiegel' ? ledMat(L, 1, { w, h, mx, my, tint: L.pa.getHex() })
+      : soort === 'scherm' ? scherm(w, h, 0.8) : soort === 'disco' ? ledMat(L, 7, { w, h, mx, my, tint: L.pa.getHex(), pzaad: pz() })
       : soort === 'paneel' ? ledMat(L, 2, { w, h, mx, my, tint: 0x9aa6b8 }) : soort === 'hout' ? basisMat(L, 0xffffff, { map: hout(), k: 0.4, zijde: THREE.DoubleSide }) : basisMat(L, metaalKl, { zijde: THREE.DoubleSide });
     m.wand = maakWand(wandSoort, Dd, H, 0, H / 2);
     m.kop = c === 'draad' ? ledMat(L, 0, { w: W, h: H, mx: 0, my: H / 2, pzaad: pz() }) : c === 'kooi' ? basisMat(L, 0x2a2a30, { zijde: THREE.DoubleSide }) : maakWand(wandSoort, W, H, W / 2, H / 2);
@@ -704,8 +876,15 @@ void main() {
     // --- cabine (oorsprong = midden van de cabinevloer) ---
     const kopB = bak(), wandB = bak(), glasB = bak(), frame = [], strips = [];
     const zA = -Dd / 2, zV = Dd / 2;
-    // kopwanden met deurgat (binnenkant), voor en achter
-    wandMetGat(kopB, zA, L.WB, H, dw, dh); wandMetGat(kopB, zV, L.WB, H, dw, dh);
+    // kopwanden met deurgat (binnenkant), voor en achter. Ledscherm (schilder): uv 0..1 en beide naar binnen gekeerd (anders spiegelschrift)
+    let kopGeo;
+    if (m.kop.userData.led === 'scherm') {
+      const kb = bak(); wandMetGat(kb, zA, L.WB, H, dw, dh);
+      const g = kb.geo(), uv = g.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / L.WB, uv.getY(i) / H);
+      const g2 = g.clone(); g2.rotateY(Math.PI);
+      kopGeo = samenvoegen([g, g2]); kopGeo.computeBoundingSphere();
+    } else { wandMetGat(kopB, zA, L.WB, H, dw, dh); wandMetGat(kopB, zV, L.WB, H, dw, dh); }
     // deurkozijn (dik genoeg om de deurpanelen te verbergen) en de stijlen in de spleet naar het sas
     for (const z of [zA, zV]) {
       const s = Math.sign(z);
@@ -753,14 +932,30 @@ void main() {
       frame.push([x, 0.95, 0, 0.04, 0.04, Dd - 0.7], [x, 0.95, zA + 0.4, 0.04, 0.04, 0.04], [x, 0.95, zV - 0.4, 0.04, 0.04, 0.04]);
     }
     // vloer en plafond
-    if (L.glasVloer) { D.cab.push({ geo: vloerGeo, mat: m.glas, glas: true }); frame.push(...(L.vorm === 'rond' ? [] : [[0, -0.01, 0, 0.06, 0.02, Dd], [0, -0.01, 0, W, 0.02, 0.06]])); }
+    // glazen panelen: stijlen in een raster van ~1 m, met ledstrips in de voegen (vloer: je kijkt ertussendoor de schacht in)
+    const raster = (y, metStrips) => {
+      const nx = Math.max(2, Math.round(W / 1.05)), nz = Math.max(2, Math.round(Dd / 1.05)), ys = y + (y > 0.5 ? -0.03 : 0.012);
+      for (let i = 1; i < nx; i++) {
+        const x = -W / 2 + W * i / nx, zr = L.vorm === 'rond' ? Math.min(Dd / 2, Math.sqrt(Math.max(0, L.R * L.R - x * x))) : Dd / 2;
+        if (zr < 0.2) continue;
+        frame.push([x, y, 0, 0.05, 0.03, 2 * zr]);
+        if (metStrips) strips.push([x, ys, -zr + 0.05, x, ys, zr - 0.05]);
+      }
+      for (let k = 1; k < nz; k++) {
+        const z = zA + Dd * k / nz, xr = xMax(L, z) + 0.3;
+        frame.push([0, y, z, 2 * xr, 0.03, 0.05]);
+        if (metStrips) strips.push([-xr + 0.05, ys, z, xr - 0.05, ys, z]);
+      }
+    };
+    if (L.glasVloer) { D.cab.push({ geo: vloerGeo, mat: m.glas, glas: true }); raster(-0.005, c !== 'draad'); }
     else {
       let vm;
       if (c === 'messing') vm = basisMat(L, 0xffffff, { map: marmer(), k: 0.36 });
       else if (c === 'kooi') vm = basisMat(L, 0xffffff, { map: traan(), k: 0.5 });
       else if (c === 'capsule') vm = ledMat(L, 2, { w: W, h: Dd, tint: 0x404858 });
-      else if (LED && (c === 'led' || c === 'kristal' || c === 'glasbuis' || rnd() < 0.5)) {
-        vm = LED.vloerMat(W, Dd, { palet: pal, tegel: 0.42, zaad: Math.floor(rnd() * 997), helder: 0.7 });
+      else if (c === 'kusama') vm = ledMat(L, 1, { w: 1, h: 1, mx: 0.5, my: 0.5, tint: L.pa.getHex() });
+      else if (LED && (c === 'led' || c === 'kristal' || c === 'glasbuis' || c === 'schilder' || c === 'disco' || rnd() < 0.5)) {
+        vm = LED.vloerMat(W, Dd, { palet: pal, tegel: c === 'disco' ? 0.55 : 0.42, zaad: Math.floor(rnd() * 997), helder: 0.7 });
         if (L.vorm === 'rond') { const p = vloerGeo.attributes.position, uv = vloerGeo.attributes.uv; for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + W / 2) / W, (p.getZ(i) + Dd / 2) / Dd); }
       } else vm = basisMat(L, 0x0c0c10, { k: 0.5 });
       if (vm.map) { const uv = vloerGeo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * W / 1.2, uv.getY(i) * Dd / 1.2); }
@@ -768,14 +963,18 @@ void main() {
     }
     if (L.glasDak) {
       D.cab.push({ geo: plafGeo, mat: m.glas, glas: true });
-      if (L.vorm !== 'rond') frame.push([0, H, 0, W, 0.05, 0.08], [0, H, 0, 0.08, 0.05, Dd]);
+      raster(H, true);
+    } else if (SCH && c !== 'messing' && c !== 'kusama' && (c === 'schilder' || rnd() < 0.3)) {  // ledscherm met de schildering van de stijl
+      const uv = plafGeo.attributes.uv;
+      if (L.vorm === 'rond') for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) + L.R) / (2 * L.R), (uv.getY(i) + Dd / 2) / Dd);
+      D.cab.push({ geo: plafGeo, mat: scherm(W, Dd, 0.7) });
     } else {
-      const pm = c === 'messing' ? ledMat(L, 6, { w: W, h: Dd }) : ledMat(L, 0, { w: W, h: Dd, plafond: true, pzaad: pz(), pitch: 0.05 });
+      const pm = c === 'messing' ? ledMat(L, 6, { w: W, h: Dd }) : c === 'kusama' ? ledMat(L, 1, { w: W, h: Dd, tint: L.pa.getHex() }) : ledMat(L, 0, { w: W, h: Dd, plafond: true, pzaad: pz(), pitch: 0.05 });
       if (L.vorm !== 'rond') { const uv = plafGeo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) - 0.5) * W, (uv.getY(i) - 0.5) * Dd); }
       D.cab.push({ geo: plafGeo, mat: pm });
     }
     if (zijGlas) D.cab.push({ geo: zijGlas, mat: m.glas, glas: true });
-    D.cab.push({ geo: kopB.geo(), mat: m.kop });
+    D.cab.push({ geo: kopGeo || kopB.geo(), mat: m.kop });
     if (!wandB.leeg()) D.cab.push({ geo: wandB.geo(), mat: m.wand });
     if (!glasB.leeg()) D.cab.push({ geo: glasB.geo(), mat: m.glas, glas: true });
     yield;
@@ -807,6 +1006,10 @@ void main() {
       for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), p.getY(i));
       g.rotateY(Math.PI); g.translate(0, H - 0.38, zV - 0.03);
       D.wijzerPlaat = g; D.cab.push({ geo: g, mat: ledMat(L, 6, { w: 0.64, h: 0.64 }) });
+    }
+    if (c === 'disco') {  // spiegelbol aan een draadje
+      D.bal = ledMat(L, 7, { w: 1, h: 1, mx: 0.5, my: 0.5, tint: 0xffffff, pzaad: pz() });
+      frame.push([0, H - 0.13, 0, 0.012, 0.26, 0.012]);
     }
     D.frame = samen(frame);
     D.strips = strips.length && LED && LED.strips ? LED.strips(strips, { palet: pal, zaad: Math.floor(rnd() * 997), helder: 0.9 }) : null;
@@ -865,7 +1068,7 @@ void main() {
       const x = sx * W / 2;
       const band = (b, y0, y1) => b.quad([x, y0, zA], Z, Y, Dd, y1 - y0, zA, y0);
       if (c === 'spiegel') {  // zwarte spiegel met twee raamsleuven
-        const sb = 0.4, y0 = 0.35, y1 = H - 0.3, zs = [zA + Dd / 3, zA + 2 * Dd / 3];
+        const sb = 0.55, y0 = 0.35, y1 = H - 0.3, zs = [zA + Dd / 3, zA + 2 * Dd / 3];
         band(wandB, 0, y0); band(wandB, y1, H);
         let z = zA;
         for (const zc of zs) { wandB.quad([x, y0, z], Z, Y, zc - sb / 2 - z, y1 - y0, z, y0); glasB.quad([x, y0, zc - sb / 2], Z, Y, sb, y1 - y0, zc - sb / 2, y0); frame.push([x, (y0 + y1) / 2, zc - sb / 2, 0.05, y1 - y0, 0.03], [x, (y0 + y1) / 2, zc + sb / 2, 0.05, y1 - y0, 0.03]); z = zc + sb / 2; }
@@ -904,10 +1107,24 @@ void main() {
       } else if (c === 'led') {  // ledwand met een glazen band op ooghoogte
         band(wandB, 0, 1.15); band(glasB, 1.15, 2.05); band(wandB, 2.05, H);
         frame.push([x, 1.15, 0, 0.05, 0.05, Dd], [x, 2.05, 0, 0.05, 0.05, Dd]);
-      } else {  // kristal: glas met kristallen stijlen
+      } else if (c === 'kristal') {  // glas met kristallen stijlen
         band(wandB, 0, 0.12); band(glasB, 0.12, H);
         for (let i = 1; i < 5; i++) frame.push([x, H / 2, zA + Dd * i / 5, 0.02, H, 0.02]);
         for (let i = 1; i < 5; i++) strips.push([x - sx * 0.02, 0.12, zA + Dd * i / 5, x - sx * 0.02, H, zA + Dd * i / 5]);
+      } else if (c === 'panorama') {  // de A'DAM-lift: alles glas, alleen dunne zwarte stijlen
+        band(glasB, 0, H);
+        const n = Math.max(2, Math.round(Dd / 1.2));
+        for (let i = 1; i < n; i++) frame.push([x, H / 2, zA + Dd * i / n, 0.035, H, 0.035]);
+      } else if (c === 'kusama') {  // donker spiegelglas, daarachter het oneindige lampjesveld (uitzicht spiegeltunnel)
+        band(glasB, 0, H);
+        frame.push([x, H / 2, zA + Dd / 2, 0.03, H, 0.03]);
+      } else if (c === 'schilder') {  // ledschermen met de schildering van de stijl: één vlak per wand (uv 0..1), naar binnen gekeerd
+        const g = new THREE.PlaneGeometry(Dd, H); g.translate(0, H / 2, 0); g.rotateY(sx < 0 ? Math.PI / 2 : -Math.PI / 2); g.translate(x - sx * 0.005, 0, 0);
+        D.cab.push({ geo: g, mat: D.m.wand });
+        frame.push([x, 0.04, 0, 0.06, 0.08, Dd], [x, H - 0.04, 0, 0.06, 0.08, Dd]);
+      } else {  // disco: spiegeltegels onder en boven, glas op ooghoogte
+        band(wandB, 0, 1.0); band(glasB, 1.0, 2.1); band(wandB, 2.1, H);
+        frame.push([x, 1.0, 0, 0.05, 0.05, Dd], [x, 2.1, 0, 0.05, 0.05, Dd]);
       }
     }
     if (c === 'kooi' && D.kooiGevaar) { const g = D.kooiGevaar.geo(); const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 0.6, uv.getY(i) / 0.3); D.cab.push({ geo: g, mat: basisMat(L, 0xffffff, { map: gevaar(), k: 0.6, zijde: THREE.DoubleSide }) }); }
@@ -999,6 +1216,7 @@ void main() {
       const nd = new THREE.Mesh(D.naald || (D.naald = (() => { const g = new THREE.BoxGeometry(0.018, 0.28, 0.01); g.translate(0, 0.14, 0); return g; })()), D.m.metaal);
       nd.position.set(0, L.H - 0.38, L.D / 2 - 0.04); cab.add(nd); h.userData.naald = nd;
     }
+    if (D.bal) { const b = new THREE.Mesh(SPH, D.bal); b.scale.setScalar(0.3); b.position.set(0, L.H - 0.56, 0); cab.add(b); h.userData.bal = b; }
     const sch = new THREE.Mesh(D.schacht, D.m.uitzicht); sch.frustumCulled = false; cab.add(sch);
     yield;
     for (const d of D.sas) h.add(new THREE.Mesh(d.geo, d.mat));
@@ -1081,29 +1299,33 @@ void main() {
   function pose(L, naam, u, P) {
     const s = L.camZij, Dd = L.D, H = L.H;
     switch (naam) {
-      case 'binnen': P.p.set(0.22 * s, 1.74, -Dd / 2 + 0.36); P.l.set(0.1 * s, 1.45, Dd / 2 + 1); P.fov = 64; break;
+      case 'binnen': P.p.set(0.22 * s, 1.74, -Dd / 2 + 0.42); P.l.set(0.1 * s, 1.45, Dd / 2 + 1); P.fov = 62; break;
       case 'achter': P.p.set(0, OOG, -Dd / 2 + CAM_ACHTER); P.l.set(0, 1.5, Dd / 2 + 0.6); P.fov = 60; break;   // ~ de volgcamera van de kern bij het uitstappen
-      case 'voor': { const z = Dd / 2 - 0.36; P.p.set(s * (xMax(L, z) - 0.05), 1.6 + 0.05 * Math.sin(u * 0.6), z); P.l.set(-s * 0.15, 1.3, -Dd / 2 - 0.6); P.fov = 68; break; }
-      case 'hoek': { const z = -Dd / 2 + 0.36, k = 0.5 + 0.5 * Math.sin(u * 0.4); P.p.set(s * xMax(L, z), 0.7 + 0.4 * k, z); P.l.set(-s * 0.9, 2.1 + 0.3 * Math.sin(u * 0.3), Dd / 2); P.fov = 74; break; }
-      case 'plafond': { const a = L.camA + u * 0.3 * L.camDraai; P.p.set(0.3 * s * Math.cos(a * 0.7), 1.4, -0.42); P.l.set(Math.cos(a) * 0.9, H + 2.6, Math.sin(a) * 0.9 - 0.2); P.fov = 84; break; }
+      case 'voor': { const z = Dd / 2 - 0.45; P.p.set(s * (xMax(L, z) - 0.15), 1.6 + 0.05 * Math.sin(u * 0.6), z); P.l.set(-s * 0.15, 1.3, -Dd / 2 - 0.6); P.fov = 62; break; }
+      case 'hoek': { const z = -Dd / 2 + 0.45, k = 0.5 + 0.5 * Math.sin(u * 0.4); P.p.set(s * (xMax(L, z) - 0.12), 0.8 + 0.4 * k, z); P.l.set(-s * 0.9, 1.9 + 0.3 * Math.sin(u * 0.3), Dd / 2); P.fov = 66; break; }
+      case 'plafond': { const a = L.camA + u * 0.3 * L.camDraai; P.p.set(0.3 * s * Math.cos(a * 0.7), 1.4, -0.62); P.l.set(Math.cos(a) * 0.9, H + 2.6, Math.sin(a) * 0.9 - 0.2); P.fov = 74; break; }
+      // omhoog: laag naast de loper, bijna recht omhoog door het glazen dak de oneindige schacht in; het beeld draait langzaam rond
+      case 'omhoog': { const a = L.camA + u * 0.16 * L.camDraai, z = -0.55; P.p.set(s * Math.min(1.0, xMax(L, z) - 0.2), 0.5, z); P.l.set(P.p.x * 0.3 + Math.cos(a) * 1.4, H + 14, z * 0.3 + Math.sin(a) * 1.4); P.fov = 76; break; }
+      // omlaag: hoog in de hoek, bijna recht omlaag door de glazen vloer (de loper staat onderin beeld op het glas)
+      case 'omlaag': { const a = L.camA + u * 0.16 * L.camDraai, z = ZL + 0.6; P.p.set(-s * Math.min(1.05, xMax(L, z) - 0.15), H - 0.34, z); P.l.set(P.p.x * 0.5 + Math.cos(a) * 1.2, -14, z + Math.sin(a) * 1.2); P.fov = 76; break; }
       case 'raamV': case 'raamA': {  // bij een raam (sleuf, patrijspoort of glaswand), naar buiten en schuin omhoog of omlaag de schacht in
         const R = L.ramen, zr = naam === 'raamV' ? R.v : R.a, z = zr + R.zw * Math.sin(u * 0.25), xm = xMax(L, z), y = R.y;
         P.p.set(s * (xm + 0.3 - R.d), y, z); P.l.set(s * (xm + 4), y + (L.raamOp ? 2.4 : -2.4), z + R.kz * (naam === 'raamV' ? -1 : 1) * (0.6 + 0.5 * Math.sin(u * 0.3))); P.fov = R.fov; break;
       }
-      case 'rond': { const a = L.camA + u * 0.42 * L.camDraai, r = Math.min(xMax(L, 0) + 0.3, Dd / 2) - 0.38; P.p.set(Math.sin(a) * r, 1.62, ZL + Math.cos(a) * r); P.l.set(0, 1.3, ZL); P.fov = 68; break; }
-      case 'gezicht': { const z = Dd / 2 - 0.34; P.p.set(s * 0.45, 1.5 + 0.06 * Math.sin(u * 0.5), z); P.l.set(-s * 0.05, 1.55, ZL - 1.2); P.fov = 60; break; }
-      case 'vloer': P.p.set(s * 0.55, 2.15, -0.45); P.l.set(s * 0.15, -4, 0.7); P.fov = 80; break;
-      default: P.p.set(-s * 0.5, 1.35, 0.55); P.l.set(s * 0.2, H + 6, -0.3); P.fov = 82;  // 'dak': door het glazen dak omhoog
+      case 'rond': { const a = L.camA + u * 0.42 * L.camDraai, r = Math.min(xMax(L, 0) + 0.3, Dd / 2) - 0.5; P.p.set(Math.sin(a) * r, 1.62, ZL + Math.cos(a) * r); P.l.set(0, 1.3, ZL); P.fov = 62; break; }
+      case 'gezicht': { const z = Dd / 2 - 0.45; P.p.set(s * 0.45, 1.5 + 0.06 * Math.sin(u * 0.5), z); P.l.set(-s * 0.05, 1.55, ZL - 1.2); P.fov = 56; break; }
+      case 'vloer': P.p.set(s * 0.7, 2.2, -0.6); P.l.set(s * 0.15, -4, 0.7); P.fov = 72; break;
+      default: P.p.set(-s * 0.6, 1.35, 0.65); P.l.set(s * 0.2, H + 6, -0.3); P.fov = 74;  // 'dak': door het glazen dak omhoog
     }
   }
   // binnen de cabine houden en niet door de loper heen (hoofd ~1,85 m, schouders ~0,45 m van de as)
-  function binnenHouden(L, p) {
-    const Dd = L.D, zMin = -Dd / 2 + 0.3, zMax = Dd / 2 - 0.3;
+  function binnenHouden(L, p) {  // 0,42 m van de wanden: de near van de camera (0,2 m) en de hoeken van zijn beeldvlak blijven binnen
+    const Dd = L.D, zMin = -Dd / 2 + 0.42, zMax = Dd / 2 - 0.42;
     if (p.z > zMin - 0.05) {  // (vóór de achterdeur: de instap komt door de deuropening)
       p.z = Math.min(zMax, Math.max(zMin, p.z));
-      const xm = xMax(L, p.z); p.x = Math.min(xm, Math.max(-xm, p.x));
+      const xm = xMax(L, p.z) - 0.12; p.x = Math.min(xm, Math.max(-xm, p.x));
     }
-    p.y = Math.min(L.H - 0.28, Math.max(0.35, p.y));
+    p.y = Math.min(L.H - 0.3, Math.max(0.38, p.y));
     const dx = p.x, dz = p.z - ZL, d = Math.hypot(dx, dz);
     if (p.y < 2.05 && d < 0.58) { const k = 0.58 / Math.max(d, 1e-3); p.x = d < 1e-3 ? 0.58 * L.camZij : dx * k; p.z = ZL + dz * k; }
   }
@@ -1146,7 +1368,8 @@ void main() {
       else if (L.fase === 'rit') {
         let n = C.lijst.length ? C.lijst.shift() : L.camLijst[Math.floor(Math.random() * L.camLijst.length)];
         if (n === C.naar) n = C.lijst.length ? C.lijst.shift() : n === 'rond' ? 'hoek' : 'rond';
-        volgende(L, n, kruist(L, C.naar, n) ? 2.2 : 1.4, 1.8 + Math.random() * 1.8);
+        const vert = n === 'omhoog' || n === 'omlaag';  // de verticale shots mogen lang blijven hangen (draaien langzaam)
+        volgende(L, n, kruist(L, C.naar, n) ? 2.2 : vert ? 1.8 : 1.4, vert ? 3.5 + Math.random() * 2.5 : 1.8 + Math.random() * 1.8);
       }
     }
     const k = huidig(L, C, P1);
@@ -1179,7 +1402,7 @@ void main() {
       if (sh && sh.kleur) sh.kleur(0, lk).lerp(L.pa, 0.5); else lk.copy(L.pa);
       lamp.color.copy(lk).lerp(LU.k0.value, 0.2);
       lamp.intensity = ((0.9 + 1.4 * puls * en) * (1 - 0.6 * (sh ? sh.blackout : 0)) + 3 * L.explosie * Math.exp(-((beatPos % 1) * 4)) + 2 * (sh ? sh.flits : 0)) * k;
-      lamp.distance = 6; lamp.decay = 1.5;
+      lamp.distance = 8; lamp.decay = 1.5;
     } else {
       lamp.position.set(c.x, 0.4, c.z + L.D / 2 - 0.4);
       lamp.color.copy(L.pb); lamp.intensity = (0.4 + 0.6 * puls) * k * (1 - 0.5 * (sh ? sh.blackout : 0)); lamp.distance = 4; lamp.decay = 1.5;
@@ -1226,6 +1449,7 @@ void main() {
     const x = h.userData.lift; if (!x) return;
     if (x.deuren.A.o !== L.deurA) { x.deuren.A.o = L.deurA; x.deuren.A.zet(L.deurA); }
     if (x.deuren.V.o !== L.deurV) { x.deuren.V.o = L.deurV; x.deuren.V.zet(L.deurV); }
+    if (h.userData.bal) h.userData.bal.rotation.y = (performance.now() / 1000 * 0.7) % (Math.PI * 2);  // (klok: beide helften gelijk)
     if (h.userData.naald) {  // wijzer: van het vertreklevel (links) naar de bestemming (rechts)
       const t = Math.min(1, Math.max(0, (L.level - L.van) / ((L.naar - L.van) || 1)));
       h.userData.naald.rotation.z = 1.25 - 2.5 * t;
@@ -1260,7 +1484,7 @@ void main() {
   // ---------- naar buiten ----------
   const LIFT = function (o) {  // test: doolhof.lift({ cabine, uitzicht, deur, richting, levels, kamer })
     o = o || {};
-    doolhof.liftKeus = { cabine: o.cabine, uitzicht: o.uitzicht, deur: o.deur, richting: o.richting, levels: o.levels };
+    doolhof.liftKeus = { cabine: o.cabine, uitzicht: o.uitzicht, deur: o.deur, thema: o.thema, glasDak: o.glasDak, glasVloer: o.glasVloer, richting: o.richting, levels: o.levels };
     doolhof.volgendeOvergang = 'lift';
     doolhof.liftTest = o.snel === false ? 0 : 1;  // eerste kamer kort (kern): meteen door naar de lift
     if (doolhof.voorraadWeg) doolhof.voorraadWeg();
@@ -1271,12 +1495,12 @@ void main() {
   };
   Object.assign(LIFT, {
     klaar: () => true, plan, zetVan, bouw, stap, instap, cam, licht, magWissel, LEN: L => L.LEN,
-    CABINES, UITZICHT, DEUREN: ALLE_DEUREN, U: LU,
+    CABINES, UITZICHT, DEUREN: ALLE_DEUREN, THEMAS: THEMA_NAMEN, U: LU,
     info() {
       const z = doolhof.toestand && doolhof.toestand(), X = z && z.lift, L = X ? X.L : [...alleL].pop();
       if (!L) return null;
       return { fase: L.fase, level: L.level, van: L.van, naar: L.naar, richting: L.richting, afstand: L.afstand, v: Math.round(L.v * 10) / 10, pos: Math.round(L.pos * 10) / 10,
-        cabine: L.cab, uitzicht: L.uit, deur: L.deur, levelH: Math.round(L.levelH * 100) / 100, vmax: Math.round(L.vmax * 10) / 10, explosie: Math.round(L.explosie * 100) / 100,
+        thema: L.thema, cabine: L.cab, uitzicht: L.uit, deur: L.deur, levelH: Math.round(L.levelH * 100) / 100, vmax: Math.round(L.vmax * 10) / 10, explosie: Math.round(L.explosie * 100) / 100,
         cam: L.cam && L.cam.naar, verlengd: L.verlengd, glasVloer: L.glasVloer, glasDak: L.glasDak, gewisseld: !!(X && X.gewisseld) };
     },
   });

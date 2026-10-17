@@ -11,7 +11,8 @@
 // Alleen bij een stijl met mosh (window.clubStijl.preset.mosh: dubstep, dnb, rock, metal, punk); bij house, lounge enz. geen kring en
 // geen pit (dansgevoel.js laat ze anders dansen); wisselt de stijl midden in de pit, dan lopen ze rustig terug. Zonder clubStijl geen
 // mosh, tenzij .keus = true. Ophypen: zolang de kring open is juichen, klappen (gebouwd) en springen ze op de plek, steeds wilder; minstens
-// preset.ophypeMin tellen. De pit gaat pas los op de echte drop (eigen meting per tel, preset.dropBevestig): na-stilte = stilte en dan de
+// preset.ophypeMin tellen (17-10: dubstep/dnb 20, rock/metal 16, punk 12). Bij dubstep/dnb vormt de kring zich al in de break vóór de
+// opbouw (BREAK_OPEN tellen erin, zonder camera; die knipt pas bij de opbouw) en hypet de hele opbouw door. De pit gaat pas los op de echte drop (eigen meting per tel, preset.dropBevestig): na-stilte = stilte en dan de
 // bassprong (een bas die na de opbouw terugkomt is nog geen drop; zonder stilte pas als hij een hele maat vol blijft), bassprong = grote
 // sprong op tel 1, riff = harde volle inzet na een rustiger stuk (de kring opent dan ook zonder opbouw). Geen drop binnen ~32 tellen of
 // een break: kring dicht. Duur preset.moshTellen, circle pit volgens preset.cirkel.
@@ -30,8 +31,11 @@
   const noteer = (wat, x) => { MP.log.push(Object.assign({ t: Math.round(nu()), tel: Math.floor(beatPos), wat }, x)); if (MP.log.length > 40) MP.log.shift(); };
 
   // tellen vanaf de drop D (en de opening in de opbouw)
-  const OPEN_TEL = 4, MAX_OPEN = 56;               // opbouwTel waarop de kring opent (de opbouw wordt ~3 tellen na zijn begin herkend); max. open
+  const OPEN_TEL = 4, MAX_OPEN = 104;              // opbouwTel waarop de kring opent (de opbouw wordt ~3 tellen na zijn begin herkend); max. open
   const WACHT = 32;                                 // zo lang na het openen (en min. 16 na de opbouw) op de echte drop wachten
+  // langer ophypen (17-10 avond): bij dubstep/dnb vormt de kring zich al BREAK_OPEN tellen in de break vóór de opbouw (zonder camera; die
+  // knipt pas bij de opbouw), en hypet door de hele opbouw heen; de pit blijft op de drop. Komt er geen opbouw of drop: na BREAK_MAX dicht.
+  const BREAK_OPEN = 8, BREAK_MAX = 72;
   const STORM = 2, CIRKEL0 = 4;                     // de pit zelf duurt A.T tellen (preset.moshTellen)
   const D_MIN = 0.58, D_RAAK = 0.68, V_MAX = 3.8;  // heupen nooit dichter dan D_MIN; botsing onder D_RAAK
 
@@ -950,7 +954,7 @@
   }
 
   // --- wanneer: opbouw (of een rustiger stuk bij riff) opent de kring, ophypen, de echte drop start de pit ---
-  let cyclus = null, gezienDrop = null, vorigeDropPit, laatsteTel = -1, laatsteSinds = null, laatsteEinde = -99, SP = 0;
+  let cyclus = null, gezienDrop = null, vorigeDropPit, laatsteTel = -1, laatsteSinds = null, laatsteEinde = -99, SP = 0, breakKeus = null;
   function rol() {
     if (MP.keus !== null) return !!MP.keus;
     if (vorigeDropPit !== true) return true;  // de eerste drop, of de vorige had er geen
@@ -958,17 +962,19 @@
   }
   const pitLoopt = tb => !!((ZAAL && ZAAL.D != null && tb < ZAAL.D + ZAAL.T + 8) || (KAMER && KAMER.D != null && tb < KAMER.D + KAMER.T + 8));
   MP.golfWeg = () => !!(moshMag() && ((cyclus && cyclus.pit && cyclus.open != null && (cyclus.D == null || Math.abs(beatPos - cyclus.D) < 4)) || pitLoopt(beatPos)));
-  function nieuweCyclus(tel, sinds) {
-    cyclus = { pit: rol(), sinds, open: null, D: null, opbouwEind: null, kand: null, wacht: null, valse: 0, basTerug: false, hPiek: 0, breakRun: 0,
-               evTel: null, zonder: false, herstart: false, geteld: false, eind: tel + 48 };
+  function nieuweCyclus(tel, sinds, pit, uitBreak) {  // pit: vooraf geloot (break), anders nu
+    cyclus = { pit: pit != null ? pit : rol(), sinds, open: null, D: null, opbouwEind: null, kand: null, wacht: null, valse: 0, basTerug: false, hPiek: 0, breakRun: 0,
+               evTel: null, zonder: false, herstart: false, geteld: false, eind: tel + 48, uitBreak: !!uitBreak, basis: null };
     cyclusNr++;
     if (!cyclus.pit) vorigeDropPit = false;
-    noteer('cyclus', { pit: cyclus.pit, door: sinds != null ? 'opbouw' : 'rustig', stijl: window.clubStijl && clubStijl.naam });
+    noteer('cyclus', { pit: cyclus.pit, door: uitBreak ? 'break' : sinds != null ? 'opbouw' : 'rustig', stijl: window.clubStijl && clubStijl.naam });
   }
+  // nog in de break, vóór de opbouw (kring uit de break): geen camera, geen kamer, niet dicht op break of stilte
+  const inBreak = c => c.uitBreak && c.sinds == null;
   function openKring(tel) {
-    cyclus.open = tel;
-    if (!ZAAL) { ZAAL = maakZaal(); if (ZAAL) { startOpen(ZAAL, tel); if (magCamZaal()) knipZaal(); } }
-    if (!KAMER) probeerKamer(tel, null);
+    cyclus.open = cyclus.basis = tel;
+    if (!ZAAL) { ZAAL = maakZaal(); if (ZAAL) { startOpen(ZAAL, tel); if (!inBreak(cyclus) && magCamZaal()) knipZaal(); } }
+    if (!KAMER && !inBreak(cyclus)) probeerKamer(tel, null);
   }
   function eindeCyclus(tel, dicht) {
     if (dicht) { for (const A of [ZAAL, KAMER]) if (A && A.D == null) sluitArena(A, dicht); vorigeDropPit = false; }
@@ -1010,7 +1016,7 @@
   }
   function wachten(tb, tel, opTel, R, st, mode) {
     const c = cyclus, om = ophypeMin();
-    if (opTel && !KAMER) probeerKamer(tel, null);  // camera kwam later een kamer in: die doet mee
+    if (opTel && !KAMER && !inBreak(c)) probeerKamer(tel, null);  // camera kwam later een kamer in: die doet mee
     // kandidaat (inzet zonder stilte): valt de bas weg of komt er een stilte binnen n tellen, dan was het een valse inzet; anders de drop
     // (bevestigd pas als de bas ook het begin van de tel erna nog vol is: een inzet van precies n tellen met daarna stilte telt niet)
     if (c.kand) {
@@ -1036,7 +1042,8 @@
     }
     if (c.D != null) return;
     // de lopende tel: sprong t.o.v. de tellen ervoor (eenmaal per tel, na ~1/3 tel: dan zit de aanslag erin)
-    if (!c.kand && !c.wacht && c.evTel !== tel && tb - tel >= 0.35 && aTel === tel && sN > 0 && refB > 0 && refT > 0) {
+    // (in de break zelf alleen een drop van de lichtregie: een baslijntje in de break is nog geen drop)
+    if (!c.kand && !c.wacht && !(inBreak(c) && st === 'break') && c.evTel !== tel && tb - tel >= 0.35 && aTel === tel && sN > 0 && refB > 0 && refT > 0) {
       c.evTel = tel;
       const s = sprongMaat(tel), stilVoor = stilT >= tel - 4;
       let n = -1;  // -1 geen drop, 0 meteen, n > 0: bevestigen na n tellen
@@ -1053,11 +1060,15 @@
     if (c.D != null) return;
     // kring dicht: break (bas weg en de riser is weg), lange stilte, of te lang geen drop
     let dicht = null;
-    if (mode !== 'riff' && c.breakRun >= 6) dicht = 'break';
+    if (inBreak(c)) {  // kring uit de break: wacht op de opbouw (of een drop recht uit de break)
+      if (tel - c.open > BREAK_MAX) dicht = 'geen opbouw';
+      else if (st !== 'break' && !c.kand && !c.wacht && tel > c.open + WACHT) dicht = 'geen drop';
+    }
+    else if (mode !== 'riff' && c.breakRun >= 6) dicht = 'break';
     else if (st === 'break' && c.opbouwEind != null) dicht = 'break';
     else if (stilRun > 8) dicht = 'stil';
-    else if (!c.kand && !c.wacht && st !== 'opbouw' && tel > Math.max(c.open + WACHT, (c.opbouwEind != null ? c.opbouwEind : c.open) + 16)) dicht = 'geen drop';
-    else if (tel - c.open > MAX_OPEN - 8) dicht = 'te lang';
+    else if (!c.kand && !c.wacht && st !== 'opbouw' && tel > Math.max(c.basis + WACHT, (c.opbouwEind != null ? c.opbouwEind : c.basis) + 16)) dicht = 'geen drop';
+    else if (tel - c.basis > MAX_OPEN - 8) dicht = 'te lang';
     if (dicht) { noteer('kring dicht', { waarom: dicht }); eindeCyclus(tel, dicht); return; }
     // spanning (hoe wild het ophypen is): loopt op met de tijd en de opbouw; vol bij een stilte of inzet vlak voor de drop
     let sp = 0.3 + 0.4 * klem((tb - c.open) / (om + 8), 0, 1) + (st === 'opbouw' && R ? 0.3 * klem(R.opbouwTel / 16, 0, 1) : c.opbouwEind != null || c.sinds == null ? 0.25 : 0);
@@ -1083,8 +1094,23 @@
     if (R && st === 'drop' && R.dropBeat >= 0 && R.dropBeat !== gezienDrop) regieDrop(R.dropBeat);
     // openen: de opbouw (lichtregie), of bij riff (rock/metal/punk) een rustiger stuk: de harde inzet komt nog
     if (st === 'opbouw' && R && R.sinds !== laatsteSinds) {
-      if (!cyclus && !pitLoopt(tb)) { nieuweCyclus(tel, R.sinds); laatsteSinds = R.sinds; }
-      else if (cyclus && cyclus.D == null) { cyclus.sinds = R.sinds; cyclus.opbouwEind = null; laatsteSinds = R.sinds; }  // nog een opbouw terwijl de kring wacht
+      if (!cyclus && !pitLoopt(tb)) { nieuweCyclus(tel, R.sinds, breakKeus && tel - breakKeus.tel < BREAK_MAX + 8 ? breakKeus.pit : null); laatsteSinds = R.sinds; }
+      else if (cyclus && cyclus.D == null) {  // nog een opbouw terwijl de kring wacht, of de opbouw na de break: nu pas camera en kamer
+        const uitBr = inBreak(cyclus);
+        cyclus.sinds = R.sinds; cyclus.opbouwEind = null; laatsteSinds = R.sinds;
+        if (uitBr && cyclus.open != null) {
+          cyclus.basis = tel;
+          if (ZAAL && ZAAL.D == null && magCamZaal()) knipZaal();
+          if (!KAMER) probeerKamer(tel, null);
+        }
+      }
+      breakKeus = null;
+    }
+    // dubstep/dnb: de kring vormt zich al in de break (langer ophypen); de loting voor deze drop gebeurt dan nu
+    if (!cyclus && mode !== 'riff' && st === 'break' && R && tb - R.sinds >= BREAK_OPEN && tel - laatsteEinde >= 16 && !pitLoopt(tb) && moshMag() &&
+        (!breakKeus || breakKeus.sinds !== R.sinds)) {
+      breakKeus = { sinds: R.sinds, tel, pit: rol() };
+      if (breakKeus.pit) nieuweCyclus(tel, null, true, true);
     }
     if (!cyclus && mode === 'riff' && rustRun >= 6 && tel - laatsteEinde >= 24 && !pitLoopt(tb)) nieuweCyclus(tel, null);
     const c = cyclus;
