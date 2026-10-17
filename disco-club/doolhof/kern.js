@@ -4,8 +4,13 @@
 // S-gang (2 x 2,6 m) in een stijl uit doolhof/gangen.js. De gang achter de uitgang van kamer A en die vóór de ingang van kamer B zijn exact gelijk;
 // in het dwarsstuk (geen deur in zicht) zet de kern loper en camera ongemerkt van A's gang naar dezelfde plek in B's gang.
 // Kamermodules (doolhof/*.js) registreren een soort: doolhof.registreer(soort, { gewicht, maak(ctx) => kamer }) (contract: ctx/kamer hieronder).
-// Shot SHOTS.doolhof: een loper loopt van het midden van zaal 2 door de ∞-deur en door 3-5 kamers ('Camera: het doolhof' = eindeloos);
+// Shot SHOTS.doolhof: een loper loopt van het midden van zaal 2 door de ∞-deur en door 2-4 kamers ('Camera: het doolhof' = eindeloos);
 // in 'auto' kiest club/showregie.js wanneer (in de break: doolhof.direct, meteen de gang vóór kamer 1 in).
+// LIFT (doolhof/lift.js, 17-10): ~1 op 3 overgangen is een lift i.p.v. een S-gang (nooit twee achter elkaar, nooit vanuit zaal 2): sas,
+// cabine, sas in een rechte lijn. De loper stopt in de cabine (liftStart), de liftcamera neemt het over, met de deuren dicht wordt kamer A
+// onzichtbaar (liftVerstop: de lifthelft hangt dan los in de scène) en wisselt de kern naar de identieke lift vóór kamer B; B blijft
+// verborgen tot de deuren opengaan. Levels: R.level per kamer, doolhof.level = nu (0 bij de ∞-deur). Kamers duren sinds 17-10 ~1,5x zo lang
+// (BLIJF_X, LOOP_KAMER). Test: doolhof.lift({ cabine, uitzicht, deur, richting, levels }), doolhof.volgendeOvergang = 'lift' | 'gang'.
 // Test: doolhof.start('boiler'), doolhof.start('boiler', true) (direct) of doolhof.volgende = 'boiler'.
 //
 // LICHT: het doolhof is een lichtshow, geen verlichte ruimte. De kern geeft geen vulverlichting (ambient bijna 0, getint met
@@ -143,6 +148,7 @@
   // groepen die (nog) los van de scène bestaan maar leven: de klaarstaande kamer, de volgende kamer, een nieuwe ∞-gang
   const losseGroepen = new Set();
   const levend = o => { while (o.parent) o = o.parent; return o === scene || losseGroepen.has(o); };
+  doolhof.levend = levend;  // (doolhof/lift.js: welke lifthelften nog bestaan)
 
   // --- shaders vasthouden: three gooit een programma weg zodra geen materiaal het meer gebruikt. Bij het opruimen van een kamer
   // verdwenen zo alle shaders, en elke volgende kamer compileerde ze opnieuw (6-16 per kamer, ~10-100 ms per shader). Programma's van het
@@ -317,7 +323,20 @@
     return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   };
   const recenteGangen = [];
-  function nieuweOvergang(vorige, sx) {  // stijl kiezen (gewogen, niet de vorige en liefst niet een van de laatste drie)
+  // lift (doolhof/lift.js): na een S-gang de helft van de keren een lift (zo ~1 op 3 overgangen), nooit twee liften achter elkaar en nooit
+  // vanuit zaal 2. lift = { na: de overgang vóór deze kamer, level: het level van de kamer } (alleen bij de uitgang van een kamer).
+  // Test: doolhof.volgendeOvergang = 'lift' | 'gang' geldt voor de volgende uitgang van een kamer die gebouwd wordt.
+  const LIFT_KANS = 0.5;
+  function nieuweOvergang(vorige, sx, lift) {  // stijl kiezen (gewogen, niet de vorige en liefst niet een van de laatste drie)
+    const LF = doolhof.lift, lvl = lift ? lift.level || 0 : 0;
+    if (lift && LF && typeof LF.plan === 'function') {
+      const vast = doolhof.volgendeOvergang, wil = vast === 'lift' || (vast !== 'gang' && !(lift.na && lift.na.lift) && Math.random() < LIFT_KANS);
+      if (vast === 'lift' || vast === 'gang') doolhof.volgendeOvergang = null;
+      if (wil) {
+        try { return { lift: true, stijl: 'lift', vorigeGang: vorige, sx: 1, zaad: (Math.random() * 4294967296) >>> 0, zwaar: zwaar(), deel: new Map(), n: 0, level: lvl, L: LF.plan(lvl) }; }
+        catch (e) { fout('lift plannen', e); }
+      }
+    }
     const S = doolhof.gangStijlen, namen = Object.keys(S).filter(n => S[n] && typeof S[n].maak === 'function' && (+S[n].gewicht || 0) > 0);
     let stijl = null;
     if (doolhof.volgendeGang && S[doolhof.volgendeGang]) { stijl = doolhof.volgendeGang; doolhof.volgendeGang = null; }
@@ -329,8 +348,11 @@
       stijl = kand.find(n => (r -= +S[n].gewicht) < 0) || kand[0];
     }
     if (stijl) { recenteGangen.push(stijl); while (recenteGangen.length > Math.max(0, Math.min(3, namen.length - 2))) recenteGangen.shift(); }
-    return { stijl, sx: sx || (Math.random() < 0.5 ? -1 : 1), zaad: (Math.random() * 4294967296) >>> 0, zwaar: zwaar(), deel: new Map(), n: 0 };
+    return { stijl, sx: sx || (Math.random() < 0.5 ? -1 : 1), zaad: (Math.random() * 4294967296) >>> 0, zwaar: zwaar(), deel: new Map(), n: 0, level: lvl };
   }
+  // lengte en looplijn van een overgang: S-gang (SBS) of de rechte lift (sas, cabine, sas)
+  const ovLen = ov => (ov && ov.lift ? ov.L.LEN : SB_LEN);
+  const ovPunten = (f, ov) => (ov && ov.lift ? [V3(f.x, f.z), V3(f.x, f.z + ov.L.LEN / 2), V3(f.x, f.z + ov.L.LEN)] : sbPunten(f, ov.sx));
 
   // de schil: muren (in stukken van 0,4 m), vloer en plafond (rechte stukken + waaiers in de bochten), koppen apart.
   // uv muren = schildering per muurstuk (eigen verschuiving, naad alleen in de hoeken, leesbaar ook gespiegeld), vloer/plafond = meters
@@ -830,22 +852,28 @@
     if (gestopt && gestopt()) { sloop(null, R); return null; }
     const m = kamer.maat, G = groep.position, dh = m.d / 2;
     R.blijf = kamer.blijf == null ? 12 : Math.max(0, +kamer.blijf || 0);
+    if (doolhof.liftTest > 0 && !inOv.lift) { R.blijf = Math.min(R.blijf, 1.5); doolhof.liftTest--; }  // test (doolhof.lift()): snel door naar de lift
+    // het level van deze kamer (de lift ervoor bepaalt het; bij aankomst zet de kern het precies, zie liftKlok)
+    R.level = inOv.lift ? inOv.L.naar : inOv.level || 0;
     // gangen in de ruimte van de kamer: vóór de ingang (begin dicht) en achter de uitgang (eind dicht); de uitgang krijgt een nieuwe stijl
-    R.inOv = inOv; R.uitOv = nieuweOvergang(inOv.stijl); R.sxUit = R.uitOv.sx;
-    const inL = { x: -sxIn * L2, z: -dh - L1 - L3, yaw: 0 }, uitL = { x: 0, z: dh, yaw: 0 };
+    // (of een lift: doolhof/lift.js, recht: sas, cabine, sas)
+    R.inOv = inOv; R.uitOv = nieuweOvergang(inOv.lift ? inOv.vorigeGang : inOv.stijl, undefined, { na: inOv, level: R.level }); R.sxUit = R.uitOv.sx;
+    const LF = doolhof.lift, lenIn = ovLen(inOv), lenUit = ovLen(R.uitOv);
+    const inL = inOv.lift ? { x: 0, z: -dh - lenIn, yaw: 0 } : { x: -sxIn * L2, z: -dh - L1 - L3, yaw: 0 }, uitL = { x: 0, z: dh, yaw: 0 };
     STAT.nu = 'gang ' + inOv.stijl;
-    R.gangIn = yield* gangStappen(groep, inL, inOv, 'begin');
+    R.gangIn = inOv.lift ? yield* LF.bouw(groep, inL, inOv) : yield* gangStappen(groep, inL, inOv, 'begin');
     yield;
     if (gestopt && gestopt()) { sloop(null, R); return null; }
     STAT.nu = 'gang ' + R.uitOv.stijl;
-    R.gangUit = yield* gangStappen(groep, uitL, R.uitOv, 'eind');
+    R.gangUit = R.uitOv.lift ? yield* LF.bouw(groep, uitL, R.uitOv) : yield* gangStappen(groep, uitL, R.uitOv, 'eind');
     yield;
     if (gestopt && gestopt()) { sloop(null, R); return null; }
     R.inFrame = { x: G.x + inL.x, z: G.z + inL.z, yaw: 0 }; R.uitFrame = { x: G.x, z: G.z + dh, yaw: 0 };
-    // spoor in wereld-coördinaten: gang in, route, gang uit
+    // spoor in wereld-coördinaten: gang (of lift) in, route, gang (of lift) uit
     const route = kamerRoute(kamer, R.ctx.rnd).map(p => p.add(G));
-    R.sp = maakSpoor([...sbPunten(R.inFrame, sxIn), ...route.slice(1), ...sbPunten(R.uitFrame, R.sxUit).slice(1)]);
-    R.ingangBoog = SB_LEN; R.uitgangBoog = R.sp.len - SB_LEN; R.tpBoog = R.uitgangBoog + E_TP;
+    R.sp = maakSpoor([...ovPunten(R.inFrame, inOv), ...route.slice(1), ...ovPunten(R.uitFrame, R.uitOv).slice(1)]);
+    R.ingangBoog = lenIn; R.uitgangBoog = R.sp.len - lenUit; R.tpBoog = R.uitgangBoog + (R.uitOv.lift ? R.uitOv.L.STOP : E_TP);
+    R.inTP = inOv.lift ? inOv.L.STOP : E_TP;  // waar de wissel de loper in de ingang neerzet
     let bd = 1e9; R.midBoog = (R.ingangBoog + R.uitgangBoog) / 2;  // wachtplek: het punt van de route het dichtst bij het midden
     R.sp.pts.forEach((p, i) => { const b = R.sp.cum[i]; if (b < R.ingangBoog + 0.5 || b > R.uitgangBoog - 0.5) return; const d = Math.hypot(p.x - G.x, p.z - G.z); if (d < bd) { bd = d; R.midBoog = b; } });
     sindsBoiler = soort === 'boiler' ? 0 : sindsBoiler + 1;
@@ -865,7 +893,9 @@
     R.groep.visible = false; if (R.groep.parent) R.groep.parent.remove(R.groep);
     losseGroepen.delete(R.groep); if (z) z.eigen.delete(R.groep);
     if (doolhof.actief === R.kamer) doolhof.actief = null;
-    afvoerLater([R.groep]);
+    const los = R.liftLos; R.liftLos = null;  // lifthelft die tijdens de rit los in de scène hing (liftVerstop)
+    if (los) { if (los.parent) los.parent.remove(los); if (z) z.eigen.delete(los); }
+    afvoerLater(los ? [R.groep, los] : [R.groep]);
   }
 
   // opwarmen in stappen, in de toestand waarin de groep straks getekend wordt (stand 'doolhof' of 'zaal2', zie lampenVan):
@@ -1049,8 +1079,18 @@
   function lampenBeeld(z) {
     if (!z.lampen) return;
     const R = z.own && z.own.isKamer ? z.own : null, lmax = Math.min(z.nLamp, MAXLAMP[zwaar()]);
+    const X = z.lift;
+    if (X && !X.loopt) {  // in de lift: de lampen hangen in de cabine (kleur van de ledshow), in 0,8 s aan
+      const half = liftHelft(X), k = Math.min(1, Math.max(0, (z.lt - X.t0) / 0.8));
+      for (let i = 0; i < z.lampen.length; i++) {
+        const l = z.lampen[i];
+        if (i >= lmax || !half) { l.intensity = 0; continue; }
+        try { doolhof.lift.licht(X.L, half, i, l, k); } catch (e) { l.intensity = 0; }
+      }
+      return;
+    }
     // vervagen: uit in het donkere stuk van de gang (rond de wissel), aan in de kamer
-    const f = R ? glad(z.dist, E_TP + 0.3, R.ingangBoog + 0.6) * (1 - glad(z.dist, R.uitgangBoog - 0.4, R.tpBoog - 0.3)) : 0;
+    const f = R ? glad(z.dist, (R.inTP != null ? R.inTP : E_TP) + 0.3, R.ingangBoog + 0.6) * (1 - glad(z.dist, R.uitgangBoog - 0.4, R.tpBoog - 0.3)) : 0;
     for (let i = 0; i < z.lampen.length; i++) {
       const l = z.lampen[i], px = R && i < lmax ? R.lampen[i] : null;
       if (!px) { l.intensity = 0; continue; }
@@ -1137,6 +1177,7 @@
 
   function maakShot() {
     const direct = !!doolhof.direct; doolhof.direct = false;  // showregie in de break: meteen de gang vóór kamer 1 in (de wandeling door zaal 2 duurt ~15 s)
+    doolhof.level = 0;  // de ∞-deur van zaal 2 ligt op level 0
     const z = { lt: 0, eigen: new Set(), verborgen: new Map(), z2licht: new Map(), z2lampen: [], fase: 'zaal2', dist: 0, v: 1.1,
       dans: false, modus: 'volg', snap: null, rond: null, doel: 3 + Math.floor(Math.random() * 3), kw: null, nLamp: 0, naFlits: false };
     // klaarstaande voorraad gebruiken (niet als een test om een andere soort vraagt of de stand intussen anders is)
@@ -1237,6 +1278,8 @@
     if (A.isKamer) sloop(z, A);
     else { z.fase = 'doolhof'; zaal2LichtTerug(z); lampenAan(z); }
     z.own = B; z.next = null; z.wacht = 0;
+    // level: door een S-gang blijft het gelijk (de lift zet het bij aankomst zelf, zie liftKlok); een lift achter B vertrekt van dat level
+    if (!(B.inOv && B.inOv.lift)) { B.level = A.isKamer ? A.level || 0 : 0; doolhof.level = B.level; if (B.uitOv && B.uitOv.lift && doolhof.lift) doolhof.lift.zetVan(B.uitOv.L, B.level); }
     if (B.groep.parent !== scene) scene.add(B.groep);
     losseGroepen.delete(B.groep); z.eigen.add(B.groep);
     B.t0 = t; B.actief = true; B.groep.visible = true; doolhof.actief = B.kamer;
@@ -1244,12 +1287,20 @@
     if (later) z.planNa = true;
     else if (S.cam === 'doolhof' || B.nr < z.doel) planVolgende(z);
   }
-  function startDans(z, t) {  // stilstaan op de wachtplek en meedansen; de loopclip vloeit eruit
+  // hoe lang de loper op de wachtplek blijft (x kamer.blijf): sinds 17-10 ~1,5x zo lang in de kamers (Sierk: 'net iets te snel'; gemeten
+  // ~35 s per kamer, 7,8 s per gang). De camera kijkt intussen rond (kamer.cam) of draait een rondje om hem heen; in de opbouw wacht hij op
+  // de drop en op de drop blijft hij staan tot die uitklinkt (zie loperBeeld). Langzamer lopen in de kamer (LOOP_KAMER) doet de rest.
+  const BLIJF_X = { groove: 2.0, drop: 2.0, opbouw: 1.8, break: 1.45 }, LOOP_KAMER = 0.95, LOOP_GANG = 1.3;
+  function wachtLoper(z) {  // stilstaan waar hij is; de loopclip vloeit eruit
     const w = z.loper.d;
-    z.dans = true; z.dansTot = t + z.own.blijf; z.own.blijfKlaar = true;
     if (w.prev) { w.prev.stop(); w.prev = null; }
     w.loopA = w.cur; w.loopW = 1; w.cur = null;
     w.home.copy(w.root.position); w.face = w.root.rotation.y; w.faceT = undefined; w.px = w.pz = 0; w.nextChange = 0; w.acts = null; w.queue = null;
+  }
+  function startDans(z, t) {  // stilstaan op de wachtplek en meedansen
+    const x = BLIJF_X[show.stand] || 2;
+    z.dans = true; z.dansTot = t + z.own.blijf * x; z.dansMax = z.dansTot + 20; z.own.blijfKlaar = true;
+    wachtLoper(z);
   }
   function stopDans(z) {
     const w = z.loper.d;
@@ -1259,25 +1310,39 @@
   }
   function loperBeeld(s, z, t, dt) {
     const w = z.loper.d;
+    if (z.lift && !z.lift.loopt) { liftLoper(s, z, t, dt); return; }
     if (z.dans) {
       if (w.loopA) { w.loopW -= dt * 1.6; if (w.loopW <= 0) { w.loopA.stop(); w.loopA = null; } else w.loopA.setEffectiveWeight(w.loopW); }
       pose(w, beatPos, Math.max(energy, 0.1), dt);
+      // de drop knalt in de kamer: in de opbouw wacht hij erop, op de drop blijft hij staan tot die uitklinkt (hooguit 20 s extra)
+      if (z.own.isKamer && z.dansMax && t < z.dansMax) {
+        if (show.stand === 'opbouw' && z.dansTot < t + 1.5) z.dansTot = Math.min(z.dansMax, t + 1.5);
+        else if (show.stand === 'drop' && show.drop > 0.3 && z.dansTot < t + 3) z.dansTot = Math.min(z.dansMax, t + 3);
+      }
       if (t >= z.dansTot) stopDans(z);
       return;
     }
     const own = z.own, inKamer = own.isKamer && z.dist > own.ingangBoog && z.dist < own.uitgangBoog;
-    const vWil = !own.isKamer && z.dist < own.uitgangBoog ? 1.1 : inKamer ? 1.1 : 1.3;
+    const vWil = !own.isKamer && z.dist < own.uitgangBoog ? 1.1 : inKamer ? LOOP_KAMER : LOOP_GANG;
     z.v += (vWil - z.v) * Math.min(1, dt * 1.5);
     z.dist += z.v * dt;
+    // de lift achter deze kamer: niet tegen een deur oplopen die nog dicht is
+    if (own.isKamer && own.uitOv && own.uitOv.lift && !z.lift) {
+      const L = own.uitOv.L, voorDeur = own.uitgangBoog + L.C0 - 0.6;
+      if (z.dist > voorDeur && L.deurA < 0.85) { z.dist = voorDeur; z.v = Math.min(z.v, 0.3); }
+    }
+    if (z.lift && z.lift.loopt && z.dist > own.ingangBoog + 0.3) z.lift = null;  // uitgestapt en de kamer in: de rit is klaar
     if (own.isKamer && own.tIn == null && z.dist >= own.ingangBoog) own.tIn = t;  // de loper is binnen: de klok van kamer.cam begint
     let stop = false;
     if (own.isKamer && !own.blijfKlaar && own.blijf > 0 && z.dist >= own.midBoog) { z.dist = own.midBoog; stop = true; }
     else if (z.dist >= own.tpBoog) {
       const eindeloos = S.cam === 'doolhof';
-      if (own.isKamer && own.nr >= z.doel && !eindeloos && !z.next) { einde(s); z.dist = own.tpBoog; }  // laatste kamer: de loper verdwijnt in het donker
+      if (own.isKamer && own.uitOv && own.uitOv.lift && !z.lift) { z.dist = own.tpBoog; liftStart(s, z, t); }  // in de cabine: de rit begint
+      else if (own.isKamer && own.nr >= z.doel && !eindeloos && !z.next) { einde(s); z.dist = own.tpBoog; }  // laatste kamer: de loper verdwijnt in het donker
       else if (z.next && z.next.klaar) wissel(z, t);
       else { z.dist = own.tpBoog; planVolgende(z); if ((z.wacht = (z.wacht || 0) + dt) > 6) einde(s); }
     }
+    if (z.lift && !z.lift.loopt) return;
     const o2 = z.own;
     opSpoor(o2.sp, z.dist, w.root.position); opSpoor(o2.sp, z.dist + 0.35, tA);
     const dx = tA.x - w.root.position.x, dz = tA.z - w.root.position.z;
@@ -1286,8 +1351,72 @@
     if (w.cur && w.cur.getClip() === ACTS.Casual_Walk) w.cur.timeScale = z.v / LOOP;
     blend(w, dt);
   }
-  function cameraBeeld(z, t) {
-    const own = z.own, w = z.loper.d;
+  // --- de lift (doolhof/lift.js) als overgang: instappen, rit met de wissel bij dichte deuren, uitstappen ---
+  const liftHelft = X => (X.gewisseld ? X.B && X.B.gangIn : X.A.gangUit);
+  function liftStart(s, z, t) {  // de loper staat in de cabine: stilstaan, camera mee naar binnen, deuren dicht zodra de camera binnen is
+    const own = z.own, ov = own.uitOv;
+    z.lift = { L: ov.L, ov, A: own, B: null, t0: t, gewisseld: false, loopt: false, wacht: 0, aangekomen: false, laatste: own.nr >= z.doel && S.cam !== 'doolhof' };
+    z.dans = false;
+    wachtLoper(z);
+    try { doolhof.lift.instap(ov.L, camPos, camLook, own.gangUit); } catch (e) { fout('lift instap', e); }
+    if (!z.next && !z.lift.laatste) planVolgende(z);
+  }
+  function liftLoper(s, z, t, dt) {
+    const X = z.lift, L = X.L, w = z.loper.d;
+    if (w.loopA) { w.loopW -= dt * 1.6; if (w.loopW <= 0) { w.loopA.stop(); w.loopA = null; } else w.loopA.setEffectiveWeight(w.loopW); }
+    pose(w, beatPos, Math.max(energy * 0.6, 0.1), dt);  // zacht meedansen in de cabine
+    // de wissel: deuren dicht, de rit is begonnen en de volgende kamer staat klaar; de lift van B is gelijk, B blijft verborgen tot de deuren opengaan
+    if (!X.gewisseld && !X.laatste) {
+      if (!z.next) planVolgende(z);
+      if (doolhof.lift.magWissel(L) && z.next && z.next.klaar) {
+        const B = z.next;
+        wissel(z, t);
+        X.gewisseld = true; X.B = B;
+        liftVerstop(z, B, B.gangIn);
+      } else if (L.verlengd > 0 && (X.wacht += dt) > 10) { einde(s); return; }  // de volgende kamer komt niet: terug naar de club
+    }
+    if (X.laatste && L.fase === 'rit' && L.tFase > 1.6) { einde(s); return; }  // laatste kamer van het rondje: de lift neemt je mee terug
+    // uitstappen zodra de voordeuren half open zijn
+    if (X.gewisseld && (L.fase === 'opent' || L.fase === 'uit') && L.deurV > 0.55) {
+      X.loopt = true;
+      if (w.loopA) { w.loopA.stop(); w.loopA = null; }
+      setClip(w, ACTS.Casual_Walk, 0.6); z.v = 0.3;
+    }
+  }
+  function liftVerstop(z, R, half) {  // de kamer onzichtbaar tijdens de rit (deuren dicht); de lifthelft hangt zolang los in de scène
+    if (!R || !half || R.liftLos || R.weg) return;
+    scene.attach(half); z.eigen.add(half); R.liftLos = half; R.groep.visible = false;
+  }
+  function liftTerug(z, R) {
+    const half = R && R.liftLos; if (!half || R.weg) return;
+    R.groep.attach(half); z.eigen.delete(half); R.liftLos = null; R.groep.visible = true;
+  }
+  function liftKlok(z, t, dt) {  // elk beeld: de liften van deze kamer (achter de uitgang en vóór de ingang) een stap verder
+    const own = z.own, LF = doolhof.lift;
+    if (!LF || !own || !own.isKamer) return;
+    if (own.uitOv && own.uitOv.lift) try { LF.stap(own.uitOv.L, dt, { kant: 'A', d: z.dist - own.uitgangBoog, wissel: false }); } catch (e) { fout('lift', e); }
+    if (own.inOv && own.inOv.lift) try { LF.stap(own.inOv.L, dt, { kant: 'B', d: z.dist, wissel: true }); } catch (e) { fout('lift', e); }
+    const X = z.lift;
+    if (X) {
+      const L = X.L;
+      if (!X.gewisseld && L.deurA <= 0 && (L.fase === 'start' || L.fase === 'rit')) liftVerstop(z, X.A, X.A.gangUit);
+      if (X.gewisseld && X.B && X.B.liftLos && (L.fase === 'opent' || L.fase === 'uit' || L.fase === 'klaar')) liftTerug(z, X.B);
+      if (X.gewisseld && !X.aangekomen && L.fase !== 'rit') {  // aangekomen: het level ligt nu vast (de rit kan langer zijn geweest)
+        X.aangekomen = true; X.B.level = L.level;
+        if (X.B.uitOv && X.B.uitOv.lift) LF.zetVan(X.B.uitOv.L, L.level);
+      }
+      doolhof.level = L.level;
+    } else if (own.level != null) doolhof.level = own.level;
+  }
+  function cameraBeeld(z, t, dt) {
+    const own = z.own, w = z.loper.d, X = z.lift;
+    if (X && !X.loopt) {  // in de lift: eigen choreografie in de cabine (vanaf het beeld van nu)
+      const half = liftHelft(X);
+      if (half) {
+        try { camFov = doolhof.lift.cam(X.L, half, dt, camPos, camLook); z.modus = 'lift'; z.snap = null; z.vorigDoel = null; return; }
+        catch (e) { fout('liftcamera', e); }
+      }
+    }
     let modus = 'volg';
     if (own.isKamer) {
       // kamer.cam pas als ook de camera binnen is (overvloeien gaat dan nooit door een muur), tot 3 m voor de uitgang
@@ -1316,8 +1445,9 @@
       tP.set(p.x + Math.sin(a) * r, 1.75 + 0.25 * Math.sin(u * 0.5), p.z + Math.cos(a) * r); tL.set(p.x, 1.25, p.z); fov = 56; klaar = true;
     }
     z.vorigDoel = klaar && modus === 'kamer' ? (z.vorigDoel || new THREE.Vector3()).copy(tP) : null;
-    if (!klaar) {  // achter de loper aan, op zijn eigen pad (blijft altijd binnen gang en deur)
-      opSpoor(own.sp, z.dist - BACK, tP); tP.y = OOG;
+    if (!klaar) {  // achter de loper aan, op zijn eigen pad (blijft altijd binnen gang en deur; na een lift niet achter de dichte achterdeur)
+      const sc = own.isKamer && own.inOv && own.inOv.lift ? Math.max(z.dist - BACK, own.inOv.L.camMin) : z.dist - BACK;
+      opSpoor(own.sp, sc, tP); tP.y = OOG;
       opSpoor(own.sp, z.dist + VOORUIT, tL); tL.y = 1.35;
       fov = 58;
     }
@@ -1397,6 +1527,7 @@
     // nieuwe programma's (iets dat het opwarmen miste) vasthouden: ook die horen bij het doolhof
     const P = renderer.info.programs;
     if (P.length !== z.nProg) { for (const p of P) if (!z.bekend.has(p)) { z.bekend.add(p); if (!vast.has(p)) { vast.add(p); p.usedTimes++; STAT.laat = (STAT.laat || 0) + 1; } } z.nProg = P.length; }
+    liftKlok(z, t, dt);
     loperBeeld(s, z, t, dt);
     const R = z.own.isKamer ? z.own : null;
     if (R) {
@@ -1405,7 +1536,7 @@
       if (R.kamer.update && !R.updKapot) try { R.kamer.update(dt, now); } catch (e) { R.updKapot = true; fout('update van ' + R.soort, e); }
     }
     lampenBeeld(z);
-    cameraBeeld(z, t);
+    cameraBeeld(z, t, dt);
     sfeer(z, dt);
     zone2.visible = z.fase === 'zaal2' && camPos.x > 3 && camPos.z > DOOR2.z - 4.5;  // ook in de frame van de wissel meteen goed (lampen!)
   }
@@ -1442,6 +1573,7 @@
     return true;
   };
   doolhof.voorraad = () => voorraad && { klaar: voorraad.klaar, soort: voorraad.R && voorraad.R.soort, gang: voorraad.ov && voorraad.ov.stijl, ms: voorraad.ms };
+  doolhof.voorraadWeg = () => { if (!actief) voorraadWeg(); };  // (test doolhof.lift(): kamer 1 opnieuw bouwen met een lift erachter)
   doolhof.werk = () => werk.map(k => k.naam);
   doolhof.losse = () => [...losseGroepen, ...pool.map(p => p.d.root)];  // testronde: wat buiten de scène leeft (lekzoeker)
 
@@ -1478,6 +1610,17 @@
         try { gang(houder, { x: 0, z: 0, yaw: 0 }, ov, 'eind'); } catch (e) { fout('proefgang ' + stijl, e); }
         yield RUST;
         for (const st of ['doolhof', 'zaal2']) yield* opwarmStappen([houder], st, null, true);
+        afvoerLater([houder]);
+      }
+      // liften (doolhof/lift.js): drie proefritten met verschillende cabines (de shaders van uitzicht, led, glas en display en de
+      // instanced deuren), zonder de testkeuzes of het geheugen van de loting te raken
+      const LF = doolhof.lift;
+      if (LF && typeof LF.plan === 'function') for (const keus of [{ cabine: 'capsule', deur: 'iris' }, { cabine: 'messing', deur: 'harmonica' }, { cabine: 'kooi', deur: 'luik' }]) {
+        const houder = new THREE.Group();
+        try { const ov = { lift: true, stijl: 'lift', sx: 1, zaad: 0, zwaar: zwaar(), deel: new Map(), n: 0, level: 0, L: LF.plan(0, keus, true) }; voltooi(LF.bouw(houder, { x: 0, z: 0, yaw: 0 }, ov)); }
+        catch (e) { fout('proeflift', e); }
+        yield RUST;
+        yield* opwarmStappen([houder], 'doolhof', null, true);
         afvoerLater([houder]);
       }
     },

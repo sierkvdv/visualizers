@@ -5,8 +5,11 @@
 // van de browser (eigen analyser op dezelfde bron), anders de 3 banden van nativeBands (Mac-app: grover).
 // Kenmerken: tempo uit de autocorrelatie van de aanslagen (alle banden), kick op elke tel (bas-aanslagen per tel), snare op
 // 2 en 4 of half-time op 3 (aanslagen 1-4,5 kHz), syncopen (percussie op 3/16), sub t.o.v. midden, vlakheid van het midden
-// (vervormde gitaren), hoeveel hoog, hoe hard de aanslagen. Oordeel pas na ~16 tellen, wisselen pas als een andere stijl
-// 16 (nieuw tempo) tot 32 tellen duidelijk wint; in break en opbouw staat de herkenning stil.
+// (vervormde gitaren), hoeveel hoog, hoe hard de aanslagen. Oordeel pas na ~16 tellen. Wisselen pas als een andere stijl
+// lang genoeg duidelijk (zekerheid >= 0,5) wint: 16 tellen bij een nieuw tempo, anders 32, plus tot 64 extra naarmate de
+// huidige stijl langer zeker stond; een uitdager op precies het halve/dubbele tempo (dubstep 140 vs 'lounge 70') vraagt 64-96
+// tellen + extra bij zekerheid >= 0,75. In break, opbouw en kale/ingetogen stukken (zachter en minder hoog dan de volle
+// delen van de set) staat de herkenning stil.
 (function () {
   'use strict';
   const W = typeof window !== 'undefined' ? window : globalThis;
@@ -47,12 +50,16 @@
   let slot = -1, gevuld = 0, tLaatst = -1, vlakGem = -1, fluxGem = 0, levelRef = -200, stilSinds = 0, specT = -99;
   let spIn = 0;  // aantal blokken binnen (voor de test)
   let midE = 0, midV = 0;  // middenniveau (dB) en hoe sterk het schommelt: gitaren staan vlak, gepompte elektronica schommelt
+  // kaal/ingetogen stuk: totaalniveau en hoog (snare, hats) kort gemeten t.o.v. een lange referentie die snel meestijgt en in
+  // ~2 min wegzakt. Een kaal stuk (alleen sub en een snare) ligt duidelijk onder de volle delen van dezelfde set.
+  let pTk = 0, pHk = 0, lvlK = -999, lvlL = -999, hoogK = -999, hoogL = -999, lvlT = 0;
 
   function voed(db, vlak, t) {  // db: 12 waarden (energie per band, dB), vlak: 0..1 of null, t: seconden
     spIn++;
     let mx = -300;
     for (let k = 0; k < NB; k++) if (db[k] > mx) mx = db[k];
     if (!(mx > -95)) { stilSinds = stilSinds || t; tLaatst = t; return; }  // stilte: niets bijleren
+    if (stilSinds && t - stilSinds > 3) { pTk = 0; lvlT = 0; }  // na een pauze: niveau opnieuw ijken
     stilSinds = 0;
     levelRef = levelRef < -150 ? mx : levelRef + (mx - levelRef) * 0.01;
     const dt = tLaatst < 0 ? 0.02 : Math.min(0.25, Math.max(0.001, t - tLaatst));
@@ -76,6 +83,14 @@
     if (!midE) midE = md;
     midE += (md - midE) * aG; midV += ((md - midE) * (md - midE) - midV) * aG;
     if (vlak != null && vlak >= 0) vlakGem = vlakGem < 0 ? vlak : vlakGem + (vlak - vlakGem) * eA;
+    let pT = 0, pH = 0;
+    for (let k = 0; k < NB; k++) { const p = Math.pow(10, db[k] / 10); pT += p; if (k >= 8) pH += p; }
+    const aK = 1 - Math.exp(-dt / 4), aOp = 1 - Math.exp(-dt / 10), aAf = 1 - Math.exp(-dt / 120);
+    if (!pTk) { pTk = pT; pHk = pH; } else { pTk += (pT - pTk) * aK; pHk += (pH - pHk) * aK; }  // ~4 s gemiddeld vermogen
+    lvlK = 10 * Math.log10(pTk + 1e-20); hoogK = 10 * Math.log10(pHk + 1e-20);
+    lvlT += dt;
+    if (lvlT < 8) { lvlL = lvlK; hoogL = hoogK; }  // eerste 8 s: referentie = nu (één harde eerste klap telt niet)
+    else { lvlL += (lvlK - lvlL) * (lvlK > lvlL ? aOp : aAf); hoogL += (hoogK - hoogL) * (hoogK > hoogL ? aOp : aAf); }
     const s = Math.floor(t * RATE);
     if (slot < 0) slot = s - 1;
     if (s > slot) {
@@ -219,7 +234,7 @@
         case 'dnb':     s = (0.4 + 0.6 * e) * (c.back * 3 + (1 - c.vier) * 2 + e * 1.5 + bij(B, 174, 0.07) * 1.5 + op(F.perc, 1.5, 4) * 0.5) / 8.5; break;
         case 'hiphop':  s = (0.6 + 0.4 * e) * (0.4 + 0.6 * c.back) * (c.back * 3 + (1 - c.vier) * 1.5 + e * 2 + bij(B, 90, 0.2) * 3 + af(F.perc, 3, 5.5)) / 10.5; break;
         case 'afro':    s = (Math.max(c.sync, c.ksync) * 3 + op(F.perc, 3, 5.5) * 2.5 + bij(B, 110, 0.2) * 1.5 + (1 - g) + (1 - c.half) * 0.5) / 8.5; break;
-        case 'lounge':  s = (af(F.vlak, 0.08, 0.18) * 2 + af(F.subMid, 6, 11) + op(F.midHoog, 4, 12) * 1.5 + af(F.flux, 0.12, 0.22) + bij(B, 100, 0.25) + (1 - c.vier * op(F.subMid, 8, 14)) * 0.5) / 7; break;
+        case 'lounge':  s = (1 - 0.4 * op(F.diep, 5, 12)) * (af(F.vlak, 0.08, 0.18) * 2 + af(F.subMid, 6, 11) + op(F.midHoog, 4, 12) * 1.5 + af(F.flux, 0.12, 0.22) + bij(B, 100, 0.25) + (1 - c.vier * op(F.subMid, 8, 14)) * 0.5) / 7; break;  // een diepe sinus-sub (30-50 Hz boven 80-130 Hz) is basmuziek, geen lounge
         case 'rock':    s = g * (c.back * 2.5 + bij(B, 125, 0.25) * 1.5 + af(F.kick, 4, 6) + (1 - c.vier) * 0.5) / 5.5; break;
         case 'metal':   s = g * (op(F.kick, 4.3, 5.5) * 3 + bij(B, 170, 0.35) + af(F.midHoog, 0, 5) + c.back * 0.5) / 5.5; break;
         case 'punk':    s = g * (c.back * 2.5 + bij(B, 182, 0.12) * 2 + af(F.kick, 4.3, 5.5) * 2) / 6.5; break;
@@ -232,6 +247,24 @@
   const FAM = { house: 'vier', techno: 'vier', trance: 'vier', dubstep: 'bas', dnb: 'bas', hiphop: 'hiphop', afro: 'afro', lounge: 'lounge', rock: 'gitaar', metal: 'gitaar', punk: 'gitaar' };
   let herkend = 'onbekend', voorsprong = 0, geoordeeld = 0, fRef = 0, fAfwijk = 0, nieuwTempo = true, fGlad = 0, fSprong = 0;
   let zekerAuto = 0, bpmGlad = 120, laatstOordeel = -1;
+  // stabiliteit (een set springt zelden binnen een minuut van genre):
+  // vast = tellen dat de huidige stijl met hoge zekerheid won (max 256); hoe langer, hoe meer bewijs een wissel vraagt.
+  // bpmVast = de BPM waarop de huidige stijl zeker stond: een uitdager op precies het halve/dubbele tempo (dubstep 140 ->
+  // 'lounge 70') is bijna altijd dezelfde muziek. nieuwTempoTel: een tempowissel geeft maar een tijdje korting.
+  let vast = 0, bpmVast = 0, nieuwTempoTel = 0, laatsteEis = null;
+  const ingetogen = () => lvlT < 8 ? 0 : Math.max(op(lvlL - lvlK, 3, 7), op(hoogL - hoogK, 6, 12));
+  function eis(best) {  // wat een wissel van herkend naar best vraagt: tellen voorsprong, zekerheid, scoremarge
+    const kan = SCORE[best], extra = Math.min(64, vast / 2);
+    const naarMosh = PRESETS[best].mosh && !PRESETS[herkend].mosh;
+    const half = bpmVast > 0 && Math.abs(Math.abs(Math.log2(kan.B / bpmVast)) - 1) < 0.07;
+    const halftime = PRESETS[herkend].halveTel || PRESETS[best].halveTel;
+    let tel, z = naarMosh ? 0.6 : 0.5, marge = 0.06;
+    if (half) { tel = (halftime ? 96 : 64) + extra; z = Math.max(z, 0.75); marge = 0.12; }
+    else if (nieuwTempo) tel = 16 + extra / 2;
+    else tel = 32 + extra;
+    if (naarMosh) tel = Math.max(tel, 24);
+    return { tel, z, marge, half };
+  }
   function oordeel(t) {
     const dtO = laatstOordeel < 0 ? 0.5 : Math.min(2, t - laatstOordeel);
     laatstOordeel = t;
@@ -240,10 +273,11 @@
     const dF = Math.log2(F.f / fGlad);
     if (Math.abs(dF) > 0.03) { fSprong += dtO; if (fSprong >= 2) { fGlad = F.f; fSprong = 0; } } else { fSprong = 0; fGlad *= Math.pow(2, dF * 0.3); }
     const tellen = dtO * fGlad / 60;
-    // ander tempo dan waar het oordeel op rust = waarschijnlijk een ander nummer: dan na 16 tellen al wisselen
+    // ander tempo dan waar het oordeel op rust = waarschijnlijk een ander nummer: dan sneller wisselen
     if (!fRef) fRef = fGlad;
-    if (Math.abs(Math.log2(fGlad / fRef)) > 0.05) { fAfwijk += tellen; if (fAfwijk >= 8) { nieuwTempo = true; fRef = fGlad; fAfwijk = 0; for (const st of NAMEN) SCORE[st].glad *= 0.5; } }
+    if (Math.abs(Math.log2(fGlad / fRef)) > 0.05) { fAfwijk += tellen; if (fAfwijk >= 8) { nieuwTempo = true; nieuwTempoTel = 0; fRef = fGlad; fAfwijk = 0; for (const st of NAMEN) SCORE[st].glad *= 0.5; } }
     else { fAfwijk = 0; fRef *= Math.pow(fGlad / fRef, 0.05); }
+    if (nieuwTempo && herkend !== 'onbekend' && (nieuwTempoTel += tellen) > 96) nieuwTempo = false;
     const a = 1 - Math.exp(-dtO / 3);
     let best = NAMEN[0], twee = NAMEN[1];
     for (const st of NAMEN) {
@@ -257,14 +291,22 @@
     for (const st of NAMEN) if (FAM[st] !== FAM[best] && SCORE[st].glad > ander) ander = SCORE[st].glad;
     const gb = SCORE[best].glad, marge = Math.min(gb - ander, 2 * (gb - SCORE[twee].glad) + 0.06);
     const zeker = klem(marge / 0.12) * op(gb, 0.35, 0.6);
-    if (best === herkend) zekerAuto = zeker;
+    if (best === herkend) {
+      zekerAuto = zeker;
+      if (zeker >= 0.6) {
+        vast = Math.min(256, vast + tellen);
+        if (!nieuwTempo && !fAfwijk && Math.abs(Math.log2(F.f / fRef)) < 0.03) bpmVast = SCORE[herkend].B;  // alleen bij rustig tempo
+      }
+    }
     // een moshpit in een house-set is erger dan een gemiste moshpit: naar een moshstijl vraagt meer bewijs
     const naarMosh = PRESETS[best].mosh && !PRESETS[herkend].mosh;
+    laatsteEis = null;
     if (herkend === 'onbekend') {
-      if (geoordeeld >= (naarMosh ? 24 : 16) && zeker >= (naarMosh ? 0.45 : 0.3)) wissel(best, t, 'auto', zeker);
+      if (geoordeeld >= (naarMosh ? 24 : 16) && zeker >= (naarMosh ? 0.5 : 0.45)) wissel(best, t, 'auto', zeker);
     } else if (best !== herkend) {
-      if (gb - SCORE[herkend].glad > 0.06 && zeker >= (naarMosh ? 0.45 : 0.2)) voorsprong += tellen; else voorsprong = 0;
-      if (voorsprong >= (nieuwTempo ? 16 : 32)) wissel(best, t, nieuwTempo ? 'tempo' : 'auto', zeker);
+      const E = laatsteEis = eis(best);
+      if (gb - SCORE[herkend].glad > E.marge && zeker >= E.z) voorsprong += tellen; else voorsprong = 0;
+      if (voorsprong >= E.tel) wissel(best, t, E.half ? 'half' : nieuwTempo ? 'tempo' : 'auto', zeker);
     } else voorsprong = 0;
     if (best !== herkend) zekerAuto = herkend === 'onbekend' ? 0 : klem((SCORE[herkend].glad - gb + 0.12) / 0.24) * op(SCORE[herkend].glad, 0.3, 0.55);  // een ander wint: twijfel
   }
@@ -272,7 +314,7 @@
     voorsprong = 0; nieuwTempo = false; fRef = fGlad;
     if (st === herkend) return;
     const van = herkend;
-    herkend = st; zekerAuto = zeker;
+    herkend = st; zekerAuto = zeker; vast = 0; bpmVast = SCORE[st].B;
     if (ST.auto) zet(st, door, van, t);
   }
 
@@ -385,7 +427,9 @@
         else if (naBreak) { if (tb - R.sinds >= 12 || tb < R.sinds) naBreak = false; else pauze = true; }
       }
       const stabiel = Math.abs(Math.log2(tempoNu / F.f)) < 0.04;  // deze meting en het gemiddelde zijn het eens
-      if (!pauze && F.kracht >= 0.2 && stabiel) oordeel(t); else laatstOordeel = -1;
+      // kaal/ingetogen stuk (alleen sub en een snare, duidelijk zachter en minder hoog dan de volle delen): net als een break
+      // niets bijleren, anders wordt een kale dubstep-passage 'lounge'
+      if (!pauze && F.kracht >= 0.2 && stabiel && ingetogen() < 0.5) oordeel(t); else laatstOordeel = -1;
     }
     bpmBij(false);
     label(t);
@@ -460,6 +504,8 @@
     for (const st of NAMEN) { const c = SCORE[st]; sc[st] = { bpm: Math.round(c.B * 10) / 10, s: Math.round(c.s * 100) / 100, glad: Math.round(c.glad * 100) / 100, vier: +c.vier.toFixed(2), back: +c.back.toFixed(2), half: +c.half.toFixed(2), sync: +c.sync.toFixed(2), ksync: +c.ksync.toFixed(2) }; }
     const f = {};
     for (const k in F) f[k] = Math.round(F[k] * 100) / 100;
-    return { naam: ST.naam, herkend, auto: ST.auto, bpm: ST.bpm, voel: ST.voel, zeker: Math.round(ST.zeker * 100) / 100, voorsprong: Math.round(voorsprong), nieuwTempo, F: f, score: sc, blokken: spIn };
+    const E = laatsteEis;
+    const extra = 'vast ' + Math.round(vast) + ' kaal ' + ingetogen().toFixed(2) + ' (niv -' + Math.max(0, lvlL - lvlK).toFixed(1) + ' hoog -' + Math.max(0, hoogL - hoogK).toFixed(1) + ' dB)' + (E ? ' eis ' + Math.round(E.tel) + 't z' + E.z + (E.half ? ' half' : '') : '');
+    return { naam: ST.naam, herkend, auto: ST.auto, bpm: ST.bpm, voel: ST.voel, zeker: Math.round(ST.zeker * 100) / 100, voorsprong: Math.round(voorsprong), nieuwTempo, vast: Math.round(vast), kaal: +ingetogen().toFixed(2), extra, F: f, score: sc, blokken: spIn };
   };
 })();

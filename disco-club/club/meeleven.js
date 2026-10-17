@@ -1,5 +1,8 @@
 // Randpubliek leeft mee: knikken op de tel, wiegen op de bas, vuistpompen aan de bar,
 // en bij een drop of YMCA golft het moment door de hele zaal (bar, wc-rij, hoeken, lounge, lopers, wormpjes).
+// De drop volgt de muziekstijl (window.clubStijl.preset, club/stijl.js): lounge = niemand springt, een deel heft kort het glas
+// of klapt even; hiphop/afro = juichen, een deel springt; house/techno/trance = juichen en springen (zoals altijd);
+// dubstep/dnb/rock/metal/punk = voluit (korter juichen, langer springen, meer vuisten aan de bar). Zonder clubStijl: zoals altijd.
 // Alles bovenop de clip. De mixer schrijft een bot alleen als de clipwaarde verandert: clean() zet daarom eerst de schone stand terug.
 (() => {
   if (window.clubPubliek) return;  // maar één keer laden (anders dubbel knikken en twee wrappers)
@@ -21,7 +24,7 @@
     d.body.traverse(o => { if (o.isBone && !b[o.name]) b[o.name] = o; });
     s = { head: b.Head, neck: b.neck, spine: b.Spine02, rArm: b.RightArm, rFore: b.RightForeArm, lArm: b.LeftArm, lFore: b.LeftForeArm,
           rSh: b.RightShoulder, lSh: b.LeftShoulder, k: rnd(0.5, 1.2), late: Math.random() < 0.5, ph: Math.random() < 0.5 ? 0 : Math.PI,
-          nod: 0, pump: 0, pumpOn: 0, gid: 0 };
+          nod: 0, pump: 0, pumpOn: 0, gid: 0, part: null };
     // per bot: schone stand (van de mixer) en wat wij er zelf van maakten
     s.keep = [s.head, s.neck, s.spine, s.rArm, s.lArm, s.rSh, s.lSh].filter(Boolean).map(bone => ({ bone, base: bone.quaternion.clone(), mine: bone.quaternion.clone() }));
     cache.set(d, s);
@@ -93,29 +96,68 @@
   const walkWalker = w => eligible(w) && w.state === 'walk' && !(w.poi && w.poi.dance) && w.root.visible;
   const toDj = (x, z) => Math.atan2(-x, -8.5 - z);
 
+  // hoe het randpubliek een drop viert, per stijl (preset.dans van club/stijl.js); zonder clubStijl 'normaal' = het oude gedrag
+  const PROF = {
+    proost:  { pomp: 0 },                                        // lounge: geen clipwissel, kort glas heffen of klappen
+    licht:   { juich: 8, spring: 0.35, lopers: false, pomp: 1 },  // hiphop/afro: juichen, een deel springt
+    normaal: { juich: 8, spring: 1, lopers: true, pomp: 2 },      // house/techno/trance/onbekend: zoals altijd
+    vol:     { juich: 4, spring: 1, lopers: true, pomp: 3 },      // dubstep/dnb/rock/metal/punk: voluit
+  };
+  function profiel() {
+    const cs = window.clubStijl, p = cs && cs.preset;
+    if (!p) return 'normaal';
+    const dn = p.dans;
+    if (dn === 'lounge') return 'proost';
+    if (dn === 'bounce' || dn === 'afro') return 'licht';
+    if (p.mosh || dn === 'halftime' || dn === 'skank' || dn === 'headbang' || dn === 'pogo') return 'vol';
+    return 'normaal';
+  }
+  const join = (d, p) => { const s = info(d); s.gid = G.id; s.pumpOn = 0; s.part = p; p.d = d; G.parts.push(p); return p; };
+  function heldHand(d) {  // de hand met een glas of fles (index.html: held); anders null
+    if (typeof held === 'undefined' || !held) return null;
+    for (const h of held) if (h.d === d) return /^Left/.test(h.hand.name) ? 'l' : 'r';
+    return null;
+  }
+  // lounge: niemand springt of juicht; ~60% heft gespreid 2,5-4 tellen het glas (of klapt even als er geen glas is)
+  function proost(tb) {
+    if (G) stopGolf();
+    const b0 = Math.floor(tb);
+    G = { kind: 'proost', prof: 'proost', tb, end: b0 + 8, half: 1e9, phase: 0, jStart: 0, t0: performance.now() / 1000, id: ++gid, parts: [] };
+    const doe = (d, sit, kans) => {
+      if (Math.random() > kans) return;
+      const h = heldHand(d), klap = !h && !sit && Math.random() < 0.5;
+      join(d, { role: 'proost', sit, arm: h || (sit ? 'r' : Math.random() < 0.5 ? 'l' : 'r'), klap, b: b0 + rnd(0, 2), len: rnd(2.5, 4) });
+    };
+    for (const d of crowd) { if (loungeCrowd(d)) doe(d, true, 0.6); else if (standingCrowd(d)) doe(d, false, 0.6); }
+    for (const w of walkers) if (waitWalker(w)) doe(w, false, 0.5);
+    pub.golf = 'proost'; pub.totBeat = G.end;
+  }
+
   function golf(kind, tb) {
     if (kind !== 'drop' && kind !== 'ymca') return;  // solo/paar: alleen knikken
     if (kind === 'drop' && window.clubMoshpit && clubMoshpit.golfWeg()) return;  // deze drop wordt een moshpit (club/moshpit.js)
+    if (typeof tb !== 'number' || !isFinite(tb)) tb = beatPos;  // console of wrapper zonder tel: anders NaN-tijden en onzichtbare figuren
+    const pr = kind === 'drop' ? profiel() : 'normaal', P = PROF[pr];
+    if (pr === 'proost') return proost(tb);
     const CH = ACTS.Cheer_with_Both_Hands_Up, JU = ACTS.Happy_jump_f, YM = ACTS.ymca_dance;
     if (kind === 'drop' ? !CH || !JU : !YM) return;
-    if (typeof tb !== 'number' || !isFinite(tb)) tb = beatPos;  // console of wrapper zonder tel: anders NaN-tijden en onzichtbare figuren
     if (G) stopGolf();
     const b0 = Math.floor(tb), first = kind === 'drop' ? CH : YM;
-    G = { kind, tb, end: b0 + 16, half: b0 + 8, phase: 0, jStart: 0, t0: performance.now() / 1000, id: ++gid, parts: [] };
-    const join = (d, p) => { info(d).gid = G.id; info(d).pumpOn = 0; p.d = d; G.parts.push(p); return p; };
+    G = { kind, prof: pr, tb, end: b0 + 16, half: b0 + P.juich, phase: 0, jStart: 0, t0: performance.now() / 1000, id: ++gid, parts: [] };
+    const springt = () => P.spring >= 1 || Math.random() < P.spring;
     for (const d of crowd) {
       if (loungeCrowd(d)) { if (kind === 'drop') join(d, { role: 'sit' }); continue; }  // lounge blijft zitten
       if (!standingCrowd(d)) continue;
-      join(d, { role: 'stand', face: d.face, faceT: d.faceT });
+      join(d, { role: 'stand', face: d.face, faceT: d.faceT, spring: springt() });
       d.actT = 1e9; setClip(d, first, 0.3);
       if (kind === 'ymca') d.faceT = toDj(d.home.x, d.home.z);
     }
     for (const w of walkers) {
       if (waitWalker(w)) {
-        join(w, { role: 'stand', walker: true, face: w.root.rotation.y, faceT: w.faceT });
+        join(w, { role: 'stand', walker: true, face: w.root.rotation.y, faceT: w.faceT, spring: springt() });
         w.actT = 1e9; w.wait = Math.max(w.wait, 0.5); setClip(w, first, 0.3);
         if (kind === 'ymca') w.faceT = toDj(w.root.position.x, w.root.position.z);
-      } else if (kind === 'drop' && walkWalker(w)) {  // stilstaan en 8 tellen springen, daarna verder lopen
+      } else if (kind === 'drop' && P.lopers && walkWalker(w)) {  // stilstaan en 8 tellen springen, daarna verder lopen
         join(w, { role: 'walk', x: w.root.position.x, z: w.root.position.z, ry: w.root.rotation.y });
         setClip(w, JU, 0.3);
       }
@@ -133,7 +175,8 @@
     pub.golf = null; pub.totBeat = 0;
     for (const p of g.parts) {
       const d = p.d;
-      if (!d.root.parent || p.done) continue;
+      const s = cache.get(d); if (s && s.part === p) s.part = null;
+      if (!d.root.parent || p.done || p.role === 'proost') continue;
       if (p.role === 'stand') { d.actT = 0; if (g.kind === 'ymca') d.faceT = p.faceT !== undefined ? p.faceT : p.face; }
       else if (p.role === 'walk' && d.state === 'walk') setClip(d, d.walkClip, 0.4);
       else if (p.role === 'worm') { d.state = 'run'; d.until = rnd(14, 24); d.acts = null; d.actT = 0; }
@@ -148,10 +191,18 @@
   function runGolf(dt, now) {
     const tb = beatPos;
     if (tb >= G.end || tb < G.tb - 1 || now - G.t0 > 45) return stopGolf();
+    if (G.kind === 'proost') return;  // alleen armen bovenop de eigen clip (groove)
     const drop = G.kind === 'drop', JU = ACTS.Happy_jump_f;
-    if (drop && G.phase === 0 && tb >= G.half) {  // na 8 tellen juichen: springen; lopers lopen weer door
+    if (drop && G.phase === 0 && tb >= G.half) {  // na het juichen (8 tellen, voluit 4): springen; lopers lopen weer door
       G.phase = 1; G.jStart = tb;
-      for (const p of G.parts) if (p.role === 'walk' && !p.done) { p.done = true; if (p.d.root.parent && p.d.state === 'walk') setClip(p.d, p.d.walkClip, 0.4); }
+      for (const p of G.parts) {
+        if (p.done) continue;
+        if (p.role === 'walk') { p.done = true; if (p.d.root.parent && p.d.state === 'walk') setClip(p.d, p.d.walkClip, 0.4); }
+        else if (p.role === 'stand' && p.spring === false) {  // springt niet mee: terug naar het eigen doen
+          p.done = true; const s = info(p.d); s.gid = 0; s.part = null;
+          if (p.d.root.parent) p.d.actT = 0;
+        }
+      }
     }
     const clip = drop ? (G.phase ? JU : ACTS.Cheer_with_Both_Hands_Up) : ACTS.ymca_dance;
     const t = clipTime(clip, drop && G.phase ? G.jStart : G.tb, !drop), tJump = drop ? clipTime(JU, G.tb, false) : 0;
@@ -198,7 +249,7 @@
       if (s.pumpOn > 0) s.pumpOn--;
       if (s.pumpOn > 0) n++;
     }
-    const max = Math.min(2, cand - 1);
+    const max = Math.min(PROF[profiel()].pomp, cand - 1);  // lounge geen vuisten, voluit tot 3
     if (G || energy <= 0.65 || n >= max || Math.random() > (n ? 0.25 : 0.85)) return;
     let k = Math.floor(Math.random() * (cand - n));
     for (const d of crowd) {
@@ -215,13 +266,17 @@
     if (!d.root.visible) return;
     const opt = window.clubOpt && clubOpt.anim;  // optimaliseer.js laadt na dit script
     if (opt && opt.stil && opt.stil(d)) return;  // clip dit beeld niet bijgewerkt (buiten beeld of klein): dan ook niets erbovenop
-    const s = info(d), E = energy, inG = G && s.gid === G.id;
+    const s = info(d), E = energy, inP = !!(G && s.gid === G.id && G.kind === 'proost' && s.part), inG = G && s.gid === G.id && !inP;
     clean(s);
     s.nod += ((s.late ? pLate : pulse) - s.nod) * Math.min(1, dt * 22);  // korte aanzet: knik óp de tel, geen schok
     const pl = s.nod;
-    let nodK = mode === 'walk' ? 0.6 : mode === 'worm' ? 1.3 : 1, up = 0, pump = 0;
+    let nodK = mode === 'walk' ? 0.6 : mode === 'worm' ? 1.3 : 1, up = 0, pump = 0, glas = 0, klap = 0;
     if (bar) { s.pump += ((s.pumpOn > 0 && !G ? 1 : 0) - s.pump) * Math.min(1, dt * 5); pump = s.pump; nodK *= 1 + 0.5 * pump; }
-    if (inG && mode === 'sit') {  // drop in de lounge: blijven zitten, armen de lucht in, hard knikken
+    if (inP) {  // lounge-drop: kort het glas heffen of even klappen, iets meer knikken; niemand springt
+      const u = (beatPos - s.part.b) / s.part.len, w = u <= 0 || u >= 1 ? 0 : Math.min(1, u * 4, (1 - u) * 3);
+      if (s.part.klap) klap = w; else glas = w;
+      nodK *= 1.25;
+    } else if (inG && mode === 'sit') {  // drop in de lounge: blijven zitten, armen de lucht in, hard knikken
       nodK = 2.2;
       up = Math.max(0, Math.min(1, (beatPos - G.tb) * 1.5, G.end - beatPos));
     } else if (inG) nodK *= 0.6;
@@ -230,7 +285,7 @@
     const sway = swing ? 0.06 * Math.cos(Math.PI * beatPos + s.ph) * (0.35 + 0.65 * bands[0].v) * E * s.k * (mode === 'worm' ? 1.5 : 1) : 0;
     const dip = swing ? 0.05 * pl * E * s.k : 0;
     const shrug = mode === 'sit' && !up ? 0.12 * pl * E * s.k : 0;
-    if (ang < 0.003 && up < 0.01 && pump < 0.01 && Math.abs(sway) < 0.003 && shrug < 0.003) return;
+    if (ang < 0.003 && up < 0.01 && pump < 0.01 && glas < 0.01 && klap < 0.01 && Math.abs(sway) < 0.003 && shrug < 0.003) return;
     d.root.updateMatrixWorld(true);  // botten van deze frame (na mixer.update) meten
     const ry = d.root.rotation.y;
     // kinderen vóór ouders: elk bot draait met de nog niet aangepaste oudermatrix
@@ -243,6 +298,13 @@
       aim(d, s.lArm, s.lFore, u, f, o, up);
     }
     if (pump > 0.01) aim(d, s.rArm, s.rFore, 0.55 + 0.5 * pl, 0.55 - 0.25 * pl, 0.25, pump);  // glas zit links
+    if (glas > 0.01) {  // proost: de arm met het glas schuin naar voren omhoog
+      if (s.part.arm === 'l') aim(d, s.lArm, s.lFore, 0.85, 0.55, 0.12, glas * 0.9); else aim(d, s.rArm, s.rFore, 0.85, 0.55, 0.12, glas * 0.9);
+    }
+    if (klap > 0.01) {  // klappen: beide bovenarmen naar voren, op de tel naar elkaar toe
+      const o = 0.34 - 0.32 * pl;
+      aim(d, s.rArm, s.rFore, 0.15, 1, o, klap * 0.85); aim(d, s.lArm, s.lFore, 0.15, 1, o, klap * 0.85);
+    }
     if (shrug) { lift(s.rSh, s.rArm, shrug); lift(s.lSh, s.lArm, shrug); }
     if (s.spine && (Math.abs(sway) > 0.002 || dip > 0.002)) {  // wiegen om de 2 tellen op de bas, lichte dip op de tel
       vF.set(Math.sin(ry), 0, Math.cos(ry)); qW.setFromAxisAngle(vF, sway);
@@ -253,6 +315,13 @@
     remember(s);
   }
 
+  pub.golfInfo = () => {  // test: wat de lopende golf doet
+    if (!G) return { kind: null, prof: profiel() };
+    const rollen = {};
+    for (const p of G.parts) { const k = p.role + (p.klap ? '-klap' : '') + (p.spring === false ? '-blijft' : ''); rollen[k] = (rollen[k] || 0) + 1; }
+    return { kind: G.kind, prof: G.prof, tot: G.end, fase: G.phase, delen: G.parts.length, rollen };
+  };
+  pub.golfDelen = () => G ? G.parts : [];
   let lastBeat = -1;
   clubHooks.push((dt, now) => {
     if (G) runGolf(dt, now);

@@ -1,5 +1,5 @@
-// Showregie: zaal 1 en het doolhof wisselen elkaar af; sinds de ledkamers (16-10) is het doolhof de hoofdzaak (~60%), rondjes van 3-5
-// kamers, de drop knalt in de kamer zelf. Uitstapjes beginnen in de break of de opbouw ('we gaan dieper'), en zonder breaks toch regelmatig.
+// Showregie: zaal 1 en het doolhof wisselen elkaar af; sinds de ledkamers (16-10) is het doolhof de hoofdzaak (~60%), rondjes van 1-4
+// kamers (17-10: langer per kamer, meestal 2; zie doelVoor), de drop knalt in de kamer zelf. Uitstapjes beginnen in de break of de opbouw ('we gaan dieper'), en zonder breaks toch regelmatig.
 // Alleen in 'auto'. Wrapt startShot (ná doolhof/kern.js): 'auto' wordt hier gekozen, dus de verplichte trip (TRIP_ELKE) en de
 // 50%-doorloop trip -> doolhof van de kern komen niet meer aan bod. Tegoed: per seconde zaal 1 1,5 s diepte (~60% buiten); in het doolhof blijft hij ook op de drop (de kamers hebben hun eigen drop-show).
 // Testen: showRegie.toestand(), showRegie.dieper('trip'|'doolhof'), showRegie.log.
@@ -9,7 +9,9 @@
 
   const OPWARM = 30;                                   // s na het laden: alleen zaal 1
   const RENTE = 1.5, MAX_TEGOED = 240, ROOD = 40;      // tegoed per s zaal 1 (~60% buiten: de kamers zijn nu de show); spaarplafond; hooguit 40 s rood
-  const MIN_BREAK = 45, MIN_GROOVE = 60, MIN_DOOR = 45;  // genoeg tegoed voor een echt rondje kamers // tegoed nodig: uitstap in de break, zonder breaks, na de trip door naar het doolhof
+  // tegoed nodig: uitstap in de break, zonder breaks, na de trip door naar het doolhof. Sinds 17-10 (kamers ~1,5x zo lang) hoger: anders
+  // was het tegoed al midden in kamer 2 op ('tegoed op'). Het aandeel blijft ~60% (dat bepaalt RENTE), alleen de cyclus is langer.
+  const MIN_BREAK = 80, MIN_GROOVE = 95, MIN_DOOR = 80;
   const RUST_BREAK = 30, RUST_GROOVE = 45;             // s zaal 1 tussen twee uitstapjes (Sierk: te veel zaal 1, de kamers zijn het mooist)
   const ZONDER_BREAK = 60;                             // zo lang geen break gezien = muziek zonder secties (echte muziek: breaks vaak niet herkend)
   const BUITEN = new Set(['trip', 'doolhof']);
@@ -43,7 +45,10 @@
   }
   function terugShot() { const k = TERUG.filter(k => SHOTS[k] && !(shot && shot.kind === k)); return k.length ? een(k) : loting(); }
   const dropShot = () => (SHOTS.drop ? 'drop' : SHOTS.kraan ? 'kraan' : terugShot());  // kraan omhoog als er geen drop-shot is
-  const doelVoor = () => (tegoed >= 180 ? 5 : tegoed >= 120 ? 4 : 3);  // kamers per rondje: lang genoeg om erin te zitten
+  // kamers per rondje. Sinds 17-10 blijft de camera ~1,5x zo lang in een kamer (~52 s, gemeten was 35 s; een gang 8 s, een lift ~15 s):
+  // minder kamers per rondje, zodat het aandeel doolhof (~60%, via RENTE) gelijk blijft en het rondje niet midden in een kamer op 'tegoed op'
+  // stopt. Nodig ~72 s voor 1 kamer (met de wandeling door zaal 2) + ~62 s per volgende; beschikbaar = tegoed + ROOD.
+  const doelVoor = () => (tegoed >= 218 ? 4 : tegoed >= 156 ? 3 : tegoed >= 94 ? 2 : 1);
 
   // mag er nu een uitstapje beginnen? { soort, reden, doel } of null
   function wilDieper() {
