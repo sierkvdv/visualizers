@@ -305,8 +305,11 @@
       if (geoordeeld >= (naarMosh ? 24 : 16) && zeker >= (naarMosh ? 0.5 : 0.45)) wissel(best, t, 'auto', zeker);
     } else if (best !== herkend) {
       const E = laatsteEis = eis(best);
-      if (gb - SCORE[herkend].glad > E.marge && zeker >= E.z) voorsprong += tellen; else voorsprong = 0;
-      if (voorsprong >= E.tel) wissel(best, t, E.half ? 'half' : nieuwTempo ? 'tempo' : 'auto', zeker);
+      // de huidige stijl draagt zelf niets meer (bv. 'lounge 88' bij een dnb-set van 176) en een ander wint ruim: dan niet de volle
+      // 96-160 tellen van de halve/dubbele-tempo-regel wachten (Sierk 17-10: 'zie niemand meer dansen')
+      const zwak = SCORE[herkend].glad < 0.2 && gb - SCORE[herkend].glad > 0.25;
+      if (gb - SCORE[herkend].glad > E.marge && zeker >= (zwak ? Math.min(E.z, 0.35) : E.z)) voorsprong += tellen; else voorsprong = 0;
+      if (voorsprong >= (zwak ? Math.min(E.tel, 24) : E.tel)) wissel(best, t, E.half ? 'half' : nieuwTempo ? 'tempo' : 'auto', zeker);
     } else voorsprong = 0;
     // twijfel (17-10, experimentele sets zoals Aphex Twin): scoort de huidige stijl zelf al 64 tellen zwak en wint niemand duidelijk,
     // dan 'onbekend' (gewoon dansen, geen mosh) in plaats van een verkeerd etiket vasthouden
