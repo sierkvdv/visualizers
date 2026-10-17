@@ -464,7 +464,7 @@ void main() {
       return v;
     };
     let zij = 1, dir = 1, a0 = 0, idx = 0, yaw = null, tLaatst = 0, blokNu = null, t0 = 0, shot = 'volg', faseNu = null, tKnip = -99, telNu = -1;
-    let evGezien = BM ? BM.ev : 0, houdTot = -1, brandLaatst = -99;
+    let evGezien = BM ? BM.ev : 0, houdTot = -1, brandLaatst = -99, brandVorige = null;
     const recent = [];
     const S = {
       volg(u, lo, dt) {  // schouderhoogte achter en iets naast de loper
@@ -535,8 +535,8 @@ void main() {
         const v = BM.val, fu = BM.fx * SX, maxD = (-0.5 - BM.x * SX) / Math.max(0.25, fu);   // nooit voorbij u -0,5 (vuurdansers, pad, wachtplek)
         const d = Math.min(maxD, (BM.h * 1.08 + 3) * (1 - 0.4 * v)) - Math.min(3.5, 0.15 * u), zs = zij * (2.4 + 0.05 * BM.breed);
         cp.set(BM.x + BM.fx * d - BM.fz * zs, 2.4 + 3.6 * v + 0.12 * Math.sin(u * 0.4), BM.z + BM.fz * d + BM.fx * zs);   // ingestort: hoger, over de koppen op de hoop
-        cl.set(BM.x + (BM.hoopX - BM.x) * v, BM.h * 0.42 * (1 - v) + 1.6 * v, BM.z + (BM.hoopZ - BM.z) * v);
-        return 58;
+        cl.set(BM.x + (BM.hoopX - BM.x) * v, BM.h * 0.48 * (1 - v) + 1.6 * v, BM.z + (BM.hoopZ - BM.z) * v);
+        return klem(2 * Math.atan(BM.h * 0.62 * (1 - 0.6 * v) / Math.max(4, Math.hypot(cp.x - BM.x, cp.z - BM.z))) * 180 / Math.PI + 4, 50, 84);   // het hele figuur past erin (ook groot en ver)
       },
       brandOmhoog(u) {  // laag en dichtbij, groothoek omhoog langs het hout: het vuur kruipt omhoog, vonken de lucht in; draait traag om
         if (!BM) return S.palm(u);
@@ -560,11 +560,13 @@ void main() {
     // Burning Man: brandt hij (of smeult de hoop nog fel), dan vaak in de lijst (het moet gezien worden), tot het instorten minstens om de ~14 s;
     // vooraf af en toe de wijde (hij staat er, met neon); op het aansteken en het instorten knipt de camera er meteen heen (zie cam)
     const brandt = () => BM && BM.aan && BM.na < 0.6;
+    let voorGezien = false;  // het staande kunstwerk één keer wijd in beeld vóór het aansteken (Sierk: "zie de pop nog niet echt")
     function kiesShot(fase, st, t) {
+      if (BM && !BM.aan && !voorGezien && t > 3) { voorGezien = true; recent.push('brand'); if (recent.length > 2) recent.shift(); return 'brand'; }
       let l = st === 'drop' ? LIJST.drop : st === 'break' ? LIJST.break : LIJST[fase];
       if (fase !== 'feest' && (st === 'drop' || st === 'break')) l = l.concat(['volg', 'volg', 'tegemoet']);
       if (brandt()) {
-        if (BM.val < 1 && t - brandLaatst > 14 && recent.every(s => s.indexOf('brand') !== 0)) { const s = r() < 0.55 ? 'brand' : 'brandOmhoog'; recent.push(s); if (recent.length > 2) recent.shift(); return s; }
+        if (BM.val < 1 && t - brandLaatst > 10 && recent.every(s => s.indexOf('brand') !== 0)) { const s = brandVorige === 'brand' ? 'brandOmhoog' : 'brand'; recent.push(s); if (recent.length > 2) recent.shift(); return s; }
         l = l.concat(['brand', 'brandOmhoog', 'brand']);
       } else if (BM && !BM.aan && fase !== 'voor') l = l.concat(['brand']);
       let kand = l.filter(s => (s === 'volg' ? recent[recent.length - 1] !== s : recent.indexOf(s) < 0) && (s !== 'held' || dansers.length));
@@ -594,8 +596,8 @@ void main() {
         evGezien = BM.ev;
         if (performance.now() / 1000 - BM.evTijd < 3) {
           const val = BM.evSoort === 'val';
-          shot = val ? 'brand' : 'brandOmhoog'; recent.push(shot); if (recent.length > 2) recent.shift();
-          blokNu = blok; t0 = t; tKnip = t; faseNu = fase; houdTot = t + (val ? 9 : 7); brandLaatst = t;
+          shot = 'brand'; recent.push(shot); if (recent.length > 2) recent.shift();   // ook bij aansteken wijd: het hele figuur met het vuur aan zijn voeten
+          blokNu = blok; t0 = t; tKnip = t; faseNu = fase; houdTot = t + (val ? 9 : 8); brandLaatst = t; brandVorige = shot;
           zij = r() < 0.5 ? -1 : 1; dir = r() < 0.5 ? -1 : 1; a0 = r() * TAU; idx++; yaw = null;
         }
       }
@@ -605,7 +607,8 @@ void main() {
         if (blokNu === null) { recent.length = 0; recent.push(shot); }
         blokNu = blok; t0 = t; tKnip = t; faseNu = fase;
         zij = r() < 0.5 ? -1 : 1; dir = r() < 0.5 ? -1 : 1; a0 = r() * TAU; idx++; yaw = null;
-        if (shot.indexOf('brand') === 0) brandLaatst = t;
+        if (shot.indexOf('brand') === 0) { brandLaatst = t; brandVorige = shot; }
+        if (shot === 'brand' && BM && !BM.aan) houdTot = t + 6;  // het staande figuur even laten zien
       }
       const vast = doolhof.strand && doolhof.strand.shot;  // test: doolhof.strand.shot = 'zee' (null = weer op de tel kiezen)
       if (vast && S[vast] && vast !== shot) { shot = vast; t0 = t; tKnip = t; yaw = null; }
@@ -684,7 +687,7 @@ void main() {
     const BRM = doolhof.brand, brandPlan = BRM && BRM.klaar && BRM.kiesNaam && BRM.maat ? (() => {
       const naam = BRM.kiesNaam(), m = naam && BRM.maat(naam);
       if (!m) return null;
-      const br = (m.x1 - m.x0) / 2, dp = (m.z1 - m.z0) / 2, s0 = klem(24 / Math.max(m.h, 1.6 * Math.max(br, dp)), 0.8, 1.3);
+      const br = (m.x1 - m.x0) / 2, dp = (m.z1 - m.z0) / 2, s0 = klem(34 / Math.max(m.h, 1.6 * Math.max(br, dp)), 1.05, 1.8);   // (Sierk 17-10 laat: "groter en verder"; was 24 m, 0,8-1,3)
       const muur = u => -D + Math.min(14, 0.03 * Math.pow(Math.max(0, Math.abs(u) - (W + 3)), 2));   // voet van de rotswand (buiten-basis, rotsPoort: buig)
       const VERB = [[HUT.u - 3.5, HUT.u + 3.8, HUT.z - 5, HUT.z + 5], [-9, 99, -99, 99], [-8.5, 8.5, D - 0.6, 99]];
       const plekVrij = (u, z) => z > muur(u) + 1 && VERB.every(([a, b, c, e]) => u < a || u > b || z < c || z > e);
@@ -692,7 +695,7 @@ void main() {
       for (const a of [0.46, 0.4, 0.52, 0.58]) kand.push({ a, zs: 1, ref: VUUR });
       for (const a of [0.35, 0.28, 0.42, 0.5]) kand.push({ a, zs: -1, ref: { u: -2, z: 8 } });
       for (const sf of [1, 0.9, 0.8]) for (const k of kand) {
-        const s = s0 * sf, Dc = klem(13 + dp * s, 17, 27), fu = Math.cos(k.a), fz = k.zs * Math.sin(k.a), Eu = k.ref.u - fu * Dc, Ez = k.ref.z - fz * Dc;
+        const s = s0 * sf, Dc = klem(19 + dp * s, 25, 36), fu = Math.cos(k.a), fz = k.zs * Math.sin(k.a), Eu = k.ref.u - fu * Dc, Ez = k.ref.z - fz * Dc;
         let goed = true;
         for (let i = 0; i <= 4 && goed; i++) for (let j = 0; j <= 4; j++) {
           const a = (i / 2 - 1) * dp * s, b = (j / 2 - 1) * br * s;
@@ -1050,7 +1053,11 @@ void main() {
           lampHut.intensity = 1.5 * (0.7 + 0.8 * pu * Math.max(0.3, en) + 0.6 * U.uDrop.value) * (1 - 0.5 * U.uBlack.value) + 2 * U.uFlits.value;
         }
         // na de hut-lamp: de Burning Man mengt zijn vuur over de geleende lamp; loopt de loper al naar de lift, dan steekt/stort hij nu
-        if (brand) { if (doolhof.strand) doolhof.strand.brand = brand; brand.update(dt, { haast: camStaat.fase === 'na' }); }  // (test: doolhof.strand.brand.ontsteek())
+        // de loper blijft kijken tot het kunstwerk is ingestort (+ ~4 s nasmeulen); lukt dat niet (al bij de lift), dan haast de brand
+        let houdt = false;
+        // (pas vanaf het feest: houdLoper laat hem dansen waar hij staat, op het pad ervoor miste hij dan het feest; ook pas daar aansteken)
+        if (brand && brand.aan && camStaat.fase !== 'voor' && !(brand.val >= 1 && brand.na > 0.05) && doolhof.houdLoper) houdt = doolhof.houdLoper(2.5);
+        if (brand) { if (doolhof.strand) doolhof.strand.brand = brand; brand.update(dt, { haast: camStaat.fase === 'na' && !houdt, voor: camStaat.fase === 'voor' }); }  // (test: doolhof.strand.brand.ontsteek())
         if (publiek) {
           PZET.helder = 0.5 + 0.25 * U.uVlam.value; PZET.flits = U.uFlits.value * 0.5; PZET.rand = 0.8 + 0.6 * pu; PZET.armen = 0.35 * U.uDrop.value;
           PZET.gloed = 0.85 + 0.5 * pu + 0.6 * U.uDrop.value; PZET.b = U.uK1.value;

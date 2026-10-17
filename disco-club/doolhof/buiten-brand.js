@@ -367,13 +367,13 @@ void main() {
         if (nieuweDrop) T.dropGezien = R.dropBeat;
         // aansteken: de eerste drop terwijl de loper hier is, anders na ~24 s; loopt hij al naar de lift: meteen (beide op de tel)
         if (!T.aan) {
-          const wacht = snel ? 2 : 24;
-          if ((nieuweDrop && T.t > 2) || ((T.t > wacht || oo.haast) && (nieuweTel || T.t > wacht + 2))) H.ontsteek();
+          const wacht = snel ? 2 : 12;   // (was 24: dan was de loper al bijna weg; de strandkamer houdt hem nu vast tot het instorten)
+          if ((!oo.voor || T.t > 40) && ((nieuweDrop && T.t > 2) || ((T.t > wacht || oo.haast) && (nieuweTel || T.t > wacht + 2)))) H.ontsteek();   // voor: de loper is nog niet bij het feest
         }
         if (T.aan) {
           T.brandT += dt;
           if (T.valT < 0) {   // het vuur kruipt omhoog (~36 s, met instorten ~40 s); opbouw en drop versnellen, break remt
-            let v = (snel ? 1 / 6 : 1 / 40) * (1 + 0.8 * (sh.stand === 'opbouw' ? sh.opbouw || 0 : 0) + (sh.stand === 'drop' ? 0.3 : 0) - (sh.stand === 'break' ? 0.35 : 0));
+            let v = (snel ? 1 / 6 : 1 / 34) * (1 + 0.8 * (sh.stand === 'opbouw' ? sh.opbouw || 0 : 0) + (sh.stand === 'drop' ? 0.3 : 0) - (sh.stand === 'break' ? 0.35 : 0));
             if (oo.haast && T.brandT > (snel ? 1 : 10)) {   // de loper gaat weg: binnen ~7 s instorten, voor hij bij de lift is (vaste deadline)
               if (T.haastTot == null) T.haastTot = T.brandT + (snel ? 2 : 7);
               v = Math.max(v, (0.92 - T.prog) / Math.max(0.3, T.haastTot - T.brandT));
@@ -393,7 +393,7 @@ void main() {
         // vuursterkte (lamp, publiek, zuil, grondgloed): bouwt op na het aansteken, laait op bij het instorten, daarna de hoop
         const doel = !T.aan ? 0 : T.valT < 0 ? Math.min(1, 0.25 + T.prog * 1.6) : val < 1 ? 1.15 : 0.6 * (1 - 0.5 * na);
         T.gloed += (doel - T.gloed) * Math.min(1, dt * 1.5);
-        T.oplicht += ((T.aan ? 0.3 : 1) - T.oplicht) * Math.min(1, dt * 0.5);
+        T.oplicht += ((T.aan ? 0.85 : 1) - T.oplicht) * Math.min(1, dt * 0.5);   // bouwlampen blijven aan: anders werd het hout boven het vuur zwart en zag je de pop niet
         eigen.uProg.value = T.prog; eigen.uBurst.value = T.burst; eigen.uVal.value = val; eigen.uNa.value = na;
         eigen.uGloed.value = T.gloed; eigen.uOplicht.value = T.oplicht;
         H.aan = T.aan; H.val = val; H.na = na; H.gloed = T.gloed;
