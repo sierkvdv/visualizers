@@ -1008,7 +1008,8 @@
     const c = cyclus;
     if (!moshMag() || !c || !c.pit || c.open == null || c.D != null || c.kand || c.wacht) return;
     const mode = bevestig(), stilVoor = stilT >= D - 4, tel = Math.floor(beatPos);
-    if (stilVoor || mode === 'riff' || mode === 'kick') { herkend(D, !stilVoor, 'regie'); return; }
+    // lang genoeg opgehypet: de drop van de lichtregie (die van de hele club) is dan altijd goed
+    if (stilVoor || mode === 'riff' || mode === 'kick' || D - c.open >= ophypeMin()) { herkend(D, !stilVoor, 'regie'); return; }
     if (mode === 'bassprong') { c.kand = { D, n: 1, bron: 'regie', vanaf: D }; return; }
     const nuB = Math.max(aTel === tel && sN ? sB / sN : 0, ht(hB, tel - 1));
     if (refB > 0 && nuB >= 0.75 * refB) { c.kand = { D, n: 4, bron: 'regie', vanaf: D }; noteer('kandidaat', { D, n: 4, bron: 'regie' }); }
@@ -1066,8 +1067,8 @@
     }
     else if (mode !== 'riff' && c.breakRun >= 6) dicht = 'break';
     else if (st === 'break' && c.opbouwEind != null) dicht = 'break';
-    else if (stilRun > 8) dicht = 'stil';
-    else if (!c.kand && !c.wacht && st !== 'opbouw' && tel > Math.max(c.basis + WACHT, (c.opbouwEind != null ? c.opbouwEind : c.basis) + 16)) dicht = 'geen drop';
+    else if (stilRun > 24) dicht = 'stil';  // (was 8: de stilte vóór de drop sloot de kring, net voordat de pit los moest)
+    else if (!c.kand && !c.wacht && st !== 'opbouw' && tel > Math.max(c.basis + WACHT, (c.opbouwEind != null ? c.opbouwEind : c.basis) + 24)) dicht = 'geen drop';
     else if (tel - c.basis > MAX_OPEN - 8) dicht = 'te lang';
     if (dicht) { noteer('kring dicht', { waarom: dicht }); eindeCyclus(tel, dicht); return; }
     // spanning (hoe wild het ophypen is): loopt op met de tijd en de opbouw; vol bij een stilte of inzet vlak voor de drop
