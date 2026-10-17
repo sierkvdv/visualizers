@@ -91,6 +91,9 @@
     G.tIn = R ? Math.max(0, tb - (R.sinds || 0)) : 0;
     G.oTel = G.st === 'opbouw' ? Math.max(G.tIn, R.opbouwTel || 0) : 0;
     G.gloed = G.st === 'drop' ? 1 : Math.max(0, G.gloed - G.dtb / 32);
+    // volheid (club/stijl.js): intro/ingetogen = rustig, glijdend; drop telt altijd vol
+    const vw = window.clubStijl && window.clubStijl.volheid != null ? window.clubStijl.volheid : 1;
+    G.vol = G.st === 'drop' ? 1 : (G.vol == null ? vw : G.vol + (vw - G.vol) * Math.min(1, G.dtb / 8));
     const K = window.clubKwaliteit;
     G.laag = !!K && (K.stand === 'laag' || K.stand === 'minimaal');
     kNaar(G.sync, G.B, G.tc, 4);  // gedeelde klok: YMCA en andere samen-momenten, deinen van het publiek
@@ -152,6 +155,11 @@
     else {  // groove: gemengd volgens temperament, na een drop een tijd voller (laag/minimaal: geen extra mengclip)
       L = g.laag ? 1 : Math.min(1, (T < 0.5 ? 0.62 + 0.76 * T : 1) + 0.6 * g.gloed);
       if (g.half && T > 0.75 && g.gloed > 0.5) r = 1;
+      if (g.vol < 1) {  // intro/ingetogen: naar het break-niveau (wiegen), de rustigsten op de halve tel
+        const Lb = breakNiveau(T) + 0.1;
+        L = Lb + (L - Lb) * g.vol;
+        if (g.vol < 0.5 && T < 0.8) r = 0.5 * B;
+      }
     }
     // stijl: hoeveel dans er over de sta-clip komt en hoe snel (de laag bovenop doet de rest)
     const dn = soort ? null : s.dans, mom = tb < s.moment;
@@ -449,7 +457,7 @@
     const dn = s.dans, T = s.T, sec = s.sst, p = klem(g.oTel / 16), dr = sec === 'drop', br = sec === 'break', ob = sec === 'opbouw';
     if (!dn) return;
     if (energy < 0.08) { if (dn === 'lounge') D.wieg = 0.5; return; }  // stilte: alleen de lounge deint nog
-    const I = (br ? 0.22 : ob ? 0.35 + 0.5 * p : dr ? 1 : 0.62 + 0.3 * g.gloed) * (0.6 + 0.4 * T);
+    const I = (br ? 0.22 : ob ? 0.35 + 0.5 * p : dr ? 1 : (0.22 + (0.4 + 0.3 * g.gloed) * (g.vol == null ? 1 : g.vol))) * (0.6 + 0.4 * T);
     switch (dn) {
       case 'groove': D.dip = 0.8 * I; D.knik = 0.8 * I; if (dr && T > 0.45) D.sprong = 0.5; break;
       case 'handen':

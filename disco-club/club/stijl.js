@@ -39,7 +39,7 @@
   };
 
   const ST = W.clubStijl = {
-    naam: 'onbekend', bpm: 120, voel: 120, auto: true, zeker: 0, preset: PRESETS.onbekend,
+    naam: 'onbekend', bpm: 120, voel: 120, auto: true, zeker: 0, preset: PRESETS.onbekend, volheid: 1,
     kies, opties: NAMEN.slice(), log: [],
   };
 
@@ -53,6 +53,11 @@
   // kaal/ingetogen stuk: totaalniveau en hoog (snare, hats) kort gemeten t.o.v. een lange referentie die snel meestijgt en in
   // ~2 min wegzakt. Een kaal stuk (alleen sub en een snare) ligt duidelijk onder de volle delen van dezelfde set.
   let pTk = 0, pHk = 0, lvlK = -999, lvlL = -999, hoogK = -999, hoogL = -999, lvlT = 0;
+  // volheid (Sierk 17-10: "intro gaande en iedereen gaat helemaal uit zijn plaat"): niveau t.o.v. een ANKER = het volle niveau dat lang
+  // blijft hangen (zakt in ~15 min, overleeft sets en herladen via localStorage). lvlL (2 min) leerde een lang intro als 'vol'.
+  // clubStijl.volheid 1 = vol deel, ~0,2 = intro/ingetogen (8 dB zachter); dansgevoel.js dempt de groove ermee. Zonder pc-spectrum: 1.
+  let lvlA = -999, ankerOpslag = 0;
+  try { const a = JSON.parse(localStorage.getItem('clubAnker') || 'null'); if (a && Date.now() - a.t < 6 * 3600e3) lvlA = a.v; } catch (e) {}
 
   function voed(db, vlak, t) {  // db: 12 waarden (energie per band, dB), vlak: 0..1 of null, t: seconden
     spIn++;
@@ -89,6 +94,11 @@
     if (!pTk) { pTk = pT; pHk = pH; } else { pTk += (pT - pTk) * aK; pHk += (pH - pHk) * aK; }  // ~4 s gemiddeld vermogen
     lvlK = 10 * Math.log10(pTk + 1e-20); hoogK = 10 * Math.log10(pHk + 1e-20);
     lvlT += dt;
+    if (lvlT >= 8) {
+      lvlA = lvlA < -150 ? lvlK : lvlA + (lvlK - lvlA) * (lvlK > lvlA ? aOp : 1 - Math.exp(-dt / 900));
+      ST.volheid = 1 - op(lvlA - lvlK, 3, 10);
+      if (t - ankerOpslag > 30) { ankerOpslag = t; try { localStorage.setItem('clubAnker', JSON.stringify({ v: lvlA, t: Date.now() })); } catch (e) {} }
+    }
     if (lvlT < 8) { lvlL = lvlK; hoogL = hoogK; }  // eerste 8 s: referentie = nu (één harde eerste klap telt niet)
     else { lvlL += (lvlK - lvlL) * (lvlK > lvlL ? aOp : aAf); hoogL += (hoogK - hoogL) * (hoogK > hoogL ? aOp : aAf); }
     const s = Math.floor(t * RATE);
@@ -511,7 +521,7 @@
     const f = {};
     for (const k in F) f[k] = Math.round(F[k] * 100) / 100;
     const E = laatsteEis;
-    const extra = 'vast ' + Math.round(vast) + ' kaal ' + ingetogen().toFixed(2) + ' (niv -' + Math.max(0, lvlL - lvlK).toFixed(1) + ' hoog -' + Math.max(0, hoogL - hoogK).toFixed(1) + ' dB)' + (E ? ' eis ' + Math.round(E.tel) + 't z' + E.z + (E.half ? ' half' : '') : '');
+    const extra = 'vol ' + ST.volheid.toFixed(2) + ' (anker ' + lvlA.toFixed(1) + ' nu ' + lvlK.toFixed(1) + ' dB) vast ' + Math.round(vast) + ' kaal ' + ingetogen().toFixed(2) + ' (niv -' + Math.max(0, lvlL - lvlK).toFixed(1) + ' hoog -' + Math.max(0, hoogL - hoogK).toFixed(1) + ' dB)' + (E ? ' eis ' + Math.round(E.tel) + 't z' + E.z + (E.half ? ' half' : '') : '');
     return { naam: ST.naam, herkend, auto: ST.auto, bpm: ST.bpm, voel: ST.voel, zeker: Math.round(ST.zeker * 100) / 100, voorsprong: Math.round(voorsprong), nieuwTempo, vast: Math.round(vast), kaal: +ingetogen().toFixed(2), extra, F: f, score: sc, blokken: spIn };
   };
 })();
