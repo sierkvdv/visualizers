@@ -11,6 +11,8 @@
 // onzichtbaar (liftVerstop: de lifthelft hangt dan los in de scène) en wisselt de kern naar de identieke lift vóór kamer B; B blijft
 // verborgen tot de deuren opengaan. Levels: R.level per kamer, doolhof.level = nu (0 bij de ∞-deur). Kamers duren sinds 17-10 ~1,5x zo lang
 // (BLIJF_X, LOOP_KAMER). Test: doolhof.lift({ cabine, uitzicht, deur, richting, levels }), doolhof.volgendeOvergang = 'lift' | 'gang'.
+// BUITEN (17-10, registreer(soort, { buiten: true, ... }): doolhof/buiten-*.js): ~1 op 5 kamers, nooit twee achter elkaar (kiesSoort),
+// de uitgang is altijd de lift (nieuweOvergang), ook direct na een lift.
 // Test: doolhof.start('boiler'), doolhof.start('boiler', true) (direct) of doolhof.volgende = 'boiler'.
 //
 // LICHT: het doolhof is een lichtshow, geen verlichte ruimte. De kern geeft geen vulverlichting (ambient bijna 0, getint met
@@ -326,11 +328,13 @@
   // lift (doolhof/lift.js): na een S-gang de helft van de keren een lift (zo ~1 op 3 overgangen), nooit twee liften achter elkaar en nooit
   // vanuit zaal 2. lift = { na: de overgang vóór deze kamer, level: het level van de kamer } (alleen bij de uitgang van een kamer).
   // Test: doolhof.volgendeOvergang = 'lift' | 'gang' geldt voor de volgende uitgang van een kamer die gebouwd wordt.
+  // Buitenkamers (lift.buiten, def.buiten: doolhof/buiten-*.js, 17-10): de uitgang is ALTIJD de lift (de lifttoren staat erachter), ook
+  // na een lift als ingang en ook tegen een testwens 'gang' in.
   const LIFT_KANS = 0.5;
   function nieuweOvergang(vorige, sx, lift) {  // stijl kiezen (gewogen, niet de vorige en liefst niet een van de laatste drie)
     const LF = doolhof.lift, lvl = lift ? lift.level || 0 : 0;
     if (lift && LF && typeof LF.plan === 'function') {
-      const vast = doolhof.volgendeOvergang, wil = vast === 'lift' || (vast !== 'gang' && !(lift.na && lift.na.lift) && Math.random() < LIFT_KANS);
+      const vast = doolhof.volgendeOvergang, wil = lift.buiten || vast === 'lift' || (vast !== 'gang' && !(lift.na && lift.na.lift) && Math.random() < LIFT_KANS);
       if (vast === 'lift' || vast === 'gang') doolhof.volgendeOvergang = null;
       if (wil) {
         try { return { lift: true, stijl: 'lift', vorigeGang: vorige, sx: 1, zaad: (Math.random() * 4294967296) >>> 0, zwaar: zwaar(), deel: new Map(), n: 0, level: lvl, L: LF.plan(lvl) }; }
@@ -795,13 +799,21 @@
 
   // --- kamers bouwen, kiezen en slopen ---
   let sindsBoiler = 2;
+  // buitenkamers (def.buiten: jungle, strand; 17-10): samen ~1 op 5 kamers en nooit twee achter elkaar. Eerst buiten of binnen loten,
+  // dan gewogen binnen die groep (hun gewicht telt dus alleen onderling). De boiler neemt al elke 4e plek en na een buitenkamer mag er
+  // geen buitenkamer komen: p = 0,33 per vrije trekking geeft ~0,20 (gesimuleerd met de echte gewichten, 200k kamers).
+  const BUITEN_KANS = 0.33;
+  const isBuiten = s => !!(s && doolhof.kamers[s] && doolhof.kamers[s].buiten);
   function kiesSoort(vorige, voorraad) {  // voorraad: doolhof.volgende (testwens) niet opmaken, die geldt voor de start zelf
     const K = doolhof.kamers, soorten = Object.keys(K);
     if (doolhof.volgende && K[doolhof.volgende] && !voorraad) { const s = doolhof.volgende; doolhof.volgende = null; return s; }
     if (K.boiler && vorige !== 'boiler' && sindsBoiler >= 3) return 'boiler';  // minstens eens per 4 kamers
     let kand = soorten.filter(s => s !== vorige);
     if (!kand.length) kand = soorten;
-    const gw = s => Math.max(0, +K[s].gewicht || 0), som = kand.reduce((a, s) => a + gw(s), 0);
+    const gw = s => Math.max(0, +K[s].gewicht || 0);
+    const bu = kand.filter(s => isBuiten(s) && gw(s) > 0);
+    if (bu.length && bu.length < kand.length) kand = !isBuiten(vorige) && Math.random() < BUITEN_KANS ? bu : kand.filter(s => !isBuiten(s));
+    const som = kand.reduce((a, s) => a + gw(s), 0);
     if (som <= 0) return pick(kand);
     let r = Math.random() * som;
     return kand.find(s => (r -= gw(s)) < 0) || kand[0];
@@ -832,6 +844,7 @@
     R.ctx = maakCtx(R);
     let kamer = null;
     STAT.nu = 'maak ' + soort;
+    const vgWas = doolhof.volgendeOvergang;  // buitenkamers vragen zelf de lift (B.liftUitgang); die regelt de kern nu via def.buiten
     try {
       const r = def.maak(R.ctx);
       if (r && typeof r.next === 'function' && !r.maat) {  // stapsgewijs: elke yield van de module = een pauzeplek
@@ -839,10 +852,12 @@
           const s = r.next();
           if (s.done) { kamer = s.value; break; }
           yield;
-          if (gestopt && gestopt()) { sloop(null, R); return null; }
+          if (gestopt && gestopt()) { if (def.buiten) doolhof.volgendeOvergang = vgWas; sloop(null, R); return null; }
         }
       } else kamer = r;
     } catch (e) { fout('kamer ' + soort + ' bouwen', e); kamer = null; }
+    // ... en terugzetten: anders gaf een proefkamer (voorwarm, zonder gangen) zijn liftvraag door aan de eerstvolgende echte kamer
+    if (def.buiten) doolhof.volgendeOvergang = vgWas;
     if (!kamer || !kamer.maat || !(kamer.maat.w > 0) || !(kamer.maat.d > 0)) {
       if (kamer) console.error('doolhof: kamer ' + soort + ' gaf geen { maat: { w, d, h } } terug');
       sloop(null, R); return null;
@@ -858,7 +873,7 @@
     R.level = inOv.lift ? inOv.L.naar : inOv.level || 0;
     // gangen in de ruimte van de kamer: vóór de ingang (begin dicht) en achter de uitgang (eind dicht); de uitgang krijgt een nieuwe stijl
     // (of een lift: doolhof/lift.js, recht: sas, cabine, sas)
-    R.inOv = inOv; R.uitOv = nieuweOvergang(inOv.lift ? inOv.vorigeGang : inOv.stijl, undefined, { na: inOv, level: R.level }); R.sxUit = R.uitOv.sx;
+    R.inOv = inOv; R.uitOv = nieuweOvergang(inOv.lift ? inOv.vorigeGang : inOv.stijl, undefined, { na: inOv, level: R.level, buiten: !!def.buiten }); R.sxUit = R.uitOv.sx;
     const LF = doolhof.lift, lenIn = ovLen(inOv), lenUit = ovLen(R.uitOv);
     const inL = inOv.lift ? { x: 0, z: -dh - lenIn, yaw: 0 } : { x: -sxIn * L2, z: -dh - L1 - L3, yaw: 0 }, uitL = { x: 0, z: dh, yaw: 0 };
     STAT.nu = 'gang ' + inOv.stijl;
@@ -1658,7 +1673,12 @@
       for (const soort of Object.keys(doolhof.kamers)) {
         const terugZet = bewaarLoting();
         let R = null;
-        try { R = voltooi(kamerStappen(soort, null, null, { zonderGangen: true })); } catch (e) { fout('proefkamer ' + soort, e); }
+        try {
+          const it = kamerStappen(soort, null, null, { zonderGangen: true });
+          // buitenkamers (groot, 7-16 bouwstappen van 1-10 ms) per stap, zodat ze niet in één beeld bouwen; de rest zoals altijd in één keer
+          if (doolhof.kamers[soort].buiten) for (;;) { const s = it.next(); if (s.done) { R = s.value; break; } yield; }
+          else R = voltooi(it);
+        } catch (e) { fout('proefkamer ' + soort, e); }
         terugZet();
         yield RUST;
         if (!R) continue;

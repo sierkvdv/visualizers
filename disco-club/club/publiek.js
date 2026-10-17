@@ -12,8 +12,9 @@
 // Opties: plekken [{x, z, y?, face?}] of vorm { soort: 'kring' (c, r0, r1, a0?, a1?) | 'rijen' (c, u, d0, d1, breed) |
 // 'vlak' (x0, x1, z0, z1) } met aantal, afstand en vrij(x, z); kijk {x, z}; kleuren { a, b, vul, kleding: [...] };
 // licht {x, y, z} (podium, in de ruimte van parent); schaal; telefoons (aandeel); rnd; dicht (camera-afstand waarbinnen iemand
-// verdwijnt); vast (aantal niet schalen met de kwaliteitsstand). Handvat: { mesh, n, plekken, zet({ a, b, vul, helder, flits,
-// armen, rand }), opruimen() }. Test: clubPubliek.forceer = { stand: 'drop', energie: 1, half: true, dans: 'pogo' } (null = muziek volgen).
+// verdwijnt); vast (aantal niet schalen met de kwaliteitsstand); glowsticks (aandeel, 17-10, buitenkamers: dat deel houdt i.p.v. een
+// telefoon een neon staafje in de rechterhand, kleur per persoon, zwaait er vaker mee boven het hoofd; weggelaten = precies het oude gedrag).
+// Handvat: { mesh, n, plekken, telefoons, glowsticks, zet({ a, b, vul, helder, flits, armen, rand, gloed }), opruimen() }. Test: clubPubliek.forceer = { stand: 'drop', energie: 1, half: true, dans: 'pogo' } (null = muziek volgen).
 (() => {
   'use strict';
   // window.clubPubliek bestaat al (meeleven.js: golf/totBeat, laadt eerder): we hangen er alleen maak/aantal/forceer aan
@@ -139,9 +140,9 @@ attribute vec3 aV, aB, aVn, aBn;
 attribute vec2 aInfo;
 attribute vec4 iA, iB;
 attribute vec3 iC;
-uniform float uDein, uTel, uTijd, uRust, uDrop, uArmen, uEnergie, uDicht, uArmenExtra, uSMix, uSlag, uStap;
+uniform float uDein, uTel, uTijd, uRust, uDrop, uArmen, uEnergie, uDicht, uArmenExtra, uSMix, uSlag, uStap, uGloed;
 uniform vec4 uSA0, uSB0, uSA1, uSB1;
-varying vec3 vN, vW, vKl;
+varying vec3 vN, vW, vKl, vGloed;
 varying float vScherm, vZicht;
 #include <fog_pars_vertex>
 // draaimatrices (kolommen); alles zonder vertakkingen: de shader compileert dan veel sneller (ANGLE/D3D)
@@ -151,7 +152,9 @@ mat3 rotZ(float a) { float c = cos(a), s = sin(a); return mat3(c, s, 0.0, -s, c,
 float is(float d, float k) { return step(abs(d - k), 0.5); }
 void main() {
   float deel = aInfo.x, kl = aInfo.y;
-  float fase = iA.x, temp = iA.y, vr = iA.z, br = iA.w, tel = iB.x, zaad = iB.w;
+  float fase = iA.x, temp = iA.y, vr = iA.z, br = iA.w, zaad = iB.w;
+  // iB.x: 0 niets, 1 telefoon, 2 glowstick (bestaande menigtes hebben alleen 0/1: dan is alles hieronder precies als vroeger)
+  float glow = step(1.5, iB.x), heeft = step(0.5, iB.x), tel = heeft * (1.0 - glow);
   vec3 p = position + aV * vr + aB * br;
   vec3 n = normal + aVn * vr + aBn * br;
   vec3 n0 = n;
@@ -177,6 +180,7 @@ void main() {
   float opE = mix(step(0.2 + 0.78 * fract(iB.z + (k16 - 1.0) * 0.618), uArmen), step(0.2 + 0.78 * fract(iB.z + k16 * 0.618), uArmen), w16);
   float op = max(opD, opE);
   op = max(op * (1.0 - 0.85 * sL), sHand * step(fract(zaad * 5.3), 0.35 + 0.45 * uEnergie + 0.3 * uDrop));  // trance: handen in de lucht
+  op = max(op, glow * step(fract(zaad * 9.13), 0.3 + 0.4 * uEnergie + 0.3 * uDrop) * (1.0 - 0.8 * uRust));  // glowsticks: vaker de handen omhoog
   float een = step(0.72, fract(zaad * 7.13));
   float opA = max(op * (1.0 - een * isL), sBang * step(0.5, fract(zaad * 4.1)) * isR);  // headbang: vuist omhoog
   // armstijl per persoon: hangend (meezwaaien), dansend (ellebogen gebogen, onderarmen omhoog, om en om) of glas voor de borst
@@ -193,11 +197,19 @@ void main() {
   e += (1.0 - opA) * (sSkank * 1.1 + sBounce * 0.5 * (0.5 + 0.5 * cos(6.2832 * h)));
   float tArm = tel * isR;
   th = mix(th, 0.18, tArm); ph = mix(ph, 1.9 + 0.05 * sin(uTijd * 1.3 + zaad * 9.0), tArm); e = mix(e, 0.9, tArm);
+  // glowstick-arm (rechts): boven het hoofd heen en weer zwaaien op de halve tel; in de break laag voor het lijf
+  float gArm = glow * isR, gz = sin(3.1416 * h + zaad * 6.0), gHoog = 1.0 - 0.8 * uRust;
+  th = mix(th, mix(0.55 + 0.25 * gz, 2.45 + 0.4 * gz, gHoog), gArm);
+  ph = mix(ph, mix(1.2, 0.3, gHoog), gArm);
+  e = mix(e, mix(1.3, 0.25 + 0.3 * (0.5 + 0.5 * cos(6.2832 * h)), gHoog), gArm);
   float SX = ${f(M.sx)} + ${f(M.sxV)} * vr + ${f(M.sxB)} * br, SY = ${f(M.sy)} + ${f(M.syV)} * vr;
   float NK = ${f(M.nek)} + ${f(M.nekV)} * vr, HP = ${f(M.heup)} + ${f(M.heupV)} * vr;
   vec3 sch = vec3(zij * SX, SY, 0.0), ell = sch + vec3(zij * 0.012, -${f(M.boven)}, 0.0);
   // telefoon: alleen bij wie er een heeft (anders klapt hij weg in de hand)
-  p = mix(p, mix(ell + vec3(0.0, -${f(M.onder)}, 0.04), p, tel), is(deel, 7.0));
+  p = mix(p, mix(ell + vec3(0.0, -${f(M.onder)}, 0.04), p, heeft), is(deel, 7.0));
+  // glowstick: het telefoonblokje wordt een staafje (3 x 28 cm) in de vuist dat de onderarm verlengt
+  vec3 tq = p - (ell + vec3(0.0, -0.345, 0.041));
+  p = mix(p, ell + vec3(0.0, -0.45, 0.012) + vec3(tq.x * 0.45, tq.y * 1.9, tq.z * 2.6), glow * is(deel, 7.0));
   // onderarm om de elleboog, dan de hele arm om de schouder
   float isO = is(deel, 4.0) + is(deel, 6.0) + is(deel, 7.0), isA = step(2.5, deel) * (1.0 - step(7.5, deel));
   mat3 rE = rotX(-e), rS = rotZ(zij * th) * rotX(-ph);
@@ -248,6 +260,9 @@ void main() {
   float flits = step(fract(uTijd * 0.09 + zaad * 13.7), 0.012);
   vScherm = tel * (is(kl, 4.0) * (0.85 + 0.15 * sin(uTijd * 3.0 + zaad * 20.0)) * (1.0 + 2.5 * flits)
     + isH * is(kl, 2.0) * max(n0.z, 0.0) * (0.22 + 0.5 * flits));  // scherm, en het gezicht in het schermlicht
+  // glowstick: neonkleur per persoon (roze, oranje, geelgroen, groen, cyaan, paars), feller in de drop
+  vec3 gk = clamp(abs(mod(fract(floor(fract(zaad * 13.37) * 6.0) / 6.0 + 0.92) * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+  vGloed = glow * is(deel, 7.0) * uGloed * (mix(gk, vec3(1.0), 0.3) * 1.5 + gk * (0.5 * uDrop + 0.25 * uArmen));
   vec4 mvPosition = viewMatrix * w;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
@@ -255,7 +270,7 @@ void main() {
   const FRAG = `
 uniform vec3 uKleurA, uKleurB, uVul, uLicht;
 uniform float uHelder, uFlits, uRandA, uRandB;
-varying vec3 vN, vW, vKl;
+varying vec3 vN, vW, vKl, vGloed;
 varying float vScherm, vZicht;
 #include <fog_pars_fragment>
 void main() {
@@ -271,6 +286,7 @@ void main() {
   kleur *= uHelder;
   kleur += vec3(0.75, 0.85, 1.0) * vScherm;
   kleur += (uKleurA * 0.5 + 0.5) * (uFlits * (0.12 + 0.6 * (randA + randB)));
+  kleur += vGloed;  // glowstick (0 zonder)
   gl_FragColor = vec4(kleur, 1.0);
   #include <fog_fragment>
 }`;
@@ -286,7 +302,7 @@ void main() {
   const MAT = new THREE.ShaderMaterial({
     uniforms: Object.assign({
       fogDensity: { value: 0.00025 }, fogNear: { value: 1 }, fogFar: { value: 2000 }, fogColor: { value: new THREE.Color(0xffffff) },
-      uDicht: { value: 0.9 }, uArmenExtra: { value: 0 }, uKleurA: { value: new THREE.Color() }, uKleurB: { value: new THREE.Color() }, uVul: { value: new THREE.Color() },
+      uDicht: { value: 0.9 }, uArmenExtra: { value: 0 }, uGloed: { value: 1 }, uKleurA: { value: new THREE.Color() }, uKleurB: { value: new THREE.Color() }, uVul: { value: new THREE.Color() },
       uLicht: { value: new THREE.Vector3() }, uHelder: { value: 1 }, uFlits: { value: 0 }, uRandA: { value: 1 }, uRandB: { value: 0.7 },
     }, U),
     vertexShader: VERT, fragmentShader: FRAG, fog: true,
@@ -392,11 +408,11 @@ void main() {
     const iA = new Float32Array(n * 4), iB = new Float32Array(n * 4), iC = new Float32Array(n * 3);
     const mesh = new THREE.InstancedMesh(geo, MAT, n);
     mesh.name = 'clubPubliek';
-    const schaal = o.schaal || 1, telAandeel = o.telefoons == null ? 0.12 : o.telefoons;
+    const schaal = o.schaal || 1, telAandeel = o.telefoons == null ? 0.12 : o.telefoons, glowAandeel = o.glowsticks > 0 ? Math.min(1, +o.glowsticks) : 0;
     const kleding = (o.kleuren && o.kleuren.kleding) || null;
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), pv = new THREE.Vector3(), sv = new THREE.Vector3(), c = new THREE.Color();
     const midden = new THREE.Vector3(), plekken = [];
-    let nTel = 0;
+    let nTel = 0, nGlow = 0;
     for (let i = 0; i < n; i++) {
       const p = lijst[i], y = p.y || 0;
       const face = p.face != null ? p.face : Math.atan2(kijk.x - p.x, kijk.z - p.z) + (r() - 0.5) * 0.5;
@@ -406,10 +422,11 @@ void main() {
       mesh.setMatrixAt(i, m4);
       midden.x += p.x; midden.y += y; midden.z += p.z;
       plekken.push({ x: p.x, y, z: p.z, face });
-      const tel = r() < telAandeel ? 1 : 0; nTel += tel;
+      // glowstick alleen als erom gevraagd is (zonder trekt dit geen extra toevalsgetal: bestaande menigtes blijven identiek)
+      const glow = glowAandeel > 0 && r() < glowAandeel, tel = !glow && r() < telAandeel ? 1 : 0; nTel += tel; nGlow += glow ? 1 : 0;
       const fase = r() < 0.15 ? 0.12 + 0.1 * r() : (r() - 0.5) * 0.12;  // de meesten op de tel, een paar wat later
       iA.set([fase, 0.12 + 0.88 * Math.pow(r(), 1.2), vrouw, breed], i * 4);
-      iB.set([tel, r(), 0.2 + 0.78 * r(), r()], i * 4);
+      iB.set([glow ? 2 : tel, r(), 0.2 + 0.78 * r(), r()], i * 4);
       if (kleding) c.copy(kleurVan(kleding[Math.floor(r() * kleding.length)]));
       else { const k = KLEDING[Math.floor(r() * KLEDING.length)]; c.setHSL((k[0] + (r() - 0.5) * 0.06 + 1) % 1, k[1], k[2] * (0.75 + 0.5 * r())); }
       iC.set([c.r, c.g, c.b], i * 3);
@@ -429,14 +446,14 @@ void main() {
     // handvat: kleuren en lichtniveau van de kamer; de rand klopt vanzelf mee op de pulse
     const P = o.kleuren || {};
     const H = {
-      mesh, n, plekken, telefoons: nTel, driehoeken: n * BASIS.tris,
+      mesh, n, plekken, telefoons: nTel, glowsticks: nGlow, driehoeken: n * BASIS.tris,
       a: kleurVan(P.a) || new THREE.Color(0xff3a7a), b: kleurVan(P.b) || new THREE.Color(0x3a8cff), vul: kleurVan(P.vul) || new THREE.Color(0x0c0a10),
       licht: new THREE.Vector3(o.licht ? o.licht.x : kijk.x, o.licht && o.licht.y != null ? o.licht.y : 3, o.licht ? o.licht.z : kijk.z),
-      helder: 1, flits: 0, armen: 0, rand: 1, dicht: o.dicht == null ? 0.9 : o.dicht,
+      helder: 1, flits: 0, armen: 0, rand: 1, gloed: 1, dicht: o.dicht == null ? 0.9 : o.dicht,
       zet(w) {
         if (!w) return H;
         for (const k of ['a', 'b', 'vul']) if (w[k] != null) { if (w[k].isColor) H[k].copy(w[k]); else H[k].set(w[k]); }
-        for (const k of ['helder', 'flits', 'armen', 'rand', 'dicht']) if (w[k] != null) H[k] = w[k];
+        for (const k of ['helder', 'flits', 'armen', 'rand', 'gloed', 'dicht']) if (w[k] != null) H[k] = w[k];
         if (w.licht) H.licht.set(w.licht.x, w.licht.y, w.licht.z);
         return H;
       },
@@ -449,7 +466,7 @@ void main() {
       u.uKleurA.value.copy(H.a); u.uKleurB.value.copy(H.b);
       u.uVul.value.copy(vul.copy(H.vul).multiplyScalar(0.6).addScalar(0.035));
       u.uLicht.value.copy(lw.copy(H.licht).applyMatrix4(mesh.parent ? mesh.parent.matrixWorld : mesh.matrixWorld));
-      u.uHelder.value = H.helder; u.uFlits.value = H.flits; u.uArmenExtra.value = H.armen; u.uDicht.value = H.dicht;
+      u.uHelder.value = H.helder; u.uFlits.value = H.flits; u.uArmenExtra.value = H.armen; u.uDicht.value = H.dicht; u.uGloed.value = H.gloed;
       u.uRandA.value = H.rand * (0.85 + 0.55 * pu); u.uRandB.value = H.rand * (0.55 + 0.25 * pu);
       MAT.uniformsNeedUpdate = true;  // gedeeld materiaal: per menigte de eigen waarden opnieuw doorgeven (mist zet de renderer zelf)
     };
