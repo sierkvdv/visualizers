@@ -234,7 +234,7 @@
         case 'dnb':     s = (0.4 + 0.6 * e) * (c.back * 3 + (1 - c.vier) * 2 + e * 1.5 + bij(B, 174, 0.07) * 1.5 + op(F.perc, 1.5, 4) * 0.5) / 8.5; break;
         case 'hiphop':  s = (0.6 + 0.4 * e) * (0.4 + 0.6 * c.back) * (c.back * 3 + (1 - c.vier) * 1.5 + e * 2 + bij(B, 90, 0.2) * 3 + af(F.perc, 3, 5.5)) / 10.5; break;
         case 'afro':    s = (Math.max(c.sync, c.ksync) * 3 + op(F.perc, 3, 5.5) * 2.5 + bij(B, 110, 0.2) * 1.5 + (1 - g) + (1 - c.half) * 0.5) / 8.5; break;
-        case 'lounge':  s = (1 - 0.4 * op(F.diep, 5, 12)) * (af(F.vlak, 0.08, 0.18) * 2 + af(F.subMid, 6, 11) + op(F.midHoog, 4, 12) * 1.5 + af(F.flux, 0.12, 0.22) + bij(B, 100, 0.25) + (1 - c.vier * op(F.subMid, 8, 14)) * 0.5) / 7; break;  // een diepe sinus-sub (30-50 Hz boven 80-130 Hz) is basmuziek, geen lounge
+        case 'lounge':  s = (1 - 0.7 * op(F.diep, 5, 12)) * (1 - 0.45 * op(F.kick, 2.8, 4.5)) * (af(F.vlak, 0.08, 0.18) * 2 + af(F.subMid, 6, 11) + op(F.midHoog, 4, 12) * 1.5 + af(F.flux, 0.12, 0.22) + bij(B, 100, 0.25) + (1 - c.vier * op(F.subMid, 8, 14)) * 0.5) / 7; break;  // een diepe sinus-sub (30-50 Hz boven 80-130 Hz) is basmuziek, geen lounge; harde kicks ook niet (17-10: Noisia werd 'lounge 88')
         case 'rock':    s = g * (c.back * 2.5 + bij(B, 125, 0.25) * 1.5 + af(F.kick, 4, 6) + (1 - c.vier) * 0.5) / 5.5; break;
         case 'metal':   s = g * (op(F.kick, 4.3, 5.5) * 3 + bij(B, 170, 0.35) + af(F.midHoog, 0, 5) + c.back * 0.5) / 5.5; break;
         case 'punk':    s = g * (c.back * 2.5 + bij(B, 182, 0.12) * 2 + af(F.kick, 4.3, 5.5) * 2) / 6.5; break;
@@ -307,7 +307,7 @@
       const E = laatsteEis = eis(best);
       // de huidige stijl draagt zelf niets meer (bv. 'lounge 88' bij een dnb-set van 176) en een ander wint ruim: dan niet de volle
       // 96-160 tellen van de halve/dubbele-tempo-regel wachten (Sierk 17-10: 'zie niemand meer dansen')
-      const zwak = SCORE[herkend].glad < 0.2 && gb - SCORE[herkend].glad > 0.25;
+      const zwak = SCORE[herkend].glad < 0.2 && gb - SCORE[herkend].glad > 0.15;
       if (gb - SCORE[herkend].glad > E.marge && zeker >= (zwak ? Math.min(E.z, 0.35) : E.z)) voorsprong += tellen; else voorsprong = 0;
       if (voorsprong >= (zwak ? Math.min(E.tel, 24) : E.tel)) wissel(best, t, E.half ? 'half' : nieuwTempo ? 'tempo' : 'auto', zeker);
     } else voorsprong = 0;
