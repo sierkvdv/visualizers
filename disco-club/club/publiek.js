@@ -26,8 +26,8 @@
 
   // --- de pop: maten als lineaire functie van vrouw (v) en breed (b); de shader rekent de draaipunten met dezelfde getallen ---
   const M = { heup: 0.95, heupV: -0.025, sx: 0.19, sxV: -0.028, sxB: 0.03, sy: 1.43, syV: -0.04, nek: 1.5, nekV: -0.04, boven: 0.285, onder: 0.33 };
-  const DEEL = { been: 0, romp: 1, hoofd: 2, bovenL: 3, onderL: 4, bovenR: 5, onderR: 6, tel: 7 };
-  const KL = { broek: 0, top: 1, huid: 2, haar: 3, scherm: 4, schoen: 5, onderarm: 6 };
+  const DEEL = { been: 0, romp: 1, hoofd: 2, bovenL: 3, onderL: 4, bovenR: 5, onderR: 6, tel: 7, pet: 8, muts: 9, hoed: 10 };  // 8-10: hoofddeksels (per persoon hooguit één, de rest klapt weg)
+  const KL = { broek: 0, top: 1, huid: 2, haar: 3, scherm: 4, schoen: 5, onderarm: 6, hoed: 7 };
 
   // buis door horizontale ringen [y, rx, rz, x, z, klasse]; n hoeken; onder/boven = dop met een middelpunt
   function buis(G, ringen, n, deel, onder, boven) {
@@ -97,6 +97,14 @@
     const hr = (dy, rx, rz, z) => [nek + dy * k, rx * k, rz * k, 0, z * k, KL.haar];
     buis(G, v ? [hr(-0.035, 0.1, 0.068, -0.058), hr(0.14, 0.098, 0.1, -0.02), hr(0.215, 0.08, 0.092, -0.004), hr(0.25, 0.05, 0.058, 0)]
       : [hr(0.115, 0.088, 0.09, -0.03), hr(0.17, 0.09, 0.104, -0.008), hr(0.222, 0.074, 0.087, 0), hr(0.252, 0.046, 0.054, 0)], 8, DEEL.hoofd, false, true);
+    // hoofddeksels (17-10, meer variatie): pet met klep, hoge muts, hoed met rand; de shader laat per persoon er hooguit één staan
+    const hd = (dy, rx, rz, z) => [nek + dy * k, rx * k, rz * k, 0, z * k, KL.hoed];
+    buis(G, [hd(0.16, 0.1, 0.11, -0.004), hd(0.22, 0.095, 0.105, -0.002), hd(0.268, 0.06, 0.066, 0)], 8, DEEL.pet, true, true);
+    blok(G, -0.075 * k, 0.075 * k, nek + 0.162 * k, nek + 0.176 * k, 0.04 * k, 0.175 * k, DEEL.pet, KL.hoed);
+    buis(G, [hd(0.13, 0.102, 0.112, -0.004), hd(0.2, 0.099, 0.109, -0.004), hd(0.27, 0.076, 0.081, -0.008), hd(0.315, 0.03, 0.034, -0.012)], 8, DEEL.muts, true, true);
+    buis(G, [hd(0.176, 0.095, 0.105, 0), hd(0.176, 0.178, 0.188, 0)], 10, DEEL.hoed);  // rand (boven en onder)
+    buis(G, [hd(0.172, 0.178, 0.188, 0), hd(0.172, 0.095, 0.105, 0)], 10, DEEL.hoed);
+    buis(G, [hd(0.17, 0.097, 0.107, 0), hd(0.29, 0.086, 0.094, 0)], 10, DEEL.hoed, false, true);
     // armen: bovenarm (mouw) en onderarm + hand; telefoon in de rechterhand (bij wie geen heeft klapt hij in de shader weg)
     for (const s of [1, -1]) {
       const ex = s * (sx + 0.012), ey = sy - M.boven;
@@ -191,7 +199,7 @@ void main() {
   // telefoon: alleen bij wie er een heeft (anders klapt hij weg in de hand)
   p = mix(p, mix(ell + vec3(0.0, -${f(M.onder)}, 0.04), p, tel), is(deel, 7.0));
   // onderarm om de elleboog, dan de hele arm om de schouder
-  float isO = is(deel, 4.0) + is(deel, 6.0) + is(deel, 7.0), isA = step(2.5, deel);
+  float isO = is(deel, 4.0) + is(deel, 6.0) + is(deel, 7.0), isA = step(2.5, deel) * (1.0 - step(7.5, deel));
   mat3 rE = rotX(-e), rS = rotZ(zij * th) * rotX(-ph);
   p = mix(p, rE * (p - ell) + ell, isO); n = mix(n, rE * n, isO);
   p = mix(p, rS * (p - sch) + sch, isA); n = mix(n, rS * n, isA);
@@ -200,8 +208,10 @@ void main() {
   float bng = pow(0.5 + 0.5 * cos(6.2832 * (uSlag + fase * 0.3)), 3.0), zw3 = pow(0.5 + 0.5 * cos(wd), 3.0);
   knik += sBang * (0.32 + 0.3 * temp) * bng + sZwaar * (0.22 + 0.15 * temp) * zw3;  // headbangen op de tel; dubstep zwaar op de halve tel
   float hrol = 0.07 * temp * (1.0 - uRust) * sin(3.1416 * h + zaad * 3.0);
-  float isH = is(deel, 2.0);
+  float isH = is(deel, 2.0) + step(7.5, deel);  // hoofd + hoofddeksel
   vec3 nk = vec3(0.0, NK, 0.0);
+  float hv = floor(fract(zaad * 7.77) * 7.0);  // 4 pet, 5 muts, 6 hoed, anders niets
+  p = mix(p, nk + vec3(0.0, 0.1, 0.0), step(7.5, deel) * (1.0 - is(hv, deel - 4.0)));
   mat3 rH = rotZ(hrol) * rotX(knik);
   p = mix(p, rH * (p - nk) + nk, isH); n = mix(n, rH * n, isH);
   // lijf: wiegen, voorover op de dip, wat draaien; de benen buigen mee (knie naar voren), de voeten blijven staan
@@ -233,7 +243,8 @@ void main() {
   vec3 haar = mix(vec3(0.025, 0.02, 0.018), vec3(0.3, 0.2, 0.1), step(0.8, fract(zaad * 3.7)));
   vec3 broek = vec3(0.04, 0.042, 0.05) * (0.6 + 0.9 * fract(zaad * 11.3)) + iC * 0.1;
   float lang = step(0.55, fract(zaad * 5.9));
-  vKl = broek * is(kl, 0.0) + iC * is(kl, 1.0) + huid * is(kl, 2.0) + haar * is(kl, 3.0) + vec3(0.025) * (is(kl, 4.0) + is(kl, 5.0)) + mix(huid, iC, lang) * is(kl, 6.0);
+  vec3 hoed = mix(vec3(0.03, 0.03, 0.035), iC * 1.15, step(0.45, fract(zaad * 17.3))) + vec3(0.25) * step(0.9, fract(zaad * 23.1));
+  vKl = broek * is(kl, 0.0) + iC * is(kl, 1.0) + huid * is(kl, 2.0) + haar * is(kl, 3.0) + vec3(0.025) * (is(kl, 4.0) + is(kl, 5.0)) + mix(huid, iC, lang) * is(kl, 6.0) + hoed * is(kl, 7.0);
   float flits = step(fract(uTijd * 0.09 + zaad * 13.7), 0.012);
   vScherm = tel * (is(kl, 4.0) * (0.85 + 0.15 * sin(uTijd * 3.0 + zaad * 20.0)) * (1.0 + 2.5 * flits)
     + isH * is(kl, 2.0) * max(n0.z, 0.0) * (0.22 + 0.5 * flits));  // scherm, en het gezicht in het schermlicht

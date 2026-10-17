@@ -1052,8 +1052,9 @@ function buildPoleDancers() {
   POLES.forEach((P, i) => {
     const M = ms[i % ms.length], clip = poleClipFor(M);
     const d = makeModelDancer(M, false);
+    versier(d, M, 'paal');  // geen spullen op het hoofd (en hieronder geen herkleuring van die spullen)
     // eigen kleuren (ook de heks), eigen startmoment, eigen tempo en soms gespiegeld: nooit twee gelijk
-    d.body.traverse(o => { if (o.isMesh) o.material = recolorMat(o.material.userData.src || o.material, true); });
+    d.body.traverse(o => { if (o.isMesh && !o.isSkinnedMesh && o.name === 'versiering') return; if (o.isMesh) o.material = recolorMat(o.material.userData.src || o.material, true); });
     d.body.scale.set(Math.random() < 0.5 ? -1 : 1, 1, 1);  // ware grootte: de grepen zijn zo berekend
     d.root.position.set(P.x, P.h, P.z);
     d.root.rotation.y = rnd(0, TAU);
@@ -1421,9 +1422,114 @@ function makeModelDancer(M, calm) {
   if (!M.keep && Math.random() < 0.4) body.scale.x *= -1;
   root.add(body);
   scene.add(root);
-  return { type: 'model', M, root, body, mixer: new THREE.AnimationMixer(body), calm, cur: null, prev: null, fade: 1, off: Math.floor(rnd(0, 8)),
+  const d = { type: 'model', M, root, body, mixer: new THREE.AnimationMixer(body), calm, cur: null, prev: null, fade: 1, off: Math.floor(rnd(0, 8)),
            nextChange: 0, home: new THREE.Vector3(), face: 0, tq: 0 };
+  try { versier(d, M); } catch (e) { console.error('versier', e); }
+  return d;
 }
+// --- variatie in de mensen (17-10 avond, Sierk: "zie veel dezelfde mensen"): elk 3D-figuur een eigen bouw (breder/smaller, dieper/platter)
+// en vaak iets op het hoofd of om de nek: pet (ook achterstevoren), muts, bucket hat, cowboyhoed, koptelefoon, hanenkam, hoofdband,
+// kattenoortjes, duivelshoorns, halo, zonnebril, ledbril, glow-ketting. Gedeelde geometrie per soort en materialen per kleur (houden:
+// het doolhof gooit ze niet weg); per figuur hooguit 2-3 draws. versier(d, M, rol) opnieuw = andere spullen (de doolhofkamers lenen
+// figuren uit een voorraad: kern.js roept het per kamer aan). De plek op het hoofd: één keer per model uit de rustpose (Head-bot, de
+// bovenkant van het skelet en de tenen voor de kijkrichting), daarna in de ruimte van het bot, dus mee met elke dans.
+const versier = (() => {
+  const H = x => { x.userData = x.userData || {}; x.userData.doolhofHouden = true; return x; };
+  const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), e4 = new THREE.Euler(), p4 = new THREE.Vector3(), s4 = new THREE.Vector3();
+  const deel = (geo, shade, x, y, z, sx, sy, sz, rx = 0, ry = 0, rz = 0) => {
+    const g = geo.clone();
+    g.applyMatrix4(m4.compose(p4.set(x, y, z), q4.setFromEuler(e4.set(rx, ry, rz)), s4.set(sx, sy, sz)));
+    const n = g.attributes.position.count;
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(shade), 3));
+    if (!g.index) g.setIndex([...Array(n).keys()]);
+    return g;
+  };
+  const samen = parts => { const g = samenvoegen(parts); g.computeBoundingSphere(); return H(g); };
+  // vormen van eenheidsmaat; alles in meters voor een standaardhoofd (straal 0,105 m), oorsprong = midden van het hoofd, +y op, +z vooruit
+  const KOEPEL = new THREE.SphereGeometry(1, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), CIL = new THREE.CylinderGeometry(1, 1, 1, 16), AF = new THREE.CylinderGeometry(0.85, 1, 1, 16);
+  const RING = new THREE.TorusGeometry(1, 0.13, 6, 22), BOOG = new THREE.TorusGeometry(1, 0.1, 6, 16, Math.PI), KEG = new THREE.ConeGeometry(1, 1, 6), BLOK = new THREE.BoxGeometry(1, 1, 1), BOL = new THREE.SphereGeometry(1, 10, 8);
+  const sym = f => [f(1), f(-1)];
+  const V = {  // soort -> { stof (vertexkleur = tint), glans (gloeit), nek: aan het nekbot }
+    pet: { stof: () => samen([deel(KOEPEL, 1, 0, 0.015, 0, 0.113, 0.1, 0.116), deel(CIL, 0.7, 0, 0.022, 0.1, 0.1, 0.012, 0.09)]) },
+    petAchter: { stof: () => samen([deel(KOEPEL, 1, 0, 0.015, 0, 0.113, 0.1, 0.116), deel(CIL, 0.7, 0, 0.022, -0.1, 0.1, 0.012, 0.09)]) },
+    muts: { stof: () => samen([deel(KOEPEL, 1, 0, 0, 0, 0.117, 0.135, 0.12), deel(RING, 0.7, 0, 0.012, 0, 0.115, 0.115, 0.118, Math.PI / 2), deel(BOL, 0.85, 0, 0.142, 0, 0.03, 0.03, 0.03)]) },
+    bucket: { stof: () => samen([deel(AF, 1, 0, 0.072, 0, 0.115, 0.09, 0.118), deel(CIL, 0.8, 0, 0.032, 0.005, 0.165, 0.01, 0.165)]) },
+    cowboy: { stof: () => samen([deel(AF, 1, 0, 0.09, 0, 0.1, 0.12, 0.112), deel(CIL, 0.85, 0, 0.036, 0, 0.21, 0.012, 0.19), deel(CIL, 0.35, 0, 0.05, 0, 0.103, 0.022, 0.114)]) },
+    koptelefoon: {
+      stof: () => samen([deel(BOOG, 0.35, 0, 0, 0, 0.123, 0.132, 0.122), ...sym(s => deel(CIL, 1, s * 0.118, -0.005, 0.005, 0.046, 0.036, 0.046, 0, 0, Math.PI / 2))]),
+      glans: () => samen(sym(s => deel(RING, 1, s * 0.137, -0.005, 0.005, 0.04, 0.04, 0.04, 0, Math.PI / 2, 0))) },
+    hanenkam: { stof: () => samen([-0.08, -0.04, 0, 0.04, 0.08].map((z, i) => deel(KEG, 1, 0, 0.13 + (i % 2) * 0.012, z, 0.02, 0.085 + (i % 2) * 0.02, 0.026))) },
+    hoofdband: { stof: () => samen([deel(RING, 1, 0, 0.035, 0.005, 0.113, 0.113, 0.118, Math.PI / 2)]) },
+    oortjes: { glans: () => samen(sym(s => deel(KEG, 1, s * 0.066, 0.118, 0, 0.034, 0.075, 0.02, 0, 0, -s * 0.3))) },
+    hoorns: { glans: () => samen(sym(s => deel(KEG, 1, s * 0.055, 0.108, 0.03, 0.02, 0.07, 0.02, 0.3, 0, -s * 0.35))) },
+    halo: { glans: () => samen([deel(RING, 1, 0, 0.19, 0, 0.085, 0.085, 0.085, Math.PI / 2)]) },
+    bril: { stof: () => samen([deel(BLOK, 0.2, 0, 0.014, 0.13, 0.165, 0.044, 0.012), ...sym(s => deel(BLOK, 0.2, s * 0.083, 0.018, 0.07, 0.006, 0.006, 0.12))]) },
+    ledbril: { glans: () => samen([deel(BLOK, 1, 0, 0.014, 0.133, 0.17, 0.036, 0.01), ...sym(s => deel(BLOK, 1, s * 0.086, 0.018, 0.075, 0.006, 0.006, 0.11))]) },
+    ketting: { nek: true, glans: () => samen([deel(RING, 1, 0, -0.06, 0.016, 0.084, 0.084, 0.09, Math.PI / 2 + 0.3)]) },
+  };
+  const GEO = {}, geo = (soort, k) => { const key = soort + '.' + k; return GEO[key] || (GEO[key] = V[soort][k]()); };
+  const STOF = [0x111114, 0xf2f2f2, 0xc81e1e, 0x1b2a6b, 0x4b5a2a, 0xff5fa8, 0xffd21f, 0xff7a1a, 0x16a3a3, 0x7a3cc8, 0x8a5a2b, 0x2aa84a, 0x9fd3ff, 0x3a3a40];
+  const GLANS = [0xff2bd6, 0x2bf0ff, 0x7dff2b, 0xffe52b, 0xff3b2b, 0xb44bff, 0xffffff, 0xff8a1a];
+  const MAT = {};
+  const stof = hex => MAT['s' + hex] || (MAT['s' + hex] = H(new THREE.MeshStandardMaterial({ color: hex, vertexColors: true, roughness: 0.75, metalness: 0.05 })));
+  const glans = hex => MAT['g' + hex] || (MAT['g' + hex] = H(new THREE.MeshBasicMaterial({ color: hex })));
+  const KOP = [['pet', 3], ['petAchter', 1.5], ['muts', 2], ['bucket', 2], ['cowboy', 0.7], ['koptelefoon', 2], ['hanenkam', 0.8], ['hoofdband', 1.2], ['oortjes', 1.2], ['halo', 0.6], ['hoorns', 0.8]];
+  const gewogen = lijst => { let t = Math.random() * lijst.reduce((s, x) => s + x[1], 0); for (const [n, w] of lijst) if ((t -= w) < 0) return n; return lijst[0][0]; };
+  // plek op het hoofd en de nek in de ruimte van het bot, één keer per model (rustpose, niet gespiegeld)
+  const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3(), mI = new THREE.Matrix4(), qY = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
+  function plek(M, body) {
+    if (M.versierPlek !== undefined) return M.versierPlek;
+    const bot = {};
+    body.traverse(o => { if (o.isBone && !bot[o.name]) bot[o.name] = o; });
+    if (!bot.Head) return (M.versierPlek = null);
+    const sx = body.scale.x; body.scale.x = Math.abs(sx);
+    body.updateMatrixWorld(true);
+    bot.Head.getWorldPosition(vA);
+    const top = (M.h - 0.08) * Math.abs(body.scale.y), R = Math.min(0.16, Math.max(0.07, (top - vA.y) / 2));
+    let yaw = 0;  // kijkrichting uit de tenen (anders +z)
+    if (bot.LeftFoot && bot.LeftToeBase && bot.RightFoot && bot.RightToeBase) {
+      bot.LeftToeBase.getWorldPosition(vB).sub(bot.LeftFoot.getWorldPosition(vC)); bot.RightToeBase.getWorldPosition(vC).sub(bot.RightFoot.getWorldPosition(vD)); vB.add(vC);
+      if (vB.x * vB.x + vB.z * vB.z > 1e-6) yaw = Math.atan2(vB.x, vB.z);
+    }
+    qY.setFromAxisAngle(UP, yaw);
+    const fx = Math.sin(yaw), fz = Math.cos(yaw), sc = R / 0.105;
+    const lok = (b, p) => mI.copy(b.matrixWorld).invert().multiply(m4.compose(p, qY, s4.set(sc, sc, sc))).clone();
+    const kop = lok(bot.Head, vB.set(vA.x + fx * R * 0.12, vA.y + R, vA.z + fz * R * 0.12));
+    const nek = bot.neck ? lok(bot.neck, bot.neck.getWorldPosition(vC)) : null;
+    body.scale.x = sx; body.updateMatrixWorld(true);
+    return (M.versierPlek = { kop, nek });
+  }
+  function hang(d, bot, mtx, g, mat) {
+    const m = new THREE.Mesh(g, mat);
+    mtx.decompose(m.position, m.quaternion, m.scale);
+    m.castShadow = false; m.name = 'versiering';
+    bot.add(m); d.versier.push(m);
+  }
+  return function versier(d, M, rol) {
+    for (const m of d.versier || []) if (m.parent) m.parent.remove(m);
+    d.versier = [];
+    if (!M || M.keep || !d.body || rol === 'paal') return;  // paaldanseressen: ware grootte (de grepen), niets op het hoofd
+    // bouw: breder of smaller, dieper of platter (de lengte en spiegeling deden makeModelDancer of kern.maat al)
+    d.body.scale.x *= rnd(0.9, 1.14); d.body.scale.z *= rnd(0.92, 1.1);
+    const P = plek(M, d.body);
+    if (!P) return;
+    let head = null, neck = null;
+    d.body.traverse(o => { if (o.isBone) { if (!head && o.name === 'Head') head = o; if (!neck && o.name === 'neck') neck = o; } });
+    if (!head) return;
+    const tov = /wizard|witch/.test(M.file), lijst = [];
+    if (rol === 'dj') lijst.push(Math.random() < 0.85 ? 'koptelefoon' : 'pet');
+    else if (!tov && Math.random() < 0.62) lijst.push(gewogen(KOP));
+    const k0 = lijst[0];
+    if (Math.random() < (k0 === 'halo' || k0 === 'hoorns' || k0 === 'oortjes' ? 0.15 : 0.28)) lijst.push(Math.random() < 0.3 ? 'ledbril' : 'bril');
+    if (Math.random() < 0.25 && P.nek && neck) lijst.push('ketting');
+    const kl = pick(STOF), kg = pick(GLANS);
+    for (const soort of lijst) {
+      const v = V[soort], bot = v.nek ? neck : head, mtx = v.nek ? P.nek : P.kop;
+      if (v.stof) hang(d, bot, mtx, geo(soort, 'stof'), stof(soort === 'bril' ? 0x101012 : soort === 'koptelefoon' ? pick([0x111114, 0xf2f2f2, 0xc81e1e, 0x1b2a6b]) : kl));
+      if (v.glans) hang(d, bot, mtx, geo(soort, 'glans'), glans(soort === 'hoorns' ? 0xff2b1a : soort === 'halo' ? pick([0xffe52b, 0xffffff]) : kg));
+    }
+  };
+})();
 // elke 8 of 16 tellen een andere dans (soms gespiegeld); de vorige vloeit er in een tel uit
 // niet-dansen: een van de eigen handelingen spelen en om de 6-14 s wisselen
 function setClip(d, clip, fade = 0.6) {

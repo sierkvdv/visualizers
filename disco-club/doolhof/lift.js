@@ -1369,7 +1369,7 @@ void main() {
         let n = C.lijst.length ? C.lijst.shift() : L.camLijst[Math.floor(Math.random() * L.camLijst.length)];
         if (n === C.naar) n = C.lijst.length ? C.lijst.shift() : n === 'rond' ? 'hoek' : 'rond';
         const vert = n === 'omhoog' || n === 'omlaag';  // de verticale shots mogen lang blijven hangen (draaien langzaam)
-        volgende(L, n, kruist(L, C.naar, n) ? 2.2 : vert ? 1.8 : 1.4, vert ? 3.5 + Math.random() * 2.5 : 1.8 + Math.random() * 1.8);
+        volgende(L, n, kruist(L, C.naar, n) ? 2.2 : vert ? 1.8 : 1.4, vert ? 4 + Math.random() * 2.5 : 2.6 + Math.random() * 2);
       }
     }
     const k = huidig(L, C, P1);

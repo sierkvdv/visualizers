@@ -569,7 +569,7 @@
         for (const wm of wormen) {  // eigen klonen: skelet en materialen (herkleuring, sigaret) weg; geometrie en textuur zijn van het model
           dropDancer(wm);
           wm.mixer.stopAllAction(); wm.mixer.uncacheRoot(wm.body);
-          wm.body.traverse(o => { if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose(); if (o.isMesh) for (const m of [].concat(o.material)) if (m) m.dispose(); });
+          wm.body.traverse(o => { if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose(); if (o.isMesh) for (const m of [].concat(o.material)) if (m && !(m.userData && m.userData.doolhofHouden)) m.dispose(); });  // (gedeelde versiering niet)
         }
         wormen.length = 0;
         if (sl) { g.remove(sl.root); for (const m of slMats) m.dispose(); }  // geometrie en textuur zijn van de club-slak: niet weggooien

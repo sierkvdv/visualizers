@@ -742,6 +742,7 @@
     R.figs.push(p);
     herkleur(p, rol === 'paal' || (M.type === 'pop' && !/man-1/.test(M.file)));
     maat(p, rol === 'paal');
+    if (typeof versier === 'function') try { versier(d, M, rol); } catch (e) { fout('versier', e); }  // per kamer een andere bouw en andere spullen (index.html)
     d.rol = rol;
     d.home.set(+o.x || 0, 0, +o.z || 0); d.face = +o.face || 0;
     d.root.position.set(d.home.x, rol === 'paal' ? +o.y || 0 : 0, d.home.z); d.root.rotation.set(0, d.face, 0);
@@ -1375,7 +1376,8 @@
         liftVerstop(z, B, B.gangIn);
       } else if (L.verlengd > 0 && (X.wacht += dt) > 10) { einde(s); return; }  // de volgende kamer komt niet: terug naar de club
     }
-    if (X.laatste && L.fase === 'rit' && L.tFase > 1.6) { einde(s); return; }  // laatste kamer van het rondje: de lift neemt je mee terug
+    // laatste kamer van het rondje: de lift neemt je mee terug, maar pas na een flink stuk rit (was 1,6 s: dan zag je de lift amper rijden)
+    if (X.laatste && L.fase === 'rit' && L.tFase > 9) { einde(s); return; }
     // uitstappen zodra de voordeuren half open zijn
     if (X.gewisseld && (L.fase === 'opent' || L.fase === 'uit') && L.deurV > 0.55) {
       X.loopt = true;
@@ -1408,6 +1410,64 @@
       doolhof.level = L.level;
     } else if (own.level != null) doolhof.level = own.level;
   }
+  // --- meer camerahoeken in kamers met één eigen camerabaan (17-10 avond, Sierk: "niet zo veel verschillende camera angles"): om en om
+  // de eigen baan van de kamer en een kern-shot, wisselen op de eerste tel van een frase (8 tellen, drop 4) na minstens 4,5-6 s. De
+  // kern-shots rekenen in kamer-coördinaten binnen de maat (marge 0,8 m): hoge hoek, rit langs de zijwand, vogel (hoog plafond), laag op
+  // de loper, tele uit de verste hoek, vanaf de ingang. Stijlkamers, effectkamers en de boiler hebben een eigen regisseur: niet hier.
+  const EEN_BAAN = new Set(['paalkamer', 'slakkenhol', 'spiegeldisco', 'kaleidoscoop', 'laserkooi', 'rokerslounge', 'graffitigang', 'barkamer', 'omgekeerd', 'gang-kamer']);
+  const ksKlem = (x, a, b) => Math.min(b, Math.max(a, x)), ksGlad = u => glad(u, 0, 1);
+  const KS = {
+    hoek: (M, r) => {
+      const sx = r() < 0.5 ? -1 : 1, sz = r() < 0.5 ? -1 : 1, y = Math.min(M.h - 0.6, 3.3), x0 = sx * (M.w / 2 - 1.1), z0 = sz * (M.d / 2 - 1.2);
+      return (u, lp, o) => { const k = ksGlad(Math.min(1, u / 12)); o.p.set(x0 * (1 - 0.15 * k), y, z0 * (1 - 0.15 * k)); o.l.set(lp.x * 0.5, 1.2, lp.z * 0.5); o.fov = 64; };
+    },
+    zij: (M, r) => {
+      const sx = r() < 0.5 ? -1 : 1, dir = r() < 0.5 ? -1 : 1, y = Math.min(M.h - 0.7, 2.5);
+      return (u, lp, o) => { const z = dir * (-M.d / 4 + (M.d / 2) * ksGlad(Math.min(1, u / 14))); o.p.set(sx * (M.w / 2 - 1.1), y, z); o.l.set(-sx * M.w / 2, 1.6, z + dir * 1.5); o.fov = 62; };
+    },
+    vogel: (M, r) => {
+      if (M.h < 3.6) return null;
+      const a0 = r() * Math.PI * 2, dir = r() < 0.5 ? -1 : 1;
+      return (u, lp, o) => { const a = a0 + dir * 0.06 * u; o.p.set(lp.x * 0.6, M.h - 0.45, lp.z * 0.6); o.l.set(o.p.x + Math.cos(a) * 0.4, 0, o.p.z + Math.sin(a) * 0.4); o.fov = 72; };
+    },
+    laag: (M, r) => {
+      const zij = r() < 0.5 ? -1 : 1;
+      return (u, lp, o) => {
+        const a = Math.atan2(-lp.x, -lp.z || 1e-3) + zij * (0.35 + 0.25 * Math.sin(u * 0.2));
+        o.p.set(lp.x + Math.sin(a) * 1.5, 0.45, lp.z + Math.cos(a) * 1.5); o.l.set(lp.x, 1.35, lp.z); o.fov = 64;
+      };
+    },
+    tele: (M, r) => {
+      const ph = r() * 6;
+      return (u, lp, o) => { o.p.set((lp.x > 0 ? -1 : 1) * (M.w / 2 - 1), 2.0, (lp.z > 0 ? -1 : 1) * (M.d / 2 - 1)); o.l.set(lp.x + 0.3 * Math.sin(u * 0.2 + ph), 1.3, lp.z); o.fov = 28; };
+    },
+    ingang: (M) => (u, lp, o) => { const k = ksGlad(Math.min(1, u / 12)); o.p.set(0.4, Math.min(M.h - 0.5, 2.4), -M.d / 2 + 0.7 + k); o.l.set(0, 1.2, M.d / 4); o.fov = 68; },
+  };
+  const KS_P = new THREE.Vector3(), KS_O = { p: new THREE.Vector3(), l: new THREE.Vector3(), fov: 60 }, KS_U = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: 60 };
+  function kernShot(own, t, w) {
+    const m = own.kamer && own.kamer.maat;
+    if (!EEN_BAAN.has(own.soort) || !m || !(m.w >= 4 && m.d >= 4) || !w || !w.root) return null;
+    const M = { w: m.w, d: m.d, h: m.h || 3.3 }, b = typeof beatPos === 'number' ? beatPos : 0, fr = Math.floor(b / (show.stand === 'drop' ? 4 : 8));
+    let k = own.kr;
+    if (!k) k = own.kr = { eigen: true, t0: t, fr, f: null, lijst: [] };
+    if (fr !== k.fr) {
+      k.fr = fr;
+      if (t - k.t0 > (k.eigen ? 6 : 4.5)) {
+        k.t0 = t; k.eigen = !k.eigen; k.f = null;
+        if (!k.eigen) {
+          if (!k.lijst.length) { k.lijst = Object.keys(KS); for (let i = k.lijst.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const x = k.lijst[i]; k.lijst[i] = k.lijst[j]; k.lijst[j] = x; } }
+          while (!k.f && k.lijst.length) k.f = KS[k.lijst.shift()](M, Math.random);
+          if (!k.f) k.eigen = true;
+        }
+      }
+    }
+    if (k.eigen || !k.f) return null;
+    KS_P.copy(w.root.position); own.groep.worldToLocal(KS_P);
+    k.f(t - k.t0, KS_P, KS_O);
+    KS_O.p.x = ksKlem(KS_O.p.x, -M.w / 2 + 0.8, M.w / 2 - 0.8); KS_O.p.z = ksKlem(KS_O.p.z, -M.d / 2 + 0.8, M.d / 2 - 0.8); KS_O.p.y = ksKlem(KS_O.p.y, 0.35, M.h - 0.35);
+    KS_U.pos.copy(KS_O.p); own.groep.localToWorld(KS_U.pos); KS_U.look.copy(KS_O.l); own.groep.localToWorld(KS_U.look); KS_U.fov = KS_O.fov;
+    return KS_U;
+  }
   function cameraBeeld(z, t, dt) {
     const own = z.own, w = z.loper.d, X = z.lift;
     if (X && !X.loopt) {  // in de lift: eigen choreografie in de cabine (vanaf het beeld van nu)
@@ -1436,7 +1496,8 @@
     let fov = 58, klaar = false;
     if (modus === 'kamer') {
       let r = null;
-      try { r = own.kamer.cam(t - own.tIn, w, own.ctx); } catch (e) { own.camKapot = true; fout('cam van ' + own.soort, e); }
+      try { r = kernShot(own, t, w); } catch (e) { r = null; EEN_BAAN.delete(own.soort); fout('kernshot ' + own.soort, e); }
+      if (!r) try { r = own.kamer.cam(t - own.tIn, w, own.ctx); } catch (e) { own.camKapot = true; fout('cam van ' + own.soort, e); }
       if (r && r.pos && r.look) { tP.copy(r.pos); tL.copy(r.look); fov = r.fov || 58; klaar = true; }
       // knipt de kamer-camera tijdens het overvloeien: meteen het nieuwe beeld, anders glijdt hij na de knip nog na
       if (klaar && z.snap && z.vorigDoel && tP.distanceTo(z.vorigDoel) > 1.0) z.snap = null;

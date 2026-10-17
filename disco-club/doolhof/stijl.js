@@ -1506,6 +1506,58 @@ void main() {
       const c = B.tegenPlek || { x: 0, z: 0 }, a0 = r() * RONDE, dir = r() < 0.5 ? -1 : 1;
       return (u, o) => { const a = a0 + dir * 0.07 * u; o.p.set(c.x, (c.y || 0) + 1.6, c.z); o.l.set(c.x + Math.cos(a) * 3.2, Math.min(A.plafondOp(c.x, c.z), 9), c.z + Math.sin(a) * 3.2); o.fov = 76; };
     } }),
+    // --- 17-10 avond: meer hoeken in elke kamer (Sierk: "niet zo veel verschillende camera angles") ---
+    // dj van dichtbij: vóór de draaitafels, net boven de hoofden van de voorste rij, tele; zwenkt langzaam heen en weer
+    djDicht: B => ({ naam: 'djDicht', min: 3, maak: r => {
+      const j = B.dj, zij = r() < 0.5 ? -1 : 1, R = tussen(r, 1.5, 1.9), y = j.y + Math.min(1.95, j.H + 0.15), ph = r() * RONDE;
+      return (u, o) => { const a = zij * (0.25 + 0.35 * Math.sin(u * 0.18 + ph)); o.p.copy(j.lok(Math.sin(a) * R, y, Math.cos(a) * R)); o.l.copy(j.lok(0, j.y + j.H * 0.82, 0.15)); o.fov = 40; };
+    } }),
+    // profiel: de dj van opzij op ooghoogte, het publiek erachter; schuift langzaam mee naar voren
+    profiel: B => ({ naam: 'profiel', min: 3, maak: r => {
+      const j = B.dj, zij = r() < 0.5 ? -1 : 1, y = j.y + j.H * 0.88;
+      return (u, o) => { const k = glad(u / 12); o.p.copy(j.lok(zij * (2.3 - 0.5 * k), y, 0.2 + 0.6 * k)); o.l.copy(j.lok(0, j.y + j.H * 0.8, 0.5 + 0.8 * k)); o.fov = 48; };
+    } }),
+    // zweven: van achter in de kamer over de hoofden naar de dj (onder het plafond), blik op de dj
+    zweef: (B, A) => ({ naam: 'zweef', rustig: true, min: 5, max: 15, maak: r => {
+      const j = B.dj, zij = (r() - 0.5) * 2, midden = Math.hypot(j.x, j.z) < 1.5;
+      const ver = midden ? V(zij * 1.2, 0, -A.d / 2 + 2.2) : V(-j.x * 0.8 + zij, 0, -j.z * 0.8 + zij * 0.5), eind = j.lok(zij * 0.6, 0, 2.8), T = tussen(r, 11, 15);
+      return (u, o) => { o.p.lerpVectors(ver, eind, glad(u / T)); o.p.y = Math.max(2.3, Math.min(3.1, A.plafondOp(o.p.x, o.p.z) - 0.55)); o.l.copy(j.lok(0, j.y + j.H * 0.8, 0)); o.fov = 64; };
+    } }),
+    // tele: vanuit een verre hoek met een lange lens op de dj (het publiek ervoor schuift in elkaar); de blik dwaalt langzaam
+    tele: (B, A) => ({ naam: 'tele', min: 3.5, maak: r => {
+      const j = B.dj, sx = Math.abs(j.x) > 0.5 ? -Math.sign(j.x) : r() < 0.5 ? -1 : 1, sz = Math.abs(j.z) > 0.5 ? -Math.sign(j.z) : r() < 0.5 ? -1 : 1;
+      const ver = V(sx * (A.w / 2 - 1.3), 0, sz * (A.d / 2 - 1.6)), y = Math.min(2.6, A.plafondOp(ver.x, ver.z) - 0.4), ph = r() * RONDE, kijk = V(j.x, j.y + j.H * 0.75, j.z);
+      return (u, o) => { o.p.set(ver.x, y, ver.z); o.l.copy(kijk); o.l.x += 0.6 * Math.sin(u * 0.15 + ph); o.l.y += 0.25 * Math.sin(u * 0.11 + ph * 2); o.fov = 26 + 4 * Math.sin(u * 0.08); };
+    } }),
+    // boog: een halve cirkel vóór de dj langs, boven de hoofden, blik op de dj
+    djBoog: B => ({ naam: 'djBoog', min: 3, maak: r => {
+      const j = B.dj, dir = r() < 0.5 ? -1 : 1, R = tussen(r, 2.6, 3.4), y = j.y + j.H + 0.55;
+      return (u, o) => { const a = -1.25 * dir + dir * Math.min(2.5, u * 0.22); o.p.copy(j.lok(Math.sin(a) * R, y, Math.cos(a) * R)); o.l.copy(j.lok(0, j.y + j.H * 0.75, 0)); o.fov = 56; };
+    } }),
+    // vogel: recht van boven op de dansvloer tussen het publiek en de dj, draait langzaam (alleen onder een hoog plafond)
+    vogel: (B, A, c) => ({ naam: 'vogel', rustig: true, maak: r => {
+      const a0 = r() * RONDE, dir = r() < 0.5 ? -1 : 1, y = Math.min(A.plafondOp(c.x, c.z) - 0.35, 8);
+      return (u, o) => { const a = a0 + dir * 0.06 * u; o.p.set(c.x, y, c.z); o.l.set(c.x + Math.cos(a) * 0.35, 0, c.z + Math.sin(a) * 0.35); o.fov = 72; };
+    } }),
+    // opstijgen: tussen het publiek van laag bij de vloer omhoog tot onder het plafond (of omgekeerd), blik op de dj
+    stijg: (B, A) => ({ naam: 'stijg', rustig: true, min: 5, maak: r => {
+      const c = B.tegenPlek || A.camPlek || { x: 0, z: 0 }, j = B.dj, top = Math.min(A.plafondOp(c.x, c.z) - 0.4, 6.5), omk = r() < 0.35;
+      return (u, o) => { const k = glad(u / 11), h = omk ? 1 - k : k; o.p.set(c.x, 0.45 + (top - 0.45) * h, c.z); o.l.set(j.x, j.y + j.H * 0.8 - 0.6 * h, j.z); o.fov = 66; };
+    } }),
+    // podium: hoog achter de dj, over hem heen de hele zaal in (het publiek als één massa)
+    podium: B => ({ naam: 'podium', maak: r => {
+      const j = B.dj, zij = (r() - 0.5) * 1.6, ph = r() * RONDE;
+      return (u, o) => { o.p.copy(j.lok(zij + 0.4 * Math.sin(u * 0.15 + ph), j.y + j.H + 1.2, -0.9)); o.l.copy(j.lok(zij * 0.3, 0.6, 7)); o.fov = 70; };
+    } }),
+    // handcamera tussen de mensen: zwenkt langzaam over het publiek, met een eigen hand-trilling
+    hand: (B, A) => ({ naam: 'hand', min: 3, maak: r => {
+      const c = B.tegenPlek || A.camPlek || { x: 0, z: 0 }, j = B.dj, a0 = Math.atan2(j.x - c.x, j.z - c.z), dir = r() < 0.5 ? -1 : 1, ph = r() * 50;
+      return (u, o) => {
+        const a = a0 + dir * (-0.9 + 1.8 * glad(u / 12)), t = u + ph;
+        o.p.set(c.x + 0.04 * Math.sin(t * 2.1), 1.55 + 0.035 * Math.sin(t * 2.9), c.z + 0.04 * Math.cos(t * 1.7));
+        o.l.set(c.x + Math.sin(a) * 4, 1.45 + 0.08 * Math.sin(t * 1.3), c.z + Math.cos(a) * 4); o.fov = 58;
+      };
+    } }),
     // de loper die staat te dansen: van voren (langs zijn route verder), langzaam dichterbij
     loper: B => ({ naam: 'loper', maak: () => (u, o, info) => {
       const v = B.opRoute(B.wachtS + 2.9 - 0.7 * glad(u / 8)), lp = info.lp;
@@ -2321,6 +2373,12 @@ void main() {
     if (B.tegenPlek) camDefs.lijst.push(CAM.tegen(B));
     camDefs.lijst.push(CAM.scherm(B, A), CAM.vloer(B, A));
     if (B.M.ledPlafond) camDefs.lijst.push(CAM.plafond(B, A));
+    // meer hoeken (17-10): in elke kamer de dj dichtbij/opzij/in een boog, zweven, tele, opstijgen, podium en handcamera; vogel onder een hoog plafond
+    camDefs.lijst.push(CAM.djDicht(B), CAM.profiel(B), CAM.zweef(B, A), CAM.tele(B, A), CAM.djBoog(B), CAM.stijg(B, A), CAM.podium(B), CAM.hand(B, A));
+    {
+      const tp = B.tegenPlek || A.camPlek || { x: 0, z: 0 }, c = V(tp.x + (B.dj.x - tp.x) * 0.4, 0, tp.z + (B.dj.z - tp.z) * 0.4);
+      if (A.plafondOp(c.x, c.z) >= 3.6) camDefs.lijst.push(CAM.vogel(B, A, c));
+    }
     if (B.dj.viaMidden) camDefs.lijst = camDefs.lijst.filter(k => k.naam !== 'schouder');
     const gewogen = [];
     for (const k of camDefs.lijst) { const n = Math.round(C.cam[k.naam] == null ? 1 : C.cam[k.naam]); for (let i = 0; i < n; i++) gewogen.push(k); }
