@@ -1493,11 +1493,32 @@ const versier = (() => {
     }
     qY.setFromAxisAngle(UP, yaw);
     const fx = Math.sin(yaw), fz = Math.cos(yaw), sc = R / 0.105;
-    const lok = (b, p) => mI.copy(b.matrixWorld).invert().multiply(m4.compose(p, qY, s4.set(sc, sc, sc))).clone();
+    const lok = (b, p, s = sc, sy = s) => mI.copy(b.matrixWorld).invert().multiply(m4.compose(p, qY, s4.set(s, sy, s))).clone();
     const kop = lok(bot.Head, vB.set(vA.x + fx * R * 0.12, vA.y + R, vA.z + fz * R * 0.12));
     const nek = bot.neck ? lok(bot.neck, bot.neck.getWorldPosition(vC)) : null;
+    // haar (17-10, Sierk: petten te klein op afro's en opgestoken haar): de punten van het lijf die aan het hoofd hangen, in rustpose;
+    // hoeden, mutsen, koptelefoon, oortjes en halo schalen naar de breedte van dat haar en zitten op de bovenkant ervan (bril niet)
+    let haar = kop, mesh = null;
+    body.traverse(o => { if (o.isSkinnedMesh && !mesh) mesh = o; });
+    if (mesh && mesh.skeleton) {
+      const kb = new Set(); mesh.skeleton.bones.forEach((b, i) => { if (/^(Head|head_end|headfront)$/.test(b.name)) kb.add(i); });
+      const ps = mesh.geometry.attributes.position, si = mesh.geometry.attributes.skinIndex, sw = mesh.geometry.attributes.skinWeight;
+      let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, y1 = -1e9, n = 0;
+      if (ps && si && sw) for (let i = 0; i < ps.count; i++) {
+        const w = (kb.has(si.getX(i)) ? sw.getX(i) : 0) + (kb.has(si.getY(i)) ? sw.getY(i) : 0) + (kb.has(si.getZ(i)) ? sw.getZ(i) : 0) + (kb.has(si.getW(i)) ? sw.getW(i) : 0);
+        if (w < 0.6) continue;
+        vD.fromBufferAttribute(ps, i).applyMatrix4(body.matrixWorld);  // (punten staan in de ruimte van de gltf-scène, niet die van de mesh: die heeft de 0,01 van de armatuur)
+        if (vD.y < vA.y) continue;  // alleen boven de schedelbasis (geen kin, geen hals)
+        x0 = Math.min(x0, vD.x); x1 = Math.max(x1, vD.x); z0 = Math.min(z0, vD.z); z1 = Math.max(z1, vD.z); y1 = Math.max(y1, vD.y); n++;
+      }
+      if (n > 40) {
+        // breed mee met het haar, in de hoogte hooguit 1,15x: dan zit een pet of muts bovenop een afro en zakt hij niet over de ogen
+        const rH = Math.max(x1 - x0, z1 - z0) / 2, sH = Math.min(2.2, Math.max(1, rH / (0.82 * R))) * sc, sV = Math.min(sH, 1.15 * sc);
+        haar = lok(bot.Head, vB.set((x0 + x1) / 2 + fx * R * 0.05, Math.max(y1, vA.y + R) - 0.105 * sV + 0.015 * sV, (z0 + z1) / 2 + fz * R * 0.05), sH, sV);
+      }
+    }
     body.scale.x = sx; body.updateMatrixWorld(true);
-    return (M.versierPlek = { kop, nek });
+    return (M.versierPlek = { kop, nek, haar });
   }
   function hang(d, bot, mtx, g, mat) {
     const m = new THREE.Mesh(g, mat);
@@ -1525,7 +1546,7 @@ const versier = (() => {
     if (Math.random() < 0.25 && P.nek && neck) lijst.push('ketting');
     const kl = pick(STOF), kg = pick(GLANS);
     for (const soort of lijst) {
-      const v = V[soort], bot = v.nek ? neck : head, mtx = v.nek ? P.nek : P.kop;
+      const v = V[soort], bot = v.nek ? neck : head, mtx = v.nek ? P.nek : /bril/.test(soort) ? P.kop : P.haar || P.kop;
       if (v.stof) hang(d, bot, mtx, geo(soort, 'stof'), stof(soort === 'bril' ? 0x101012 : soort === 'koptelefoon' ? pick([0x111114, 0xf2f2f2, 0xc81e1e, 0x1b2a6b]) : kl));
       if (v.glans) hang(d, bot, mtx, geo(soort, 'glans'), glans(soort === 'hoorns' ? 0xff2b1a : soort === 'halo' ? pick([0xffe52b, 0xffffff]) : kg));
     }
