@@ -4,6 +4,8 @@
 // Alle beweging zit in de vertex-shader, op de muziek: deinen op de tel (boven ~126 BPM op de halve tel, zoals dansgevoel.js),
 // hoofdknikken op elke tel, armen omhoog en pompen in de drop, de eersten al aan het eind van de opbouw, rustig wiegen in de
 // break (window.clubRegie.stand); per persoon een eigen fase, temperament, lengte, huid, kleding en soms lange mouwen.
+// Per muziekstijl (window.clubStijl.preset.dans) anders: lounge rustig met glas, headbangen + vuist, pogo-springen, handen in de
+// lucht (trance), heupen (afro), skank-knieën (dnb), bouncen (hiphop), zwaar op de halve tel (dubstep); ieder wisselt op een eigen moment.
 // Licht zonder lampen: donker silhouet met een rand van tegenlicht in het palet van de kamer (kleur a vanaf het podium,
 // kleur b van achter/boven), een paar telefoons die oplichten en soms flitsen (en het gezicht erachter bijlichten).
 // Eén gedeeld materiaal (één shader, wordt nooit opnieuw gecompileerd); per beeld alleen een handvol uniforms, geen matrices.
@@ -11,7 +13,7 @@
 // 'vlak' (x0, x1, z0, z1) } met aantal, afstand en vrij(x, z); kijk {x, z}; kleuren { a, b, vul, kleding: [...] };
 // licht {x, y, z} (podium, in de ruimte van parent); schaal; telefoons (aandeel); rnd; dicht (camera-afstand waarbinnen iemand
 // verdwijnt); vast (aantal niet schalen met de kwaliteitsstand). Handvat: { mesh, n, plekken, zet({ a, b, vul, helder, flits,
-// armen, rand }), opruimen() }. Test: clubPubliek.forceer = { stand: 'drop', energie: 1, half: true } (null = muziek volgen).
+// armen, rand }), opruimen() }. Test: clubPubliek.forceer = { stand: 'drop', energie: 1, half: true, dans: 'pogo' } (null = muziek volgen).
 (() => {
   'use strict';
   // window.clubPubliek bestaat al (meeleven.js: golf/totBeat, laadt eerder): we hangen er alleen maak/aantal/forceer aan
@@ -129,7 +131,8 @@ attribute vec3 aV, aB, aVn, aBn;
 attribute vec2 aInfo;
 attribute vec4 iA, iB;
 attribute vec3 iC;
-uniform float uDein, uTel, uTijd, uRust, uDrop, uArmen, uEnergie, uDicht, uArmenExtra;
+uniform float uDein, uTel, uTijd, uRust, uDrop, uArmen, uEnergie, uDicht, uArmenExtra, uSMix, uSlag, uStap;
+uniform vec4 uSA0, uSB0, uSA1, uSB1;
 varying vec3 vN, vW, vKl;
 varying float vScherm, vZicht;
 #include <fog_pars_vertex>
@@ -144,30 +147,42 @@ void main() {
   vec3 p = position + aV * vr + aB * br;
   vec3 n = normal + aVn * vr + aBn * br;
   vec3 n0 = n;
+  // muziekstijl (window.clubStijl): ieder op een eigen moment van de oude naar de nieuwe stijl (uSMix loopt in ~4 tellen naar 1)
+  // sA = lounge, headbang, pogo, handen; sB = heupen (afro), skank (dnb), bounce (hiphop), zwaar (dubstep)
+  float wS = smoothstep(0.0, 1.0, clamp((uSMix - fract(zaad * 2.71) * 0.75) / 0.25, 0.0, 1.0));
+  vec4 sA = mix(uSA0, uSA1, wS), sB = mix(uSB0, uSB1, wS);
+  float sL = sA.x, sBang = sA.y * (1.0 - 0.8 * uRust), sPogo = sA.z * (1.0 - uRust), sHand = sA.w * (1.0 - 0.8 * uRust);
+  float sHeup = sB.x * (1.0 - 0.6 * uRust), sSkank = sB.y * (1.0 - 0.85 * uRust), sBounce = sB.z, sZwaar = sB.w;
+  float dropS = uDrop * (1.0 - 0.75 * sL);  // lounge: op de drop hooguit iets meer
   // ritme: deinklok (op de tel, of de halve tel bij hoog tempo) en de tel voor het hoofd
-  float lev = (0.3 + 0.7 * uEnergie) * (1.0 - 0.72 * uRust);
+  float lev = (0.3 + 0.7 * uEnergie) * (1.0 - 0.72 * uRust) * (1.0 - 0.65 * sL);
   float d = uDein + fase, h = uTel + fase * 0.6, wd = 6.2832 * d;
-  float dip = (0.018 + 0.045 * temp) * lev * (1.0 + 0.5 * uDrop) * (0.5 + 0.5 * cos(wd));
-  float spring = uDrop * smoothstep(0.62, 0.8, temp) * 0.13 * max(0.0, sin(3.1416 * fract(d)));
+  float dip = (0.018 + 0.045 * temp) * lev * (1.0 + 0.5 * dropS + 1.2 * sBounce + 1.5 * sZwaar) * (0.5 + 0.5 * cos(wd));
+  float spring = dropS * smoothstep(0.62, 0.8, temp) * 0.13 * max(0.0, sin(3.1416 * fract(d))) * (1.0 - sL);
+  spring += sPogo * step(0.25, temp) * (0.1 + 0.12 * temp) * max(0.0, sin(3.1416 * fract(uSlag + fase * 0.5)));  // pogo: recht omhoog
   // armen: groove = gebogen voor het lijf en meezwaaien; omhoog = V boven het hoofd, pompen op de tel; telefoon = rechts omhoog
   float isL = is(deel, 3.0) + is(deel, 4.0), isR = step(4.5, deel), zij = 2.0 * isL - 1.0;
   // handen omhoog: in de drop snel (ieder op een eigen drempel, een golf door de zaal); op energie/opbouw per 4 maten opnieuw
   // beslist, ieder op een eigen tel (niet allemaal tegelijk) en in een halve tel gewisseld (nooit blijven hangen met de armen half omhoog)
-  float opD = smoothstep(-0.06, 0.06, max(uDrop, uArmenExtra) - (0.12 + 0.82 * iB.z));
+  float opD = smoothstep(-0.06, 0.06, max(dropS, uArmenExtra) - (0.12 + 0.82 * iB.z));
   float tE = uTel + floor(fract(zaad * 1.73) * 16.0), k16 = floor(tE / 16.0), w16 = smoothstep(0.0, 0.45, tE - k16 * 16.0);
   float opE = mix(step(0.2 + 0.78 * fract(iB.z + (k16 - 1.0) * 0.618), uArmen), step(0.2 + 0.78 * fract(iB.z + k16 * 0.618), uArmen), w16);
   float op = max(opD, opE);
+  op = max(op * (1.0 - 0.85 * sL), sHand * step(fract(zaad * 5.3), 0.35 + 0.45 * uEnergie + 0.3 * uDrop));  // trance: handen in de lucht
   float een = step(0.72, fract(zaad * 7.13));
-  float opA = op * (1.0 - een * isL);
+  float opA = max(op * (1.0 - een * isL), sBang * step(0.5, fract(zaad * 4.1)) * isR);  // headbang: vuist omhoog
   // armstijl per persoon: hangend (meezwaaien), dansend (ellebogen gebogen, onderarmen omhoog, om en om) of glas voor de borst
   float zw = sin(wd + zij * 1.4 + zaad * 5.0), bew = (1.0 - uRust) * (0.4 + 0.6 * uEnergie);
-  float st = fract(zaad * 3.31), dansA = step(0.3, st) * step(st, 0.8), glas = step(0.8, st) * isR;
+  float st = fract(zaad * 3.31), dansA = step(0.3, st) * step(st, 0.8) * (1.0 - sL), glas = step(0.8 - 0.45 * sL, st) * isR;  // lounge: glas
   float th0 = 0.1 + 0.1 * dansA + 0.06 * temp + 0.04 * zw * lev;
   float ph0 = 0.04 + (0.1 + 0.12 * temp) * dansA * bew + (0.04 + 0.1 * temp) * lev * zw + 0.3 * glas;
   float e0 = 0.2 + dansA * bew * (1.85 + 0.3 * temp + 0.2 * zw) + (1.0 - dansA) * 0.12 * lev * (0.5 + 0.5 * zw) + 1.6 * glas;
-  float pomp = (0.5 + 0.5 * cos(6.2832 * h)) * uDrop;
+  float pomp = (0.5 + 0.5 * cos(6.2832 * h)) * max(dropS, 0.6 * sBang);
   float th1 = 2.85 + 0.1 * temp - 0.1 * pomp, ph1 = 0.22 + 0.2 * pomp, e1 = 0.2 + 0.25 * (1.0 - temp) + 0.65 * pomp * temp;
   float th = mix(th0, th1, opA), ph = mix(ph0, ph1, opA) + 0.9 * sin(3.1416 * opA), e = mix(e0, e1, opA);  // omhoog via voren, niet als vliegtuig
+  float zwS = cos(3.1416 * uStap);  // skank: armen als bij rennen, tegen de benen in; bounce: armen pompen op de tel
+  ph += (1.0 - opA) * (sSkank * 0.55 * zij * zwS + sBounce * 0.3 * (0.5 + 0.5 * cos(6.2832 * h)));
+  e += (1.0 - opA) * (sSkank * 1.1 + sBounce * 0.5 * (0.5 + 0.5 * cos(6.2832 * h)));
   float tArm = tel * isR;
   th = mix(th, 0.18, tArm); ph = mix(ph, 1.9 + 0.05 * sin(uTijd * 1.3 + zaad * 9.0), tArm); e = mix(e, 0.9, tArm);
   float SX = ${f(M.sx)} + ${f(M.sxV)} * vr + ${f(M.sxB)} * br, SY = ${f(M.sy)} + ${f(M.syV)} * vr;
@@ -181,21 +196,29 @@ void main() {
   p = mix(p, rE * (p - ell) + ell, isO); n = mix(n, rE * n, isO);
   p = mix(p, rS * (p - sch) + sch, isA); n = mix(n, rS * n, isA);
   // hoofd: knikken op de tel (telefoonhouders kijken omhoog naar hun scherm)
-  float knik = (0.05 + 0.2 * temp) * (0.35 + 0.65 * uEnergie) * (1.0 - 0.75 * uRust) * (0.5 + 0.5 * cos(6.2832 * h)) + 0.04 - 0.2 * tel;
+  float knik = (0.05 + 0.2 * temp) * (0.35 + 0.65 * uEnergie) * (1.0 - 0.75 * uRust) * (0.5 + 0.5 * cos(6.2832 * h)) * (1.0 - 0.7 * sL) + 0.04 - 0.2 * tel;
+  float bng = pow(0.5 + 0.5 * cos(6.2832 * (uSlag + fase * 0.3)), 3.0), zw3 = pow(0.5 + 0.5 * cos(wd), 3.0);
+  knik += sBang * (0.32 + 0.3 * temp) * bng + sZwaar * (0.22 + 0.15 * temp) * zw3;  // headbangen op de tel; dubstep zwaar op de halve tel
   float hrol = 0.07 * temp * (1.0 - uRust) * sin(3.1416 * h + zaad * 3.0);
   float isH = is(deel, 2.0);
   vec3 nk = vec3(0.0, NK, 0.0);
   mat3 rH = rotZ(hrol) * rotX(knik);
   p = mix(p, rH * (p - nk) + nk, isH); n = mix(n, rH * n, isH);
   // lijf: wiegen, voorover op de dip, wat draaien; de benen buigen mee (knie naar voren), de voeten blijven staan
-  float rol = (0.035 + 0.055 * temp) * lev * sin(3.1416 * d + zaad * 6.0) + uRust * 0.04 * sin(uTijd * 0.8 + zaad * 6.3);
-  float voor = 0.04 + 0.03 * temp + 0.6 * dip + 0.06 * uDrop * temp;
-  float draai = (0.08 + 0.12 * temp) * (1.0 - 0.5 * uRust) * sin(1.5708 * d + zaad * 6.28);
+  float hp3 = sin(4.1888 * uTel + zaad * 6.0);  // afro: heup wisselt elke 3/4 tel (tresillo-raster)
+  float rol = (0.035 + 0.055 * temp) * lev * sin(3.1416 * d + zaad * 6.0) + uRust * 0.04 * sin(uTijd * 0.8 + zaad * 6.3)
+    + sL * 0.035 * sin(1.5708 * d + zaad * 6.0) + sHeup * 0.1 * hp3;
+  float voor = 0.04 + 0.03 * temp + 0.6 * dip + 0.06 * dropS * temp + sBang * 0.14 * bng + sZwaar * 0.08 * zw3;
+  float draai = (0.08 + 0.12 * temp) * (1.0 - 0.5 * uRust) * (1.0 - 0.6 * sL) * sin(1.5708 * d + zaad * 6.28) + sHeup * 0.16 * hp3;
   vec3 hp = vec3(0.0, HP, 0.0);
   mat3 rB = rotY(draai) * rotX(voor) * rotZ(rol);
   float been = 1.0 - step(0.5, deel), k = mix(1.0, clamp(p.y / HP, 0.0, 1.0), been);
   p = mix(p, rB * (p - hp) + hp, k); n = mix(n, rB * n, k);
   p.y -= dip * k; p.z += dip * 1.3 * sin(3.1416 * k) * been;
+  // skank: knie om en om omhoog (been aan de +x- of -x-kant), op het hele tempo
+  float lift = sSkank * step(0.2, temp) * max(0.0, sign(position.x) * sin(3.1416 * uStap)) * been;
+  float kh = clamp(position.y / HP, 0.0, 1.0);
+  p.y += lift * 0.2 * (1.0 - kh); p.z += lift * 0.16 * sin(3.1416 * kh);
   p.y += spring;
   // dicht bij de camera: over 0,9 m uitvagen (gerasterd), daarbinnen weg; van dichtbij is het een etalagepop
   vec4 o = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
@@ -242,7 +265,13 @@ void main() {
 }`;
 
   // gedeelde uniforms (één keer per beeld bijgewerkt) en het ene materiaal
-  const U = { uDein: { value: 0 }, uTel: { value: 0 }, uTijd: { value: 0 }, uRust: { value: 0 }, uDrop: { value: 0 }, uArmen: { value: 0 }, uEnergie: { value: 0.8 } };
+  const U = { uDein: { value: 0 }, uTel: { value: 0 }, uTijd: { value: 0 }, uRust: { value: 0 }, uDrop: { value: 0 }, uArmen: { value: 0 }, uEnergie: { value: 0.8 },
+              uSMix: { value: 1 }, uSlag: { value: 0 }, uStap: { value: 0 },
+              uSA0: { value: new THREE.Vector4(0, 0, 0, 0) }, uSB0: { value: new THREE.Vector4(0, 0, 0, 0) }, uSA1: { value: new THREE.Vector4(0, 0, 0, 0) }, uSB1: { value: new THREE.Vector4(0, 0, 0, 0) } };
+  // muziekstijl -> sterktes in de shader (sA: lounge, headbang, pogo, handen; sB: heupen, skank, bounce, zwaar); groove = het gewone deinen
+  const STIJL = { handen: [0, 0, 0, 1, 0, 0, 0, 0], halftime: [0, 0.25, 0, 0, 0, 0, 0, 1], skank: [0, 0, 0, 0, 0, 1, 0, 0], bounce: [0, 0, 0, 0, 0, 0, 1, 0],
+                  afro: [0, 0, 0, 0, 1, 0, 0, 0], lounge: [1, 0, 0, 0, 0, 0, 0, 0], headbang: [0, 1, 0, 0, 0, 0, 0, 0], pogo: [0, 0, 1, 0, 0, 0, 0, 0] };
+  const GEEN = [0, 0, 0, 0, 0, 0, 0, 0];
   const MAT = new THREE.ShaderMaterial({
     uniforms: Object.assign({
       fogDensity: { value: 0.00025 }, fogNear: { value: 1 }, fogFar: { value: 2000 }, fogColor: { value: new THREE.Color(0xffffff) },
@@ -254,7 +283,14 @@ void main() {
   MAT.userData.doolhofHouden = true;  // de doolhof-kern gooit hem nooit weg: de shader blijft gecompileerd
 
   // --- muziek: één keer per beeld ---
-  const G = { fn: -1, nu: 0, tc: 0, dein: 0, half: false, rust: 0, drop: 0, opb: 0, en: 0.8 };
+  const G = { fn: -1, nu: 0, tc: 0, dein: 0, half: false, rust: 0, drop: 0, opb: 0, en: 0.8, dans: null, slag: 0, snel: false, stap: 0 };
+  function stijlNaar(dans) {  // nieuwe stijl: wat nu (gemiddeld) te zien is wordt de oude, de nieuwe vloeit per persoon in
+    const u = U.uSMix.value, a0 = U.uSA0.value, b0 = U.uSB0.value, a1 = U.uSA1.value, b1 = U.uSB1.value, v = STIJL[dans] || GEEN;
+    a0.lerp(a1, u); b0.lerp(b1, u);
+    a1.set(v[0], v[1], v[2], v[3]); b1.set(v[4], v[5], v[6], v[7]);
+    U.uSMix.value = 0; G.dans = dans;
+  }
+  const klokNaar = (x, doel, dt) => { let f = doel - x; f -= Math.round(f); return x + f * (1 - Math.exp(-dt * 1.5)); };  // fase bijtrekken zonder sprong
   function globaal() {
     const fn = typeof frameNo !== 'undefined' ? frameNo : -2;
     if (fn === G.fn && fn !== -2) return;
@@ -284,6 +320,15 @@ void main() {
     G.en = naar(G.en, F && F.energie != null ? F.energie : typeof energy !== 'undefined' ? energy : 0.8, 2);
     // armen buiten de drop (die zit in uDrop): eind van de opbouw de eersten, hoge energie in de groove een paar; break: omlaag
     const armen = Math.max(G.opb > 0.5 ? (G.opb - 0.5) * 1.2 : 0, Math.max(0, G.en - 0.6)) * (1 - G.rust);
+    // stijl: preset.dans uit club/stijl.js; pogo/headbang op de tel (boven ~150 BPM om de tel), skank-stappen op het hele tempo
+    const CS = window.clubStijl, dans = (F && F.dans !== undefined) ? F.dans : CS && CS.preset && STIJL[CS.preset.dans] ? CS.preset.dans : null;
+    if (dans !== G.dans) stijlNaar(dans);
+    U.uSMix.value = Math.min(1, U.uSMix.value + dtb / 4);
+    const bpm = 60 / per;
+    if (!G.snel && bpm > 152) G.snel = true; else if (G.snel && bpm < 146) G.snel = false;
+    const rS = G.snel ? 0.5 : 1, rT = bpm < 110 ? 2 : 1;
+    G.slag = klokNaar(G.slag + dtb * rS, G.tc * rS, dt); G.stap = klokNaar(G.stap + dtb * rT, G.tc * rT, dt);
+    U.uSlag.value = G.slag % 1024; U.uStap.value = G.stap % 1024;
     U.uDein.value = G.dein % 1024; U.uTel.value = G.tc % 1024; U.uTijd.value = nu % 1000;
     U.uRust.value = G.rust; U.uDrop.value = G.drop; U.uArmen.value = armen; U.uEnergie.value = G.en;
   }

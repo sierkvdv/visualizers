@@ -27,6 +27,7 @@
 <div id="ui">
   <button id="btnSys">Systeemaudio (scherm/tab delen)</button>
   <select id="devices"><option value="">Audio-invoer…</option></select>
+  <select id="stijl" title="Muziekstijl: bepaalt hoe het publiek danst (moshpit alleen bij dubstep, drum &amp; bass, rock, metal, punk). Auto = herkend uit het geluid."><option value="auto">Stijl: auto</option></select>
   <label>Dansers <input type="range" id="count" min="1" max="24" step="1"><span id="countV"></span></label>
   <select id="cast">
     <option value="mix">Figuren: gemengd</option>
@@ -2113,6 +2114,9 @@ if (inApp) { $('btnSys').hidden = true; $('devices').hidden = true; status.textC
 let beatPos = 0, period = 0.5, pulse = 0, bassAvg = 0, lastOnset = 0, energy = 0, live = false;
 const intervals = [];
 function analyse(dt, now) {
+  // zonder geldige tijd (bv. analyse() los uit de console) wordt alles NaN en blijft de camera op één shot hangen
+  if (!(dt >= 0)) dt = 0;
+  if (!(now >= 0)) now = performance.now() / 1000;
   live = !!(analyser || native);
   if (!live) {  // demo: 120 BPM zodat er zonder audio ook gedanst wordt
     beatPos += dt / 0.5;
@@ -2135,6 +2139,7 @@ function analyse(dt, now) {
       for (let i = i0; i <= i1; i++) sum += bins[i];
       raw = sum / (i1 - i0 + 1) / 255;
     }
+    if (!(raw >= 0)) raw = 0;  // NaN/undefined van buiten zou b.max voorgoed NaN maken
     total += raw;
     b.max = Math.max(raw, b.max - dt * 0.03, 0.05);
     const n = Math.min(1, raw / b.max * S.sens);
@@ -2849,6 +2854,7 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="z2/beeld.js"></script>
 <script src="z2/lasers.js"></script>
 <script src="club/lichtregie.js"></script>
+<script src="club/stijl.js"></script>
 <script src="club/ledwand.js"></script>
 <script src="club/meeleven.js"></script>
 <script src="club/regie-momenten.js"></script>
@@ -2870,6 +2876,7 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="doolhof/effect.js"></script>
 <script src="club/showregie.js"></script>
 <script src="club/moshpit.js"></script>
+<script src="club/eend.js"></script>
 <script src="club/voorwarm.js"></script>
 <script src="club/diag.js"></script>
 </body>

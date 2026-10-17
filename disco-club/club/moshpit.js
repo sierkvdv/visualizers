@@ -8,7 +8,14 @@
 // Camera: SHOTS.moshpit in zaal 1 (alleen de regie knipt erheen: de drop wordt dit shot) en in het doolhof een eigen kamer.cam zolang
 // de pit loopt: eerst hoog boven de kring, op de drop laag in de pit tussen de springers, af en toe een rondgaande kraan.
 // Kans 60% per drop; de eerste drop altijd en nooit twee drops achter elkaar zonder. meeleven.js slaat dan zijn drop-golf over.
-// Test: clubMoshpit.info(), .keus = true|false|null (altijd/nooit/kans), .zet(false), .meten = true -> .meting (glijden en afstanden).
+// Alleen bij een stijl met mosh (window.clubStijl.preset.mosh: dubstep, dnb, rock, metal, punk); bij house, lounge enz. geen kring en
+// geen pit (dansgevoel.js laat ze anders dansen); wisselt de stijl midden in de pit, dan lopen ze rustig terug. Zonder clubStijl geen
+// mosh, tenzij .keus = true. Ophypen: zolang de kring open is juichen, klappen (gebouwd) en springen ze op de plek, steeds wilder; minstens
+// preset.ophypeMin tellen. De pit gaat pas los op de echte drop (eigen meting per tel, preset.dropBevestig): na-stilte = stilte en dan de
+// bassprong (een bas die na de opbouw terugkomt is nog geen drop; zonder stilte pas als hij een hele maat vol blijft), bassprong = grote
+// sprong op tel 1, riff = harde volle inzet na een rustiger stuk (de kring opent dan ook zonder opbouw). Geen drop binnen ~32 tellen of
+// een break: kring dicht. Duur preset.moshTellen, circle pit volgens preset.cirkel.
+// Test: clubMoshpit.info(), .keus = true|false|null (altijd/nooit/stijl+kans), .zet(false), .meten = true -> .meting (glijden en afstanden).
 (() => {
   'use strict';
   if (window.clubMoshpit || typeof pose !== 'function' || typeof clubHooks === 'undefined' || typeof SHOTS === 'undefined' ||
@@ -23,8 +30,9 @@
   const noteer = (wat, x) => { MP.log.push(Object.assign({ t: Math.round(nu()), tel: Math.floor(beatPos), wat }, x)); if (MP.log.length > 40) MP.log.shift(); };
 
   // tellen vanaf de drop D (en de opening in de opbouw)
-  const OPEN_TEL = 4, MAX_OPEN = 40;               // opbouwTel waarop de kring opent (de opbouw wordt ~3 tellen na zijn begin herkend); max. wachten
-  const STORM = 2, CIRKEL0 = 4, CIRKEL1 = 15, TERUG = 16;
+  const OPEN_TEL = 4, MAX_OPEN = 56;               // opbouwTel waarop de kring opent (de opbouw wordt ~3 tellen na zijn begin herkend); max. open
+  const WACHT = 32;                                 // zo lang na het openen (en min. 16 na de opbouw) op de echte drop wachten
+  const STORM = 2, CIRKEL0 = 4;                     // de pit zelf duurt A.T tellen (preset.moshTellen)
   const D_MIN = 0.58, D_RAAK = 0.68, V_MAX = 3.8;  // heupen nooit dichter dan D_MIN; botsing onder D_RAAK
 
   // --- clips: eigen kopieën (geen gedeelde acties met dansgevoel en de momenten) ---
@@ -132,7 +140,7 @@
       st: 'wacht', wDans: 1, wl: 0, lr: 0, rj: 1, anim: 'staan', rust: 'juich', kijk: null, kijkDoel: null, snel: 0,
       offL: Math.floor(Math.random() * 6), offR: Math.floor(Math.random() * 2), offJ: Math.floor(Math.random() * 4), offS: 0,
       T: s && s.T !== undefined ? s.T : Math.random(), ank: null, duwT: -99, duwKijk: null, duwTot: -99, renner: false,
-      act: null, mine: null, slot: null, vLoop: 1, vRen: 3,
+      act: null, mine: null, slot: null, vLoop: 1, vRen: 3, offK: Math.floor(Math.random() * 4),
     }, extra || {});
     if (built) { p.gl = STD.loop; p.gr = STD.ren; }
     DEEL.set(d, p); A.deel.push(p);
@@ -167,7 +175,7 @@
 
   // --- arena: zaal 1 of de kamer ---
   function nieuweArena(soort, ouder, cx, cz) {
-    return { soort, ouder, cx, cz, y0: 0, klein: false, rIn: 0.6, camLaag: null, deel: [], obst: [], statisch: [], D: null, b0: null, fase: 'nieuw', prog: null, nbJ: 4, dir: Math.random() < 0.5 ? -1 : 1,
+    return { soort, ouder, cx, cz, y0: 0, klein: false, rIn: 0.6, camLaag: null, deel: [], obst: [], statisch: [], D: null, T: 16, spanning: 0, b0: null, fase: 'nieuw', prog: null, nbJ: 4, dir: Math.random() < 0.5 ? -1 : 1,
              cirkel: false, cirkelUit: false, cirkelMag: true, cBasis: 0, cHoek: 0, cOmega: 0, terugTel: null, camAan: false,
              cam: { fase: null, ts0: 0, a: Math.random() * Math.PI * 2, dir: Math.random() < 0.5 ? -1 : 1, kraan: Math.random() < 0.75, k0: 6, k1: 14 } };
   }
@@ -206,8 +214,22 @@
   function startOpen(A, tel) {
     A.b0 = tel; A.fase = 'open';
     if (A.soort === 'zaal1') ringSlots(A, A.deel.slice());
-    for (const p of A.deel) { p.st = 'naarRing'; }
+    // ophypen in de ring: springen (elke sprong op de tel, elk een andere) en juichen
+    A.prog = sprongProgramma(period); A.progP = period;
+    A.nbJ = Math.max(2, 2 * Math.round(CL.juich.duration / period / 2));
+    for (const p of A.deel) { p.st = 'naarRing'; p.rust = 'juich'; p.offS = A.prog ? A.prog.seg[Math.floor(Math.random() * A.prog.seg.length)].U : 0; }
     noteer('open', { waar: A.soort, n: A.deel.length });
+  }
+  // op de tel: wie juicht en wie springt; hoe meer spanning (dichter bij de drop), hoe meer springers en hoe vaker een nieuwe keus.
+  // Iedereen leunt op de tel even naar binnen (juichen naar het midden). Gebouwde dansers: juichen = klappen boven het hoofd.
+  function ophypen(A, tel) {
+    const s = A.spanning, per = s > 0.75 ? 2 : 4;
+    for (const p of A.deel) {
+      if (p.st !== 'ring') continue;
+      if ((tel + p.offK) % per === 0) p.rust = Math.random() < 0.12 + 0.75 * s * (0.6 + 0.4 * p.T) ? 'spring' : 'juich';
+      const nx = A.cx - p.x, nz = A.cz - p.z, l = Math.hypot(nx, nz) || 1, k = 0.04 + 0.1 * s;
+      p.tdx += nx / l * k; p.tdz += nz / l * k;
+    }
   }
   function nieuwAnker(A, p, rIn, rUit, dichtbij) {  // plek in de springzone, niet te dicht bij de andere ankers
     const a0 = Math.atan2(p.x - A.cx, p.z - A.cz);
@@ -223,16 +245,18 @@
     return best;
   }
   function startDrop(A, D) {
-    A.D = D; A.fase = 'mosh';
-    A.prog = sprongProgramma(period);
+    A.D = D; A.fase = 'mosh'; A.T = Math.max(8, moshTellen());
+    // de sprongen van het ophypen lopen door (anders springt de heup van wie net springt naar een andere fase); alleen bij een ander tempo opnieuw
+    const nieuw = !A.prog || Math.abs(period - A.progP) / A.progP > 0.04;
+    if (nieuw) { A.prog = sprongProgramma(period); A.progP = period; }
     A.nbJ = Math.max(2, 2 * Math.round(CL.juich.duration / period / 2));
-    const n = A.deel.length, nr = A.cirkelMag ? (n >= 6 ? Math.round(n * 0.45) : 2) : 0;
+    const n = A.deel.length, nr = A.cirkelMag && cirkelStijl() ? (n >= 6 ? Math.round(n * 0.45) : 2) : 0;
     const wild = A.deel.slice().sort((a, b) => b.T - a.T);
     wild.forEach((p, i) => { p.renner = i < nr; });
     for (const p of A.deel) {
       snelheden(p);
       p.ank = null;
-      p.offS = A.prog ? A.prog.seg[Math.floor(Math.random() * A.prog.seg.length)].U : 0;  // elk een andere sprong, allemaal op de tel
+      if (nieuw || p.offS == null) p.offS = A.prog ? A.prog.seg[Math.floor(Math.random() * A.prog.seg.length)].U : 0;  // elk een andere sprong, allemaal op de tel
     }
     for (const p of A.deel) { p.ank = nieuwAnker(A, p, A.rIn, A.Rm, false); p.st = 'storm'; p.kijkDoel = null; }
     noteer('drop', { waar: A.soort, n, renners: nr });
@@ -250,9 +274,9 @@
     renners.forEach((p, i) => { p.st = 'cirkel'; p.slotI = i; p.nR = n; });
     for (const p of A.deel) if (!p.renner && (p.st === 'spring' || p.st === 'storm')) p.ank = nieuwAnker(A, p, A.rIn, A.Rc - 1.05, true);  // springers naar binnen
   }
-  function sluitArena(A, waarom) {  // geen drop (meer): iedereen terug
+  function sluitArena(A, waarom) {  // geen drop (meer), of een stijl zonder mosh: iedereen loopt rustig terug
     if (A.fase === 'terug') return;
-    A.fase = 'terug'; A.terugTel = Math.floor(beatPos);
+    A.fase = 'terug'; A.terugTel = Math.floor(beatPos); A.cirkelUit = true;
     for (const p of A.deel) if (p.st !== 'uit') naarHuis(p);
     noteer('dicht', { waar: A.soort, waarom });
   }
@@ -275,8 +299,8 @@
         if (d < 0.08 && p.snel < 0.25) p.st = 'ring';
         break;
       }
-      case 'ring':
-        p.anim = 'staan'; p.rust = 'juich';
+      case 'ring':  // ophypen (juichen of springen: ophypen() op de tel)
+        p.anim = 'staan';
         zoek(p, p.slot.x, p.slot.z, 0.3, 0.3);
         p.kijk = Math.atan2(A.cx - p.x, A.cz - p.z);
         break;
@@ -436,7 +460,7 @@
     const wlWil = p.anim === 'staan' ? 0 : klem(sp / Math.max(0.1, vLoc), 0, 1);
     p.wl += (wlWil - p.wl) * (1 - Math.exp(-dt * 10));
     if (p.anim !== 'staan') p.lr += ((p.anim === 'ren' ? 1 : 0) - p.lr) * (1 - Math.exp(-dt * 5));
-    p.rj += ((p.rust === 'juich' ? 1 : 0) - p.rj) * (1 - Math.exp(-dt * 5));
+    p.rj += ((p.rust === 'juich' ? 1 : 0) - p.rj) * (1 - Math.exp(-dt * (p.st === 'ring' ? 3 : 5)));  // ophypen: juichen <-> springen rustig overvloeien
   }
   const hv = new THREE.Vector3();
   function heupVan(p) { return p.built ? p.d.hips : hipsOf(p.d); }
@@ -456,18 +480,22 @@
     if (A.D != null) {
       const k = tb - A.D;
       if (!A.cirkel && k >= CIRKEL0 && A.fase === 'mosh') startCirkel(A);
-      if (A.cirkel && !A.cirkelUit && k >= CIRKEL1) { A.cirkelUit = true; for (const p of A.deel) if (p.st === 'cirkel') naarHuis(p); }
+      if (A.cirkel && !A.cirkelUit && k >= A.T - 1) { A.cirkelUit = true; for (const p of A.deel) if (p.st === 'cirkel') naarHuis(p); }
       if (A.cirkel && !A.cirkelUit) A.cHoek += A.cOmega * dt;
-      if (A.fase === 'mosh' && k >= TERUG) { A.fase = 'terug'; A.terugTel = A.D + TERUG; for (const p of A.deel) if (p.st !== 'terug' && p.st !== 'uit') naarHuis(p); }
-      if (opTel && A.fase === 'mosh' && k >= STORM && k < TERUG - 1) {
+      if (A.fase === 'mosh' && k >= A.T) { A.fase = 'terug'; A.terugTel = A.D + A.T; for (const p of A.deel) if (p.st !== 'terug' && p.st !== 'uit') naarHuis(p); }
+      if (opTel && A.fase === 'mosh' && k >= STORM && k < A.T - 1) {
         duwen(A, tb);
         if (Math.floor(k) % 4 === 2) for (const p of A.deel) if (p.st === 'spring') p.ank = nieuwAnker(A, p, A.rIn, A.cirkel && !A.cirkelUit ? A.Rc - 1.05 : A.Rm, true);  // de pit schuift
       }
-    } else if (A.fase === 'open' && Math.floor(tb) - A.b0 > MAX_OPEN) sluitArena(A, 'te lang');
+    } else if (A.fase === 'open') {
+      A.spanning = SP;
+      if (opTel) ophypen(A, Math.floor(tb));
+      if (Math.floor(tb) - A.b0 > MAX_OPEN) sluitArena(A, 'te lang');
+    }
     // obstakels van dit beeld
     const o = A.obstNu = A.statisch.slice();
     if (A.obstFn) for (const q of A.obstFn()) o.push(q);
-    if ((A.D != null && tb >= A.D && tb < A.D + TERUG) || A.cam.hoog === false) o.push(A.camLaag ? { x: A.camLaag.x, z: A.camLaag.z, r: 0.45 } : { x: A.cx, z: A.cz, r: 0.5 });  // plek van de lage camera
+    if ((A.D != null && tb >= A.D && tb < A.D + A.T && A.fase === 'mosh') || A.cam.hoog === false) o.push(A.camLaag ? { x: A.camLaag.x, z: A.camLaag.z, r: 0.45 } : { x: A.cx, z: A.cz, r: 0.5 });  // plek van de lage camera
     heupOffsets(A);
     for (const p of A.deel.slice()) gedrag(A, p, tb, dt);
     for (const p of A.deel) { uitwijken(A, p); versnel(p, dt); }
@@ -788,7 +816,7 @@
   // hoog: boven de kring, langzaam rond; pit: laag in het midden, rondkijkend tussen de springers; kraan: rond de pit omhoog
   function camProg(A, tb, ts, o) {
     const c = A.cam, k = A.D == null ? -1 : tb - A.D;
-    let fase = A.D == null || k < 0 ? 'hoog' : k < c.k0 ? 'pit' : k < c.k1 && c.kraan ? 'kraan' : k < TERUG ? 'pit' : 'hoog';
+    let fase = A.D == null || k < 0 ? 'hoog' : k < c.k0 ? 'pit' : k < c.k1 && c.kraan ? 'kraan' : k < A.T && A.fase === 'mosh' ? 'pit' : 'hoog';
     if (fase === 'hoog' && c.hoog === false) fase = 'pit';  // geen vrij zicht van boven: laag in (of aan) de kring
     if (fase !== c.fase) { c.fase = fase; c.ts0 = ts; c.a += 1.3 + Math.random() * 1.5; }
     const u = ts - c.ts0, y0 = A.y0;
@@ -807,7 +835,7 @@
       o.p.set(A.cx + Math.sin(a) * c.rK, y0 + 0.9 + (c.yK - 0.9) * v, A.cz + Math.cos(a) * c.rK); o.l.set(A.cx, y0 + 1.05 - 0.45 * v, A.cz); o.fov = 58;
     }
   }
-  const camEind = A => A.D != null ? A.D + TERUG + 4 : A.terugTel != null ? A.terugTel + 4 : A.b0 + MAX_OPEN + 8;
+  const camEind = A => A.terugTel != null ? A.terugTel + 4 : A.D != null ? A.D + A.T + 4 : A.b0 + MAX_OPEN + 8;
   const camKlaar = (A, tb) => tb >= camEind(A);
   function camTerug(A) {
     if (!A.camAan) return;
@@ -849,78 +877,261 @@
     return r;
   };
 
-  // --- wanneer: de opbouw opent de kring (als de pit gekozen is), de drop start de pit ---
-  let cyclus = null, gezienDrop = null, vorigeDropPit, laatsteTel = -1;
+  // --- stijl (club/stijl.js, window.clubStijl): alleen moshen bij dubstep, dnb, rock, metal, punk ---
+  const stijlPreset = () => { const s = window.clubStijl; return s && s.preset ? s.preset : null; };
+  function moshMag() {
+    if (!MP.aan || MP.keus === false) return false;
+    if (MP.keus === true) return true;  // handmatig afgedwongen (testen)
+    const p = stijlPreset();
+    return !!(p && p.mosh);             // geen stijl (nog) of een stijl zonder mosh: geen kring, geen pit
+  }
+  const ophypeMin = () => { const p = stijlPreset(); return p && p.ophypeMin > 0 ? p.ophypeMin : 8; };
+  const bevestig = () => { const p = stijlPreset(); return (p && p.dropBevestig) || 'kick'; };
+  const moshTellen = () => { const p = stijlPreset(); return p && p.moshTellen > 0 ? p.moshTellen : 16; };
+  const cirkelStijl = () => { const p = stijlPreset(); return !p || p.cirkel !== false; };
+
+  // --- de muziek per tel (eigen meting, ruw: zonder de auto-gain van de beatvolger) ---
+  // per tel het gemiddelde van bas, totaal en hoog; referentie = omhullende van de groove (vast in break, opbouw en zolang de kring wacht)
+  const HN = 64, hB = new Float32Array(HN), hT = new Float32Array(HN), hH = new Float32Array(HN), RAW = new Float32Array(3);
+  const ht = (a, t) => a[((t % HN) + HN) % HN];
+  let aTel = null, sB = 0, sT = 0, sH = 0, sN = 0, kort = 0, refB = 0, refT = 0, refH = 0, stilT = -99, stilRun = 0, rustRun = 0, wegStart = null;
+  function ruw() {
+    const nat = typeof native !== 'undefined' ? native : null;
+    if (nat) { RAW[0] = nat[0]; RAW[1] = nat[1]; RAW[2] = nat[2]; return; }  // pc-geluid.py / de Mac-app
+    if (typeof analyser !== 'undefined' && analyser && typeof bins !== 'undefined' && bins && ctx) {  // getUserMedia: zelfde banden als analyse()
+      const hz = ctx.sampleRate / analyser.fftSize;
+      for (let k = 0; k < 3; k++) {
+        const b = bands[k], i0 = Math.max(1, Math.floor(b.lo / hz)), i1 = Math.min(bins.length - 1, Math.ceil(b.hi / hz));
+        let s = 0;
+        for (let i = i0; i <= i1; i++) s += bins[i];
+        RAW[k] = s / (i1 - i0 + 1) / 255;
+      }
+      return;
+    }
+    for (let k = 0; k < 3; k++) RAW[k] = bands[k].v * bands[k].max;  // demo-beat
+  }
+  const omhul = (r, x) => !r ? x : r + (x - r) * (x > r ? 0.15 : 0.006);
+  function meetAudio(dt, tb) {
+    ruw();
+    const tot = RAW[0] + RAW[1] + RAW[2], tel = Math.floor(tb);
+    kort += (tot - kort) * (1 - Math.exp(-dt / 0.06));
+    if (refT > 0 && kort < 0.25 * refT) stilT = tb;  // (bijna) niets: een stilte, ook een korte vlak vóór de drop
+    if (aTel === null || tel > aTel + 8 || tel < aTel - 8) { aTel = tel; sB = sT = sH = sN = 0; }
+    if (tel > aTel) {  // tel klaar (de beatvolger trekt soms een stukje terug: dan telt het bij de lopende tel)
+      const mb = sN ? sB / sN : 0, mt = sN ? sT / sN : 0, mh = sN ? sH / sN : 0;
+      for (let t = aTel; t < tel; t++) { const i = ((t % HN) + HN) % HN; hB[i] = mb; hT[i] = mt; hH[i] = mh; telKlaar(t); }
+      aTel = tel; sB = sT = sH = sN = 0;
+    }
+    sB += RAW[0] * dt; sT += tot * dt; sH += RAW[2] * dt; sN += dt;
+  }
+  function telKlaar(t) {
+    const b = ht(hB, t), tt = ht(hT, t), hh = ht(hH, t), c = cyclus, R = window.clubRegie, st = live && R ? R.stand : 'groove';
+    const wacht = !!(c && c.open != null && c.D == null);
+    if (!refT || !(wacht || st === 'break' || st === 'opbouw')) { refB = omhul(refB, b); refT = omhul(refT, tt); refH = omhul(refH, hh); }
+    stilRun = tt < 0.3 * refT ? stilRun + 1 : 0;
+    if (b < 0.3 * refB && ht(hB, t - 1) >= 0.6 * refB) wegStart = t;  // de bas valt weg (begin van een break, meestal tel 1): anker voor de maten
+    rustRun = tt < 0.62 * refT && tt > 0.12 * refT ? rustRun + 1 : 0;  // rustiger stuk, de muziek speelt door
+    if (wacht) {
+      c.hPiek = Math.max(c.hPiek, hh);
+      c.breakRun = b < 0.35 * refB && tt >= 0.3 * refT && hh < 0.6 * c.hPiek ? c.breakRun + 1 : 0;  // bas weg, geen stilte, riser weg: break
+      if (b >= 0.45 * refB) c.basTerug = true;
+    }
+  }
+  const opMaat = t => wegStart == null || t - wegStart > 128 || ((t - wegStart) % 4 + 4) % 4 === 0;
+  const SM = { b: 0, t: 0, rb: 0, rt: 0, rh: 0 };
+  function sprongMaat(tel) {  // de lopende tel t.o.v. de referentie (b, t) en t.o.v. de 6 tellen ervoor (rb, rt, rh)
+    let pb = 0, pt = 0, ph = 0;
+    for (let t = tel - 6; t < tel; t++) { pb += ht(hB, t); pt += ht(hT, t); ph += ht(hH, t); }
+    pb /= 6; pt /= 6; ph /= 6;
+    const cb = sB / sN, ct = sT / sN, ch = sH / sN;
+    SM.b = cb / refB; SM.t = ct / refT;
+    SM.rb = cb / Math.max(pb, 0.08 * refB); SM.rt = ct / Math.max(pt, 0.05 * refT); SM.rh = ch / Math.max(ph, 0.05 * (refH || 0.1));
+    return SM;
+  }
+
+  // --- wanneer: opbouw (of een rustiger stuk bij riff) opent de kring, ophypen, de echte drop start de pit ---
+  let cyclus = null, gezienDrop = null, vorigeDropPit, laatsteTel = -1, laatsteSinds = null, laatsteEinde = -99, SP = 0;
   function rol() {
-    if (!MP.aan) return false;
     if (MP.keus !== null) return !!MP.keus;
     if (vorigeDropPit !== true) return true;  // de eerste drop, of de vorige had er geen
     return Math.random() < MP.kans;
   }
-  const pitLoopt = tb => [ZAAL, KAMER].some(A => A && A.D != null && tb < A.D + TERUG + 8);
-  function beslis(tb) {  // vóór de drop-golf van meeleven.js: is deze drop een pit?
-    if (pitLoopt(tb)) return;
-    if (!cyclus || (cyclus.D != null && Math.abs(Math.round(tb) - cyclus.D) > 1)) { cyclus = { pit: rol(), sinds: null, D: null }; cyclusNr++; }
+  const pitLoopt = tb => !!((ZAAL && ZAAL.D != null && tb < ZAAL.D + ZAAL.T + 8) || (KAMER && KAMER.D != null && tb < KAMER.D + KAMER.T + 8));
+  MP.golfWeg = () => !!(moshMag() && ((cyclus && cyclus.pit && cyclus.open != null && (cyclus.D == null || Math.abs(beatPos - cyclus.D) < 4)) || pitLoopt(beatPos)));
+  function nieuweCyclus(tel, sinds) {
+    cyclus = { pit: rol(), sinds, open: null, D: null, opbouwEind: null, kand: null, wacht: null, valse: 0, basTerug: false, hPiek: 0, breakRun: 0,
+               evTel: null, zonder: false, herstart: false, geteld: false, eind: tel + 48 };
+    cyclusNr++;
+    if (!cyclus.pit) vorigeDropPit = false;
+    noteer('cyclus', { pit: cyclus.pit, door: sinds != null ? 'opbouw' : 'rustig', stijl: window.clubStijl && clubStijl.naam });
   }
-  MP.golfWeg = () => !!(MP.aan && ((cyclus && cyclus.pit && (cyclus.D == null || Math.abs(beatPos - cyclus.D) < 4)) || pitLoopt(beatPos)));
-  function drop(D) {
+  function openKring(tel) {
+    cyclus.open = tel;
+    if (!ZAAL) { ZAAL = maakZaal(); if (ZAAL) { startOpen(ZAAL, tel); if (magCamZaal()) knipZaal(); } }
+    if (!KAMER) probeerKamer(tel, null);
+  }
+  function eindeCyclus(tel, dicht) {
+    if (dicht) { for (const A of [ZAAL, KAMER]) if (A && A.D == null) sluitArena(A, dicht); vorigeDropPit = false; }
+    cyclus = null; laatsteEinde = tel; SP = 0;
+  }
+  function afbouwen(waarom) {  // stijl zonder mosh (of uit): open kring en lopende pit rustig terug
+    if (ZAAL && ZAAL.fase !== 'terug') sluitArena(ZAAL, waarom);
+    if (KAMER && KAMER.fase !== 'terug') sluitArena(KAMER, waarom);
+    if (cyclus) { if (cyclus.D == null && cyclus.open != null) vorigeDropPit = false; cyclus = null; laatsteEinde = Math.floor(beatPos); SP = 0; }
+  }
+  function dropNu(D, zonder) {
+    const c = cyclus;
+    c.D = D; c.zonder = zonder; c.kand = null; c.wacht = null; vorigeDropPit = true;
+    if (ZAAL && ZAAL.D == null && ZAAL.fase === 'open') startDrop(ZAAL, D);
+    if (!KAMER) probeerKamer(D, D);
+    else if (KAMER.D == null && KAMER.fase === 'open') startDrop(KAMER, D);
+    if (ZAAL && ZAAL.D != null && magCamZaal()) knipZaal();
+    noteer('pit', { D, zonderStilte: zonder, tellen: moshTellen(), hype: D - c.open });
+  }
+  function herkend(D, zonder, bron) {  // echte drop gezien; nog niet genoeg opgehypet: dan op de eerste maatgrens nadat het mag
+    const c = cyclus;
+    if (D - c.open < ophypeMin()) { c.wacht = { D, zonder }; noteer('drop, nog even ophypen', { D, bron, hype: D - c.open }); return; }
+    dropNu(D, zonder);
+  }
+  // de lichtregie (of het drop-moment van de kern) zag een drop: bij na-stilte zonder stilte alleen als de bas er nu echt vol staat,
+  // en dan pas na een volle maat (een bas die na de opbouw terugkomt is vaak nog de aanloop)
+  function regieDrop(D) {
     D = Math.round(D);
     if (D === gezienDrop) return;
     gezienDrop = D;
-    if (pitLoopt(D)) return;  // nog een drop midden in de pit: die loopt gewoon door
-    if (!cyclus || cyclus.D != null) { cyclus = { pit: rol(), sinds: null, D: null }; cyclusNr++; }
-    cyclus.D = D;
-    vorigeDropPit = cyclus.pit;
-    noteer('drop?', { pit: cyclus.pit });
-    if (!cyclus.pit || !CL) return;
-    if (!ZAAL) ZAAL = maakZaal();
-    if (ZAAL && ZAAL.D == null) startDrop(ZAAL, D);
-    if (!KAMER) probeerKamer(D, D);
-    else if (KAMER.D == null) startDrop(KAMER, D);
-    if (ZAAL && magCamZaal()) knipZaal();
+    const c = cyclus;
+    if (!moshMag() || !c || !c.pit || c.open == null || c.D != null || c.kand || c.wacht) return;
+    const mode = bevestig(), stilVoor = stilT >= D - 4, tel = Math.floor(beatPos);
+    if (stilVoor || mode === 'riff' || mode === 'kick') { herkend(D, !stilVoor, 'regie'); return; }
+    if (mode === 'bassprong') { c.kand = { D, n: 1, bron: 'regie', vanaf: D }; return; }
+    const nuB = Math.max(aTel === tel && sN ? sB / sN : 0, ht(hB, tel - 1));
+    if (refB > 0 && nuB >= 0.75 * refB) { c.kand = { D, n: 4, bron: 'regie', vanaf: D }; noteer('kandidaat', { D, n: 4, bron: 'regie' }); }
+    else noteer('regie-drop genegeerd', { D, b: refB ? +(nuB / refB).toFixed(2) : 0 });
+  }
+  function wachten(tb, tel, opTel, R, st, mode) {
+    const c = cyclus, om = ophypeMin();
+    if (opTel && !KAMER) probeerKamer(tel, null);  // camera kwam later een kamer in: die doet mee
+    // kandidaat (inzet zonder stilte): valt de bas weg of komt er een stilte binnen n tellen, dan was het een valse inzet; anders de drop
+    // (bevestigd pas als de bas ook het begin van de tel erna nog vol is: een inzet van precies n tellen met daarna stilte telt niet)
+    if (c.kand) {
+      const k = c.kand;
+      let weg = stilT > k.D + 0.3;
+      for (let t = Math.max(k.D, k.vanaf); t < tel && !weg; t++) if (ht(hB, t) < 0.45 * refB || ht(hT, t) < 0.4 * refT) weg = true;
+      if (tel > k.vanaf) k.vanaf = tel;
+      if (weg) { c.kand = null; c.valse++; noteer('valse inzet', { D: k.D, bron: k.bron }); }
+      else if (tel >= k.D + k.n && tb - tel >= 0.3 && aTel === tel && sN > 0) {
+        if (sB / sN >= 0.45 * refB) { c.kand = null; noteer('inzet bevestigd', { D: k.D, nu: tel }); herkend(tel, true, k.bron); }
+        else { c.kand = null; c.valse++; noteer('valse inzet', { D: k.D, bron: k.bron }); }
+      }
+    }
+    // te vroeg herkend: op de eerste maatgrens (vanaf de drop) na ophypeMin, als de muziek dan nog vol is
+    if (c.wacht && opTel) {
+      const w = c.wacht;
+      if (stilT > w.D + 0.3) { c.wacht = null; noteer('drop weer weg'); }
+      else if (tel - c.open >= om && ((tel - w.D) % 4 + 4) % 4 === 0) {
+        const vol = mode === 'riff' ? ht(hT, tel - 1) >= 0.7 * refT : ht(hB, tel - 1) >= 0.5 * refB;
+        c.wacht = null;
+        if (vol) dropNu(tel, w.zonder); else noteer('drop weer weg');
+      }
+    }
+    if (c.D != null) return;
+    // de lopende tel: sprong t.o.v. de tellen ervoor (eenmaal per tel, na ~1/3 tel: dan zit de aanslag erin)
+    if (!c.kand && !c.wacht && c.evTel !== tel && tb - tel >= 0.35 && aTel === tel && sN > 0 && refB > 0 && refT > 0) {
+      c.evTel = tel;
+      const s = sprongMaat(tel), stilVoor = stilT >= tel - 4;
+      let n = -1;  // -1 geen drop, 0 meteen, n > 0: bevestigen na n tellen
+      if (mode === 'riff') { if (s.t >= 0.8 && s.rt >= 1.6 && s.rb >= 1.3 && s.rh >= 1.3) n = 0; }  // harde, volle inzet
+      else if (s.b >= 0.6 && s.rb >= 1.9) {
+        if (stilVoor) n = 0;                                                                         // stilte, dan de bas: de drop
+        else if (mode === 'na-stilte') n = s.b >= 0.75 && s.rb >= 2.5 ? 4 : -1;                       // zonder stilte: een maat vol blijven
+        else if (mode === 'bassprong') n = s.b >= 0.75 && s.rb >= 2.2 ? (opMaat(tel) ? 0 : 1) : -1;   // grote sprong op tel 1
+        else n = 0;
+      }
+      if (n === 0) herkend(tel, !stilVoor, 'sprong');
+      else if (n > 0) { c.kand = { D: tel, n, bron: 'sprong', vanaf: tel }; noteer('kandidaat', { D: tel, n, b: +s.b.toFixed(2), rb: +s.rb.toFixed(2) }); }
+    }
+    if (c.D != null) return;
+    // kring dicht: break (bas weg en de riser is weg), lange stilte, of te lang geen drop
+    let dicht = null;
+    if (mode !== 'riff' && c.breakRun >= 6) dicht = 'break';
+    else if (st === 'break' && c.opbouwEind != null) dicht = 'break';
+    else if (stilRun > 8) dicht = 'stil';
+    else if (!c.kand && !c.wacht && st !== 'opbouw' && tel > Math.max(c.open + WACHT, (c.opbouwEind != null ? c.opbouwEind : c.open) + 16)) dicht = 'geen drop';
+    else if (tel - c.open > MAX_OPEN - 8) dicht = 'te lang';
+    if (dicht) { noteer('kring dicht', { waarom: dicht }); eindeCyclus(tel, dicht); return; }
+    // spanning (hoe wild het ophypen is): loopt op met de tijd en de opbouw; vol bij een stilte of inzet vlak voor de drop
+    let sp = 0.3 + 0.4 * klem((tb - c.open) / (om + 8), 0, 1) + (st === 'opbouw' && R ? 0.3 * klem(R.opbouwTel / 16, 0, 1) : c.opbouwEind != null || c.sinds == null ? 0.25 : 0);
+    if (c.basTerug) sp += 0.1;
+    if (c.valse) sp += 0.15;
+    sp -= 0.1 * c.breakRun;  // het zakt in (break op komst): rustiger
+    if (c.kand || c.wacht || tb - stilT < 2) sp = 1;
+    SP = klem(sp, 0, 1);
+  }
+  // pit begonnen op een inzet zonder stilte (na-stilte) en dan toch nog stilte + bas: dát was de drop, de pit barst opnieuw los
+  function herstartKijk(tb, tel, mode) {
+    const c = cyclus;
+    if (!c.zonder || c.herstart || mode !== 'na-stilte' || tb - c.D > 12 || tel < c.D + 2 || c.evTel === tel || tb - tel < 0.35 || aTel !== tel || !sN || !refB) return;
+    c.evTel = tel;
+    const s = sprongMaat(tel);
+    if (!(stilT >= tel - 4 && stilT > c.D + 1 && s.b >= 0.6 && s.rb >= 1.9)) return;
+    c.herstart = true; c.D = tel;
+    for (const A of [ZAAL, KAMER]) if (A && A.fase === 'mosh') { A.cirkel = false; A.cirkelUit = false; startDrop(A, tel); }
+    noteer('drop na stilte: pit opnieuw', { D: tel });
+  }
+  function wanneer(tb, tel, opTel) {
+    const R = window.clubRegie, st = live && R ? R.stand : 'groove', mode = bevestig();
+    if (R && st === 'drop' && R.dropBeat >= 0 && R.dropBeat !== gezienDrop) regieDrop(R.dropBeat);
+    // openen: de opbouw (lichtregie), of bij riff (rock/metal/punk) een rustiger stuk: de harde inzet komt nog
+    if (st === 'opbouw' && R && R.sinds !== laatsteSinds) {
+      if (!cyclus && !pitLoopt(tb)) { nieuweCyclus(tel, R.sinds); laatsteSinds = R.sinds; }
+      else if (cyclus && cyclus.D == null) { cyclus.sinds = R.sinds; cyclus.opbouwEind = null; laatsteSinds = R.sinds; }  // nog een opbouw terwijl de kring wacht
+    }
+    if (!cyclus && mode === 'riff' && rustRun >= 6 && tel - laatsteEinde >= 24 && !pitLoopt(tb)) nieuweCyclus(tel, null);
+    const c = cyclus;
+    if (!c) return;
+    if (c.sinds != null && st !== 'opbouw' && c.opbouwEind == null) c.opbouwEind = tel;
+    if (!c.pit) {  // geen pit deze keer: alleen bijhouden tot de opbouw voorbij is
+      if (tel > c.eind || (c.opbouwEind != null && tel > c.opbouwEind + 8)) eindeCyclus(tel, null);
+      return;
+    }
+    if (c.open == null) {
+      if (c.sinds == null || (st === 'opbouw' && R.opbouwTel >= OPEN_TEL)) openKring(tel);
+      else if (c.opbouwEind != null) eindeCyclus(tel, 'opbouw te kort');  // opbouw al voorbij vóór de kring open was: geen ophypen, geen pit
+      return;
+    }
+    if (c.D == null) { wachten(tb, tel, opTel, R, st, mode); return; }
+    herstartKijk(tb, tel, mode);
+    // de loper kwam pas na de drop ver genoeg de kamer in: tot 2 tellen na de drop nog instappen
+    if (opTel && !KAMER && tb - c.D < 2.5) probeerKamer(tel, c.D);
+    // was de pit te zien (zaal-1-shot of een pit in de kamer van de camera)? zo niet, dan telt deze drop als een drop zonder pit
+    if (!c.geteld && tb > c.D + 3) {
+      c.geteld = true;
+      if (!(shot && shot.kind === 'moshpit') && !KAMER) { vorigeDropPit = false; noteer('niet gezien'); }
+    }
+    if (!pitLoopt(tb)) eindeCyclus(tel, null);
   }
   const oMoment = startMoment;
   startMoment = function (k, tb) {
-    if (k === 'drop' && MP.aan) try { beslis(typeof tb === 'number' ? tb : beatPos); } catch (e) { console.error('moshpit', e); }
     const r = oMoment.apply(this, arguments);
     if (k === 'drop' && MP.aan) try {
       const R = window.clubRegie, t = typeof tb === 'number' ? tb : beatPos;
-      drop(R && R.dropBeat >= 0 && Math.abs(R.dropBeat - t) < 2 ? R.dropBeat : t);
+      regieDrop(R && R.dropBeat >= 0 && Math.abs(R.dropBeat - t) < 2 ? R.dropBeat : t);
     } catch (e) { console.error('moshpit', e); }
     return r;
   };
 
   clubHooks.push((dt) => {
     try {
+      const tb = beatPos, tel = Math.floor(tb), opTel = tel !== laatsteTel;
+      laatsteTel = tel;
+      meetAudio(Math.min(dt, 0.1), tb);  // altijd: dan klopt de referentie ook als de stijl wisselt
       if (!clips()) return;
       meetVoorraad();
-      if (!MP.aan) return;
-      planBeeld();
-      const R = window.clubRegie, st = live && R ? R.stand : 'groove', tb = beatPos, tel = Math.floor(tb);
-      const opTel = tel !== laatsteTel; laatsteTel = tel;
-      if (R && st === 'drop' && R.dropBeat >= 0 && R.dropBeat !== gezienDrop) drop(R.dropBeat);
-      if (st === 'opbouw' && R) {
-        if (!cyclus || cyclus.D != null || cyclus.sinds !== R.sinds) { cyclus = { pit: rol(), sinds: R.sinds, D: null }; cyclusNr++; noteer('opbouw', { pit: cyclus.pit }); }
-        if (cyclus.pit && opTel && R.opbouwTel >= OPEN_TEL && !pitLoopt(tb)) {
-          if (!ZAAL) { ZAAL = maakZaal(); if (ZAAL) { startOpen(ZAAL, tel); if (magCamZaal()) knipZaal(); } }
-          if (!KAMER) probeerKamer(tel, null);
-        }
-      } else if (cyclus && cyclus.D == null && cyclus.sinds !== null) {
-        // opbouw voorbij zonder herkende drop (live-sets: de lichtregie mist de drop vaak): komt de bas terug, dan is dát de drop
-        // en barst de pit los; gaat het naar een break, dan gaat de kring weer dicht
-        const open = [ZAAL, KAMER].some(A => A && A.D == null);
-        if (st === 'groove' && open && cyclus.pit) { noteer('drop uit groove'); drop(Math.ceil(tb)); }
-        else { for (const A of [ZAAL, KAMER]) if (A && A.D == null) sluitArena(A, 'geen drop'); cyclus = null; }
-      }
-      // de loper kwam pas na de drop ver genoeg de kamer in: tot 2 tellen na de drop nog instappen
-      if (opTel && cyclus && cyclus.pit && cyclus.D != null && !KAMER && tb - cyclus.D < 2.5) probeerKamer(tel, cyclus.D);
-      // was de pit te zien (zaal-1-shot of een pit in de kamer van de camera)? zo niet, dan telt deze drop als een drop zonder pit
-      if (cyclus && cyclus.D != null && cyclus.pit && !cyclus.geteld && tb > cyclus.D + 3) {
-        cyclus.geteld = true;
-        if (!(shot && shot.kind === 'moshpit') && !KAMER) { vorigeDropPit = false; noteer('niet gezien'); }
-      }
+      if (moshMag()) { planBeeld(); wanneer(tb, tel, opTel); }
+      else afbouwen('stijl');
       if (KAMER && kamerGeldig(KAMER) && KAMER.deel.some(p => p.st !== 'uit')) doolhof.houdLoper(4);  // loper blijft tot iedereen thuis is
-      for (const A of [ZAAL, KAMER]) if (A) arenaBeeld(A, Math.min(dt, 0.05), tb, opTel);
+      if (ZAAL) arenaBeeld(ZAAL, Math.min(dt, 0.05), tb, opTel);
+      if (KAMER) arenaBeeld(KAMER, Math.min(dt, 0.05), tb, opTel);
     } catch (e) { console.error('moshpit', e); }
   });
 
@@ -935,7 +1146,7 @@
   function meet(A, tb) {
     const M = MP.meting || (MP.meting = {});
     const k = A.D == null ? null : tb - A.D;
-    const fase = A.D == null ? (A.fase === 'open' ? 'open' : 'terug') : k < 0 ? 'open' : k < STORM ? 'storm' : k < TERUG ? (A.deel.some(p => p.st === 'cirkel') ? 'cirkel' : 'mosh') : 'terug';
+    const fase = A.D == null ? (A.fase === 'open' ? 'open' : 'terug') : k < 0 ? 'open' : A.fase === 'terug' ? 'terug' : k < STORM ? 'storm' : k < A.T ? (A.deel.some(p => p.st === 'cirkel') ? 'cirkel' : 'mosh') : 'terug';
     const m = M[A.soort + ':' + fase] || (M[A.soort + ':' + fase] = { beelden: 0, maxHeup: 0, maxWortel: 0, minHeup: 9, minFig: 9, n: 0, wie: '' });
     m.beelden++; m.n = Math.max(m.n, A.deel.length);
     const pts = [], AN = window.clubOpt && clubOpt.anim;
@@ -964,13 +1175,21 @@
     if (!MP.aan) for (const A of [ZAAL, KAMER]) if (A) afbreken(A, 'uit');
   };
   MP.info = () => ({
-    aan: MP.aan, cyclus: cyclus && { pit: cyclus.pit, D: cyclus.D }, vorigeDropPit, botsingen: MP.botsingen,
+    aan: MP.aan, mag: moshMag(), stijl: window.clubStijl ? clubStijl.naam : null, dropBevestig: bevestig(), ophypeMin: ophypeMin(), moshTellen: moshTellen(),
+    cyclus: cyclus && { pit: cyclus.pit, open: cyclus.open, D: cyclus.D, kand: cyclus.kand && { D: cyclus.kand.D, n: cyclus.kand.n, bron: cyclus.kand.bron },
+      wacht: cyclus.wacht && cyclus.wacht.D, valse: cyclus.valse, basTerug: cyclus.basTerug, breakRun: cyclus.breakRun, opbouwEind: cyclus.opbouwEind, zonder: cyclus.zonder, herstart: cyclus.herstart },
+    spanning: +SP.toFixed(2), audio: MP.audio(), vorigeDropPit, botsingen: MP.botsingen,
     arenas: [ZAAL, KAMER].filter(Boolean).map(A => ({ waar: A.soort, soort: A.R && A.R.soort, fase: A.fase, D: A.D, b0: A.b0, ring: +A.Rring.toFixed(2), Rm: +A.Rm.toFixed(2),
       Rc: +A.Rc.toFixed(2), cirkel: A.cirkelMag, cam: A.camAan && A.cam.fase, midden: [+A.cx.toFixed(2), +A.cz.toFixed(2)],
       deel: A.deel.map(p => ({ st: p.st, fig: p.built ? p.d.type : p.d.M.file.replace(/^models\/|\.glb$/g, ''), x: +p.x.toFixed(2), z: +p.z.toFixed(2),
         v: +p.snel.toFixed(2), wl: +p.wl.toFixed(2), wDans: +p.wDans.toFixed(2), renner: p.renner, loper: !!p.loper })) })),
   });
   MP.arena = () => ({ zaal: ZAAL, kamer: KAMER });
+  MP.audio = (n = 8) => {  // testen: referentie en de laatste n tellen (bas en totaal t.o.v. de referentie)
+    const tel = Math.floor(beatPos), r = [];
+    for (let t = tel - n; t < tel; t++) r.push([+(ht(hB, t) / (refB || 1)).toFixed(2), +(ht(hT, t) / (refT || 1)).toFixed(2)]);
+    return { refB: +refB.toFixed(3), refT: +refT.toFixed(3), stilGeleden: +(beatPos - stilT).toFixed(1), rustRun, wegStart, tellen: r };
+  };
   MP.planProef = () => {  // testen: het achtergrondplan van deze kamer stap voor stap (duur per stap en totaal, ms)
     const z = window.doolhof && doolhof.toestand && doolhof.toestand();
     if (!z || !z.own || !z.own.isKamer) return null;
