@@ -54,7 +54,8 @@ vec4 val(vec3 p, float Gb, float R) {
   float hp = 0.12 + 1.7 * R * R * (1.0 - 0.6 * Gb);
   vec2 rel = p.xz - uMid, mz = vec2(R - 0.5, fract(R * 7.31) - 0.5);
   float moment = Gb + 0.3 + 0.45 * R;
-  float los = step(R, 0.33) * step(moment, 0.88) * clamp((uProg - moment) / 0.04, 0.0, 1.0), e = los * los;
+  // alleen balken boven de onderste 40% vallen los: vielen de dragende (onderste) eerst, dan zweefde de rest (octopus: 'vliegend hoofd')
+  float los = step(R, 0.33) * step(0.4, Gb) * step(moment, 0.88) * clamp((uProg - moment) / 0.04, 0.0, 1.0), e = los * los;
   vec3 a = vec3(p.x, mix(p.y, hp, e), p.z);
   a.xz += (rel / max(length(rel), 0.5) * 1.5 + mz * 3.0) * e;
   float kb = clamp(uVal * 1.15 - 0.15 * R, 0.0, 1.0), th = kb * kb * 1.45, ct = cos(th), st = sin(th);
