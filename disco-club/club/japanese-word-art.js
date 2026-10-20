@@ -1,6 +1,6 @@
 // Actual Japanese phrases on physical club surfaces. Existing glyph rain is an occasional accent.
 (function(root){
- if(typeof scene==='undefined'||typeof camera==='undefined'||typeof clubHooks==='undefined'||(root.clubJapaneseWordArt&&root.clubJapaneseWordArt.version===8))return;
+ if(typeof scene==='undefined'||typeof camera==='undefined'||typeof clubHooks==='undefined'||(root.clubJapaneseWordArt&&root.clubJapaneseWordArt.version===9))return;
  if(root.clubJapaneseWordArt)root.clubJapaneseWordArt.restore();
  const T=THREE,entries=[
   ['\u81ea\u7531\u306b\u8e0a\u308c','Dance freely'],['\u81ea\u6211\u306f\u30aa\u30d5\u30e9\u30a4\u30f3','Ego offline'],['\u5e38\u8b58\u3092\u7591\u3048','Question convention'],['\u611b\u3068\u4f4e\u97f3','Love and bass'],['\u4f4e\u97f3\u4e2d\u6bd2','Bass addiction'],
@@ -14,8 +14,8 @@
  const u={tWords:{value:texture},uLevel:{value:0},uTime:{value:0},uColor:{value:new T.Color(.15,1,.68)},uColorB:{value:new T.Color(1,.1,.5)},uStyle:{value:0},uSeed:{value:1}};
  const material=new T.ShaderMaterial({uniforms:u,vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',fragmentShader:`
  precision highp float;varying vec2 vUv;uniform sampler2D tWords;uniform float uLevel,uTime,uSeed,uStyle;uniform vec3 uColor,uColorB;
- void main(){float jumpPhase=fract(uTime/1.35);if(jumpPhase<.035)discard;
-  float burst=max(1.-step(.19,jumpPhase),smoothstep(.8,.98,sin(uTime*6.1+uSeed)));float band=floor(vUv.y*22.),tick=floor(uTime*24.);
+ void main(){if(uTime<.035)discard;
+  float burst=1.-smoothstep(.16,.32,uTime);float band=floor(vUv.y*22.),tick=floor(uTime*24.);
   vec2 uv=vUv;uv.x+=sin(band*4.7+tick*2.3)*burst*.15;
   uv.y+=sin(floor(vUv.x*9.)*7.1+tick)*burst*.018;
   float offset=burst*(.008+.018*abs(sin(tick*1.7)));
@@ -39,9 +39,9 @@
  spot('floating-projection',5.8,1.45,scene,[0,0,0]);const floating=spots[spots.length-1],floatTarget=new T.Vector3(),forward=new T.Vector3(),offset=new T.Vector3(),tilt=new T.Quaternion(),euler=new T.Euler();
  const noise=n=>{const x=Math.sin(n*127.1+u.uSeed.value*31.7)*43758.5453;return x-Math.floor(x);};
  function moveFloating(dt,immediate=false){camera.getWorldPosition(floatTarget);camera.getWorldDirection(forward);floatTarget.addScaledVector(forward,7.5);const jump=burstIndex,phase=Math.max(0,burstAge),tear=phase<.13?1:0,stutter=Math.floor(age*24);
-  const halfH=7.5*Math.tan(camera.fov*Math.PI/360),halfW=halfH*camera.aspect;offset.set((noise(jump+1)-.5)*halfW*1.8+tear*(noise(stutter+70)-.5)*1.3,(noise(jump+21)-.5)*halfH*1.7+tear*(noise(stutter+90)-.5)*.6,0).applyQuaternion(camera.quaternion);floatTarget.add(offset);
+  const halfH=7.5*Math.tan(camera.fov*Math.PI/360),halfW=halfH*camera.aspect;offset.set((noise(jump+1)-.5)*halfW*.95+tear*(noise(stutter+70)-.5)*1.3,(noise(jump+21)-.5)*halfH*.85+tear*(noise(stutter+90)-.5)*.6,0).applyQuaternion(camera.quaternion);floatTarget.add(offset);
   floating.mesh.position.copy(floatTarget);
-  euler.set((noise(jump+41)-.5)*.6,(noise(jump+51)-.5)*.9,(noise(jump+61)-.5)*2.2+tear*(noise(stutter+110)-.5)*.4);tilt.setFromEuler(euler);floating.mesh.quaternion.copy(camera.quaternion).multiply(tilt);
+  euler.set((noise(jump+41)-.5)*.6,(noise(jump+51)-.5)*.9,(noise(jump+61)-.5)*.65+tear*(noise(stutter+110)-.5)*.4);tilt.setFromEuler(euler);floating.mesh.quaternion.copy(camera.quaternion).multiply(tilt);
  }
  const overlayScene=new T.Scene(),overlay=new T.Mesh(spots[0].mesh.geometry,material);overlay.matrixAutoUpdate=false;overlayScene.add(overlay);
  function renderWords(){if(!enabled||!active||!selected||level<.001||typeof clubPrefsAvatar!=='undefined'&&clubPrefsAvatar)return;
@@ -70,14 +70,14 @@
   if(!enabled||typeof S!=='undefined'&&(!S.visual||S.visual==='uit')){u.uLevel.value=0;return;}
   if(!active&&age>=wait)start();
   if(active){
-   if(age>=burstAt&&burstCount<5){burstIndex++;burstCount++;burstAge=0;burstDuration=.24+Math.random()*.38;burstAt=age+3.2+Math.random()*2.5;
-    size=.5+Math.random()*2.1;for(const spot of spots)spot.mesh.scale.setScalar(spot===floating?size:Math.min(1,size));
+   if(age>=burstAt&&burstCount<5){burstIndex++;burstCount++;burstAge=0;burstDuration=1.5+Math.random();burstAt=age+burstDuration+2.8+Math.random()*2.2;
+    size=.9+Math.random()*1.3;for(const spot of spots)spot.mesh.scale.setScalar(spot===floating?size:Math.min(1,size));
    }else if(burstAge>=0)burstAge+=dt;
-   if(selected===floating)moveFloating(dt);level=burstAge>=0&&burstAge<burstDuration?smooth(burstAge/.025)*smooth((burstDuration-burstAge)/.035):0;u.uLevel.value=level;u.uTime.value=Math.max(0,burstAge)+.07;
+   if(selected===floating)moveFloating(dt);level=burstAge>=0&&burstAge<burstDuration?smooth(burstAge/.025)*smooth((burstDuration-burstAge)/.1):0;u.uLevel.value=level;u.uTime.value=Math.max(0,burstAge)+.07;
 
    if(age>=hold){active=false;age=0;level=0;u.uLevel.value=0;wait=30+Math.random()*30;for(const s of spots)s.mesh.visible=false;if(root.clubJapaneseRain)root.clubJapaneseRain.setEnabled(false);}
   }
  }
  clubHooks.push(tick);const warp=naTekenHooks.findIndex(h=>String(h).includes('copyFramebufferToTexture(origin,texture)'));if(warp<0)naTekenHooks.push(renderWords);else naTekenHooks.splice(warp,0,renderWords);
- root.clubJapaneseWordArt={version:8,preview:start,phrases:()=>entries.map(([japanese,meaning])=>({japanese,meaning})),info:()=>({enabled,active,episodes,phrase:index>=0?entries[index][0]:null,meaning:index>=0?entries[index][1]:null,surface:selected&&selected.name,opacity:+level.toFixed(3),phrases:entries.length,colorStyle:["solid","duotone","rainbow"][u.uStyle.value],size:+size.toFixed(2),physicalSurfaces:spots.length-1,hardGlitch:true,travellingProjection:true,teleporting:true,shortBursts:true,burstCount,burstDuration:+burstDuration.toFixed(2)}),setEnabled(v){enabled=!!v;if(!enabled){u.uLevel.value=0;for(const s of spots)s.mesh.visible=false;}},restore(){const i=clubHooks.indexOf(tick);if(i>=0)clubHooks.splice(i,1);const hook=naTekenHooks.indexOf(renderWords);if(hook>=0)naTekenHooks.splice(hook,1);for(const s of spots){s.mesh.parent.remove(s.mesh);s.mesh.geometry.dispose();}material.dispose();texture.dispose();delete root.clubJapaneseWordArt;}};
+ root.clubJapaneseWordArt={version:9,preview:start,phrases:()=>entries.map(([japanese,meaning])=>({japanese,meaning})),info:()=>({enabled,active,episodes,phrase:index>=0?entries[index][0]:null,meaning:index>=0?entries[index][1]:null,surface:selected&&selected.name,opacity:+level.toFixed(3),phrases:entries.length,colorStyle:["solid","duotone","rainbow"][u.uStyle.value],size:+size.toFixed(2),physicalSurfaces:spots.length-1,hardGlitch:true,travellingProjection:true,teleporting:true,shortBursts:true,burstCount,burstDuration:+burstDuration.toFixed(2)}),setEnabled(v){enabled=!!v;if(!enabled){u.uLevel.value=0;for(const s of spots)s.mesh.visible=false;}},restore(){const i=clubHooks.indexOf(tick);if(i>=0)clubHooks.splice(i,1);const hook=naTekenHooks.indexOf(renderWords);if(hook>=0)naTekenHooks.splice(hook,1);for(const s of spots){s.mesh.parent.remove(s.mesh);s.mesh.geometry.dispose();}material.dispose();texture.dispose();delete root.clubJapaneseWordArt;}};
 })(window);
