@@ -1,10 +1,10 @@
 // Present the existing morphing plasma as large floating 3D strands, without glass.
 (function(root){
- if(typeof renderer==='undefined'||(root.clubPlasmaWire&&root.clubPlasmaWire.version===4))return;
+ if(typeof renderer==='undefined'||(root.clubPlasmaWire&&root.clubPlasmaWire.version===5))return;
  if(root.clubPlasmaWire)root.clubPlasmaWire.setEnabled(false);
   root.ClubPlasmaWireMotion=function(time,episode,energy){
   const p=episode*2.39996323,t=time;
-  return {scale:2.95+.45*Math.sin(t*.31+p)+.20*Math.sin(t*.73-p),
+  return {scale:4.4+.50*Math.sin(t*.31+p)+.25*Math.sin(t*.73-p),
    x:.13*Math.sin(t*.37+p)+.035*Math.sin(t*.79),y:.085*Math.sin(t*.29-p),
    rx:.32*Math.sin(t*.51+p),ry:t*.24+p,rz:.26*Math.sin(t*.41-p)+t*.08};
  };
@@ -29,8 +29,9 @@
   try{return base.call(this,scene,camera);}finally{hidden.forEach((m,i)=>{m.visible=visibility[i];});group.quaternion.copy(quaternion);camera.zoom=zoom;camera.updateProjectionMatrix();}
  }
  renderer.render=render;
- root.clubPlasmaWire={version:4,setEnabled(v){enabled=!!v;},info:()=>({enabled,draws,glass:false,solidCore:false,layoutScale:+motion.scale.toFixed(3),position:[+motion.x.toFixed(3),+motion.y.toFixed(3)],rotation:[motion.rx,motion.ry,motion.rz],cameraScale:1.15})};
+ root.clubPlasmaWire={version:5,setEnabled(v){enabled=!!v;},info:()=>({enabled,draws,glass:false,solidCore:false,layoutScale:+motion.scale.toFixed(3),position:[+motion.x.toFixed(3),+motion.y.toFixed(3)],rotation:[motion.rx,motion.ry,motion.rz],cameraScale:1.15})};
 })(window);
+
 
 
 
