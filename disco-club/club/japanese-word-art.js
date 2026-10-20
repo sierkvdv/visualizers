@@ -1,6 +1,6 @@
 // Actual Japanese phrases on physical club surfaces. Existing glyph rain is an occasional accent.
 (function(root){
- if(typeof scene==='undefined'||typeof camera==='undefined'||typeof clubHooks==='undefined'||(root.clubJapaneseWordArt&&root.clubJapaneseWordArt.version===10))return;
+ if(typeof scene==='undefined'||typeof camera==='undefined'||typeof clubHooks==='undefined'||(root.clubJapaneseWordArt&&root.clubJapaneseWordArt.version===11))return;
  if(root.clubJapaneseWordArt)root.clubJapaneseWordArt.restore();
  const T=THREE,entries=[
   ['\u81ea\u7531\u306b\u8e0a\u308c','Dance freely'],['\u81ea\u6211\u306f\u30aa\u30d5\u30e9\u30a4\u30f3','Ego offline'],['\u5e38\u8b58\u3092\u7591\u3048','Question convention'],['\u611b\u3068\u4f4e\u97f3','Love and bass'],['\u4f4e\u97f3\u4e2d\u6bd2','Bass addiction'],
@@ -14,7 +14,7 @@
  const u={tWords:{value:texture},uLevel:{value:0},uTime:{value:0},uColor:{value:new T.Color(.15,1,.68)},uColorB:{value:new T.Color(1,.1,.5)},uStyle:{value:0},uSeed:{value:1}};
  const material=new T.ShaderMaterial({uniforms:u,vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',fragmentShader:`
  precision highp float;varying vec2 vUv;uniform sampler2D tWords;uniform float uLevel,uTime,uSeed,uStyle;uniform vec3 uColor,uColorB;
- void main(){float glitchPhase=mod(uTime,.95);if(glitchPhase<.025)discard;
+ void main(){float glitchPhase=uTime<1.07?1.:uTime-1.07;
   float burst=1.-smoothstep(.2,.34,glitchPhase);float band=floor(vUv.y*22.),tick=floor(uTime*24.);
   vec2 uv=vUv;uv.x+=sin(band*4.7+tick*2.3)*burst*.23;
   uv.y+=sin(floor(vUv.x*9.)*7.1+tick)*burst*.032;
@@ -38,7 +38,7 @@
  spot('floor-projection',8,2,scene,[0,.07,0]);spots[spots.length-1].mesh.rotation.x=-Math.PI/2;
  spot('floating-projection',5.8,1.45,scene,[0,0,0]);const floating=spots[spots.length-1],floatTarget=new T.Vector3(),forward=new T.Vector3(),offset=new T.Vector3(),tilt=new T.Quaternion(),euler=new T.Euler();
  const noise=n=>{const x=Math.sin(n*127.1+u.uSeed.value*31.7)*43758.5453;return x-Math.floor(x);};
- function moveFloating(dt,immediate=false){camera.getWorldPosition(floatTarget);camera.getWorldDirection(forward);floatTarget.addScaledVector(forward,7.5);const hop=Math.floor(Math.max(0,burstAge)/.95),jump=burstIndex*7+hop,phase=Math.max(0,burstAge)% .95,tear=phase<.22?1:0,stutter=Math.floor(age*24);
+ function moveFloating(dt,immediate=false){camera.getWorldPosition(floatTarget);camera.getWorldDirection(forward);floatTarget.addScaledVector(forward,7.5);const hop=burstAge>=1.?1:0,jump=burstIndex*7+hop,phase=Math.max(0,burstAge)-1.,tear=phase>=0&&phase<.22?1:0,stutter=Math.floor(age*24);
   const halfH=7.5*Math.tan(camera.fov*Math.PI/360),halfW=halfH*camera.aspect;offset.set((noise(jump+1)-.5)*halfW*.95+tear*(noise(stutter+70)-.5)*1.3,(noise(jump+21)-.5)*halfH*.85+tear*(noise(stutter+90)-.5)*.6,0).applyQuaternion(camera.quaternion);floatTarget.add(offset);
   floating.mesh.position.copy(floatTarget);
   euler.set((noise(jump+41)-.5)*.6,(noise(jump+51)-.5)*.9,(noise(jump+61)-.5)*.65+tear*(noise(stutter+110)-.5)*.4);tilt.setFromEuler(euler);floating.mesh.quaternion.copy(camera.quaternion).multiply(tilt);
@@ -60,7 +60,7 @@
  function draw(){ctx.clearRect(0,0,1024,256);let size=112;ctx.font='bold '+size+'px "Yu Gothic", "Meiryo", sans-serif';const width=ctx.measureText(entries[index][0]).width;if(width>930)size*=930/width;
   ctx.font='bold '+size+'px "Yu Gothic", "Meiryo", sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='white';ctx.shadowColor='white';ctx.shadowBlur=7;ctx.fillText(entries[index][0],512,128);texture.needsUpdate=true;
  }
- function start(which){if(!enabled)return;let next=Number.isInteger(which)&&which>=0&&which<entries.length?which:Math.floor(Math.random()*entries.length);if(next===index)next=(next+1)%entries.length;index=next;draw();active=true;age=0;burstIndex=0;burstAge=-1;burstAt=.5+Math.random();burstCount=0;hold=26+Math.random()*2;episodes++;selected=choose();u.uSeed.value=Math.random()*20;const hue=Math.random();u.uColor.value.setHSL(hue,.85,.62);u.uColorB.value.setHSL((hue+.22+Math.random()*.4)%1,.9,.6);const style=Math.random();u.uStyle.value=style<.5?0:style<.85?1:2;size=.65+Math.random()*1.05;
+ function start(which){if(!enabled)return;let next=Number.isInteger(which)&&which>=0&&which<entries.length?which:Math.floor(Math.random()*entries.length);if(next===index)next=(next+1)%entries.length;index=next;draw();active=true;age=0;burstIndex=0;burstAge=-1;burstAt=.5+Math.random();burstCount=0;hold=21+Math.random()*2;episodes++;selected=choose();u.uSeed.value=Math.random()*20;const hue=Math.random();u.uColor.value.setHSL(hue,.85,.62);u.uColorB.value.setHSL((hue+.22+Math.random()*.4)%1,.9,.6);const style=Math.random();u.uStyle.value=style<.5?0:style<.85?1:2;size=.65+Math.random()*1.05;
   for(const spot of spots)spot.mesh.scale.setScalar(spot===floating?size:Math.min(1,size));
   for(const spot of spots)spot.mesh.visible=spot===selected;
   if(root.clubJapaneseRain){root.clubJapaneseRain.setEnabled(false);if(Math.random()<.2){root.clubJapaneseRain.setEnabled(true);root.clubJapaneseRain.preview();}}
@@ -70,7 +70,7 @@
   if(!enabled||typeof S!=='undefined'&&(!S.visual||S.visual==='uit')){u.uLevel.value=0;return;}
   if(!active&&age>=wait)start();
   if(active){
-   if(age>=burstAt&&burstCount<5){burstIndex++;burstCount++;burstAge=0;burstDuration=2.6+Math.random()*.6;burstAt=age+burstDuration+1.+Math.random()*.5;
+   if(age>=burstAt&&burstCount<3){burstIndex++;burstCount++;burstAge=0;burstDuration=2.+Math.random()*.3;burstAt=age+burstDuration+3.5+Math.random();
     size=.9+Math.random()*1.3;for(const spot of spots)spot.mesh.scale.setScalar(spot===floating?size:Math.min(1,size));
    }else if(burstAge>=0)burstAge+=dt;
    if(selected===floating)moveFloating(dt);level=burstAge>=0&&burstAge<burstDuration?smooth(burstAge/.025)*smooth((burstDuration-burstAge)/.1):0;u.uLevel.value=level;u.uTime.value=Math.max(0,burstAge)+.07;
@@ -79,5 +79,5 @@
   }
  }
  clubHooks.push(tick);const warp=naTekenHooks.findIndex(h=>String(h).includes('copyFramebufferToTexture(origin,texture)'));if(warp<0)naTekenHooks.push(renderWords);else naTekenHooks.splice(warp,0,renderWords);
- root.clubJapaneseWordArt={version:10,preview:start,phrases:()=>entries.map(([japanese,meaning])=>({japanese,meaning})),info:()=>({enabled,active,episodes,phrase:index>=0?entries[index][0]:null,meaning:index>=0?entries[index][1]:null,surface:selected&&selected.name,opacity:+level.toFixed(3),phrases:entries.length,colorStyle:["solid","duotone","rainbow"][u.uStyle.value],size:+size.toFixed(2),physicalSurfaces:spots.length-1,hardGlitch:true,travellingProjection:true,teleporting:true,shortBursts:true,burstCount,burstDuration:+burstDuration.toFixed(2)}),setEnabled(v){enabled=!!v;if(!enabled){u.uLevel.value=0;for(const s of spots)s.mesh.visible=false;}},restore(){const i=clubHooks.indexOf(tick);if(i>=0)clubHooks.splice(i,1);const hook=naTekenHooks.indexOf(renderWords);if(hook>=0)naTekenHooks.splice(hook,1);for(const s of spots){s.mesh.parent.remove(s.mesh);s.mesh.geometry.dispose();}material.dispose();texture.dispose();delete root.clubJapaneseWordArt;}};
+ root.clubJapaneseWordArt={version:11,preview:start,phrases:()=>entries.map(([japanese,meaning])=>({japanese,meaning})),info:()=>({enabled,active,episodes,phrase:index>=0?entries[index][0]:null,meaning:index>=0?entries[index][1]:null,surface:selected&&selected.name,opacity:+level.toFixed(3),phrases:entries.length,colorStyle:["solid","duotone","rainbow"][u.uStyle.value],size:+size.toFixed(2),physicalSurfaces:spots.length-1,hardGlitch:true,travellingProjection:true,teleporting:true,shortBursts:true,burstCount,burstDuration:+burstDuration.toFixed(2)}),setEnabled(v){enabled=!!v;if(!enabled){u.uLevel.value=0;for(const s of spots)s.mesh.visible=false;}},restore(){const i=clubHooks.indexOf(tick);if(i>=0)clubHooks.splice(i,1);const hook=naTekenHooks.indexOf(renderWords);if(hook>=0)naTekenHooks.splice(hook,1);for(const s of spots){s.mesh.parent.remove(s.mesh);s.mesh.geometry.dispose();}material.dispose();texture.dispose();delete root.clubJapaneseWordArt;}};
 })(window);
