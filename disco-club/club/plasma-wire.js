@@ -1,6 +1,6 @@
 // Present the existing morphing plasma as large floating 3D strands, without glass.
 (function(root){
- if(typeof renderer==='undefined'||(root.clubPlasmaWire&&root.clubPlasmaWire.version===5))return;
+ if(typeof renderer==='undefined'||(root.clubPlasmaWire&&root.clubPlasmaWire.version===6))return;
  if(root.clubPlasmaWire)root.clubPlasmaWire.setEnabled(false);
   root.ClubPlasmaWireMotion=function(time,episode,energy){
   const p=episode*2.39996323,t=time;
@@ -12,10 +12,14 @@
  function render(scene,camera){
   for(const mesh of scene&&scene.children||[]){const u=mesh.material&&mesh.material.uniforms;
    if(!u||!u.uPlasmaLayout||!mesh.userData.clubPlasma3DHook||patched.has(mesh))continue;
-   const before=mesh.onBeforeRender,layout=new THREE.Vector3();
-   mesh.onBeforeRender=function(...args){before.apply(this,args);const uu=this.material&&this.material.uniforms;
-    if(enabled&&uu&&uu.uPlasmaAmount.value>.001){layout.copy(uu.uPlasmaLayout.value);layout.z*=motion.scale;layout.x+=motion.x;layout.y+=motion.y;uu.uPlasmaLayout.value=layout;}
-   };patched.add(mesh);
+   // Read the final layout after the inner compositor has assigned its base value.
+   // A uniform accessor survives those assignments without accumulating scale.
+   const uniform=u.uPlasmaLayout,layout=new THREE.Vector3();let source=uniform.value;
+   Object.defineProperty(uniform,'value',{configurable:true,get(){
+    if(!enabled)return source;
+    layout.copy(source);layout.z*=motion.scale;layout.x+=motion.x;layout.y+=motion.y;return layout;
+   },set(value){if(value!==layout)source=value;}});
+   patched.add(mesh);
   }
   let group;
   if(camera&&camera.isPerspectiveCamera&&scene.children&&scene.children.length<9)group=scene.children.find(g=>g.isGroup&&g.children.length>=40&&g.children.some(m=>m.material&&m.material.uniforms&&m.material.uniforms.endpoint));
@@ -29,8 +33,9 @@
   try{return base.call(this,scene,camera);}finally{hidden.forEach((m,i)=>{m.visible=visibility[i];});group.quaternion.copy(quaternion);camera.zoom=zoom;camera.updateProjectionMatrix();}
  }
  renderer.render=render;
- root.clubPlasmaWire={version:5,setEnabled(v){enabled=!!v;},info:()=>({enabled,draws,glass:false,solidCore:false,layoutScale:+motion.scale.toFixed(3),position:[+motion.x.toFixed(3),+motion.y.toFixed(3)],rotation:[motion.rx,motion.ry,motion.rz],cameraScale:1.15})};
+ root.clubPlasmaWire={version:6,setEnabled(v){enabled=!!v;},info:()=>({enabled,draws,glass:false,solidCore:false,layoutScale:+motion.scale.toFixed(3),position:[+motion.x.toFixed(3),+motion.y.toFixed(3)],rotation:[motion.rx,motion.ry,motion.rz],cameraScale:1.15})};
 })(window);
+
 
 
 
