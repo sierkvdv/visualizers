@@ -1,13 +1,14 @@
 // Present the existing morphing plasma as large floating 3D strands, without glass.
 (function(root){
- if(typeof renderer==='undefined'||root.clubPlasmaWire)return;
+ if(typeof renderer==='undefined'||(root.clubPlasmaWire&&root.clubPlasmaWire.version===2))return;
+ if(root.clubPlasmaWire)root.clubPlasmaWire.setEnabled(false);
  const base=renderer.render,patched=new WeakSet();let enabled=true,draws=0;
  function render(scene,camera){
   for(const mesh of scene&&scene.children||[]){const u=mesh.material&&mesh.material.uniforms;
    if(!u||!u.uPlasmaLayout||!mesh.userData.clubPlasma3DHook||patched.has(mesh))continue;
    const before=mesh.onBeforeRender,layout=new THREE.Vector3();
    mesh.onBeforeRender=function(...args){before.apply(this,args);const uu=this.material&&this.material.uniforms;
-    if(enabled&&uu&&uu.uPlasmaAmount.value>.001){layout.copy(uu.uPlasmaLayout.value);layout.z*=1.4;uu.uPlasmaLayout.value=layout;}
+    if(enabled&&uu&&uu.uPlasmaAmount.value>.001){layout.copy(uu.uPlasmaLayout.value);layout.z*=1.9;uu.uPlasmaLayout.value=layout;}
    };patched.add(mesh);
   }
   let group;
@@ -19,5 +20,6 @@
   try{return base.call(this,scene,camera);}finally{hidden.forEach((m,i)=>{m.visible=visibility[i];});camera.zoom=zoom;camera.updateProjectionMatrix();}
  }
  renderer.render=render;
- root.clubPlasmaWire={setEnabled(v){enabled=!!v;},info:()=>({enabled,draws,glass:false,solidCore:false,layoutScale:1.4,cameraScale:1.15})};
+ root.clubPlasmaWire={version:2,setEnabled(v){enabled=!!v;},info:()=>({enabled,draws,glass:false,solidCore:false,layoutScale:1.9,cameraScale:1.15})};
 })(window);
+
