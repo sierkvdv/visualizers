@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="nl">
-<head>
+<head><script id="club-viewer-route">(()=>{if(location.hostname!=='club.sierk.dev')return;const q=new URLSearchParams(location.search);if(!q.has('uitzenden')&&!q.has('regie')&&!q.has('cast')&&!q.has('wandelen'))location.replace('/kijken/');})();</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Deep SamSo Club</title>
@@ -60,8 +60,17 @@
   </select>
   <select id="strobe">
     <option value="uit">Stroboscoop: uit</option>
+    <option value="weinig">Stroboscoop: heel soms (zacht)</option>
     <option value="soms">Stroboscoop: af en toe</option>
     <option value="vaak">Stroboscoop: vaak</option>
+  </select>
+  <select id="visual">
+    <option value="uit">VJ-laag: uit</option>
+    <option value="auto">VJ-laag: auto (alles door elkaar)</option>
+    <option value="mix">VJ-laag: mix op de beat</option>
+    <option value="golf">VJ-laag: golven (langzaam op en neer)</option>
+    <option value="flits">VJ-laag: knippen (hard aan/uit op de tel)</option>
+    <option value="vol">VJ-laag: vol (alleen visuals)</option>
   </select>
   <select id="floor">
     <option value="auto">Vloer: afwisselend</option>
@@ -105,11 +114,15 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 const TAU = Math.PI * 2;
 
 // --- Instellingen ---
-const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'soms', smoke: 0.6, mono: false, auto: 0, fb: 0, mirror: false, floor: 'auto' };
-try { Object.assign(S, JSON.parse(localStorage.getItem('discoclub') || '{}')); } catch (e) {}
+const clubPrefsQuery=new URLSearchParams(location.search);
+const clubPrefsAvatar=!['uitzenden','cast','regie'].some(k=>clubPrefsQuery.has(k))&&(location.pathname.startsWith('/live/')||clubPrefsQuery.has('wandelen')||clubPrefsQuery.get('live')==='1');
+const clubPrefsKey=clubPrefsAvatar?'discoclub-avatar':'discoclub';
+const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'soms', smoke: 0.6, mono: false, auto: 0, fb: 0, mirror: false, floor: 'auto', visual: 'uit' };
+try { Object.assign(S, JSON.parse(localStorage.getItem(clubPrefsKey) || '{}')); } catch (e) {}
 if (!S.sporenUitWillekeur) { S.fb = 0; S.sporenUitWillekeur = 1; }  // eenmalig: sporen die de willekeur ooit bewaarde weer uit (horen bij zaal 2)
-if (!['uit', 'soms', 'vaak'].includes(S.strobe)) S.strobe = S.strobe === 'vol' ? 'vaak' : 'soms';
-function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } catch (e) {} }
+if (!['uit', 'weinig', 'soms', 'vaak'].includes(S.strobe)) S.strobe = S.strobe === 'vol' ? 'vaak' : 'soms';
+const strobeZacht = () => S.strobe === 'weinig' ? 0.5 : 1;  // 'heel soms': halve sterkte, zeldzamer en korter
+function save() { try { localStorage.setItem(clubPrefsKey, JSON.stringify(S)); } catch (e) {} }
 
 // Kwaliteit: club/kwaliteit.js kiest hoog/midden/laag en zet KW; deze beginwaarden zijn 'hoog' (zoals altijd)
 const MOBIEL = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
@@ -1279,6 +1292,7 @@ function fillZone2() {  // vier dansers in de tweede zaal (alleen zichtbaar en b
 const z2Hooks = [];
 // Losse verbeteringen van de hoofdzaal (club/*.js) haken hier in: clubHooks.push((dt, now) => ...), elke frame.
 const clubHooks = [];
+const naTekenHooks = [];  // na teken(): lagen óver het beeld (club/visual.js)
 function updateZone2(dt, now) {
   zone2.visible = camera.position.z > DOOR2.z - 4.5 && camera.position.x > 3;
   if (!zone2.visible) return;
@@ -2326,6 +2340,7 @@ $('btnSys').onclick = async () => {
 const inApp = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.app);
 let native = null;
 window.nativeBands = (b, m, t) => { native = [b, m, t]; };
+let totS = 0, totMax = 0.3, luid = 1; const rauw = [0, 0, 0];  // geluidsniveau t.o.v. de recente piek (analyse)
 window.nativeStatus = msg => { status.textContent = msg.startsWith('NOACCESS') ? 'geen toegang tot systeemaudio' : msg; };
 if (inApp) { $('btnSys').hidden = true; $('devices').hidden = true; status.textContent = 'audio starten…'; }
 
@@ -2360,11 +2375,21 @@ function analyse(dt, now) {
     }
     if (!(raw >= 0)) raw = 0;  // NaN/undefined van buiten zou b.max voorgoed NaN maken
     total += raw;
+    rauw[k] = raw;
+  }
+  // stilte en zachte stukken: de auto-gain (b.max zakt langzaam) maakte na een minuut rust van fluisterzacht geluid een vol feest.
+  // luid = geluidsniveau t.o.v. de recente piek (gladgestreken over ~0,5 s, anders klopt het mee op de kick): onder ~12% stil,
+  // vanaf ~45% vol; daartussen dansen, licht en drops zachter mee (18-10, Sierk: 'gaat helemaal los terwijl er nauwelijks geluid is')
+  totS += (total - totS) * Math.min(1, dt * 2);
+  totMax = Math.max(totS, totMax - dt * 0.01, 0.3);
+  luid = Math.min(1, Math.max(0, (totS / totMax - 0.12) / 0.33));
+  for (let k = 0; k < bands.length; k++) {
+    const b = bands[k], raw = rauw[k];
     b.max = Math.max(raw, b.max - dt * 0.03, 0.05);
-    const n = Math.min(1, raw / b.max * S.sens);
+    const n = Math.min(1, raw / b.max * S.sens) * (0.25 + 0.75 * luid);
     b.v += (n - b.v) * (n > b.v ? 0.5 : 0.08);
   }
-  energy += ((total > 0.06 ? Math.min(1, 0.45 + bands[0].v * 0.6) * Math.min(1, S.sens + 0.2) : 0) - energy) * Math.min(1, dt * 2);
+  energy += ((total > 0.06 ? Math.min(1, 0.45 + bands[0].v * 0.6) * Math.min(1, S.sens + 0.2) * (0.3 + 0.7 * luid) : 0) - energy) * Math.min(1, dt * 2);
   const bass = bands[0].v;
   pulse *= Math.exp(-dt * 6);
   beatPos += dt / period;
@@ -2665,13 +2690,13 @@ function frame(nowMs) {
   // strobe-salvo's
   if (S.strobe === 'uit' || energy < 0.3) { strobeUntil = 0; nextStrobe = Math.max(nextStrobe, now + 5); }
   else if (now > nextStrobe) {
-    strobeUntil = now + rnd(1.5, 3.5);
-    nextStrobe = strobeUntil + (S.strobe === 'vaak' ? rnd(10, 22) : rnd(25, 55));
+    strobeUntil = now + (S.strobe === 'weinig' ? rnd(0.8, 1.6) : rnd(1.5, 3.5));
+    nextStrobe = strobeUntil + (S.strobe === 'vaak' ? rnd(10, 22) : S.strobe === 'weinig' ? rnd(90, 180) : rnd(25, 55));
     strobeHz = rnd(9, 13);
   }
-  const strobing = now < strobeUntil, flash = strobing && (now * strobeHz) % 1 < 0.3 ? 1 : 0;
+  const strobing = now < strobeUntil, flash = strobing && (now * strobeHz) % 1 < 0.3 ? strobeZacht() : 0;
   // niveaus en kleuren vloeien naar de huidige lichtstand; tijdens een salvo dooft al het andere licht bijna uit
-  const kL = 1 - Math.exp(-dt * 3), dim = strobing ? 0.12 : 1;
+  const kL = 1 - Math.exp(-dt * 3), dim = strobing ? (S.strobe === 'weinig' ? 0.4 : 0.12) : 1;
   for (const key in L) L[key] += (cue[key] - L[key]) * kL;
   pal[0].lerp(palTarget[0], kL * 0.7);
   pal[1].lerp(palTarget[1], kL * 0.7);
@@ -2753,7 +2778,7 @@ function frame(nowMs) {
   strobeMat.color.setScalar(flash);
   if (bloom) bloom.strength = (0.5 + 0.35 * hit * dim + 0.35 * flash) * (camera.position.z > TUN_END - 0.5 ? 0.55 : 1);  // zaal 2 is al fel
   if (feedback) {
-    const tripping = camera.position.z > TUN_END - 0.5;  // in de tweede zaal: alles laat sporen na en draait langzaam
+    const tripping = !(window.clubLopen && clubLopen.zelf && !clubLopen.visualsEnabled) && camera.position.z > TUN_END - 0.5 && camera.position.z < Z2.z + Z2.d / 2 && camera.position.x > Z2.x - Z2.w / 2 && camera.position.x < Z2.x + Z2.w / 2;  // in de tweede zaal: alles laat sporen na en draait langzaam
     feedback.enabled = S.fb > 0.01 || S.mirror || tripping;
     const u = feedback.material.uniforms;
     u.amount.value = tripping ? Math.max(S.fb, 0.4 + 0.1 * pulse) : S.fb;
@@ -2793,6 +2818,7 @@ function frame(nowMs) {
   updateCamera(now);
 
   teken();
+  for (const h of naTekenHooks) { try { h(dt, performance.now() / 1000); } catch (e) { console.error('na-teken-hook', e); } }
   meters.forEach((el, i) => el.style.height = (2 + bands[i].v * 22) + 'px');
   requestAnimationFrame(frame);
 }
@@ -3012,7 +3038,7 @@ function teken() {
 function syncUI() {
   $('count').value = S.count; $('countV').textContent = S.count;
   $('cast').value = S.cast; $('cam').value = S.cam; $('strobe').value = S.strobe;
-  $('mono').checked = S.mono; $('auto').value = S.auto; $('mirror').checked = S.mirror; $('floor').value = S.floor;
+  $('mono').checked = S.mono; $('auto').value = S.auto; $('mirror').checked = S.mirror; $('floor').value = S.floor; $('visual').value = S.visual || 'uit';
   $('fb').value = S.fb; $('fbV').textContent = Math.round(S.fb * 100) + '%';
   $('smoke').value = S.smoke; $('smokeV').textContent = Math.round(S.smoke * 100) + '%';
   $('sens').value = S.sens; $('sensV').textContent = Math.round(S.sens * 100) + '%';
@@ -3023,6 +3049,7 @@ $('cam').onchange = e => { S.cam = e.target.value; save(); };
 $('strobe').onchange = e => { S.strobe = e.target.value; save(); };
 $('mirror').onchange = e => { S.mirror = e.target.checked; save(); };
 $('floor').onchange = e => { S.floor = e.target.value; save(); };
+$('visual').onchange = e => { S.visual = e.target.value; save(); };
 $('fb').oninput = e => { S.fb = +e.target.value; syncUI(); save(); };
 $('mono').onchange = e => { S.mono = e.target.checked; save(); };
 $('btnAll').onclick = () => { randomizeAll(); autoNext = performance.now() / 1000 + S.auto; };
@@ -3046,8 +3073,9 @@ addEventListener('keydown', e => {
   if (k === 'n') buildCast();  // nieuwe bezetting
   if (k === 'b') { S.mono = !S.mono; syncUI(); save(); }
   if (k === 'x') $('btnAll').click();
+  if (k === 'j') { const o = ['uit', 'auto', 'mix', 'golf', 'flits', 'vol']; S.visual = o[(o.indexOf(S.visual) + 1) % o.length]; syncUI(); save(); }
   if (k === 'v') { const o = ['auto', 'tegels', 'fractal']; S.floor = o[(o.indexOf(S.floor) + 1) % 3]; syncUI(); save(); }
-  if (k === 's') { const o = ['uit', 'soms', 'vaak']; S.strobe = o[(o.indexOf(S.strobe) + 1) % 3]; syncUI(); save(); }
+  if (k === 's') { const o = ['uit', 'weinig', 'soms', 'vaak']; S.strobe = o[(o.indexOf(S.strobe) + 1) % 4]; syncUI(); save(); }
   if (k === 'c') { const o = ['auto', ...shotKinds()]; S.cam = o[(o.indexOf(S.cam) + 1) % o.length]; syncUI(); save(); }
   if (k === ' ') shot = null;  // spatie: direct een ander shot
 });
@@ -3103,8 +3131,15 @@ addEventListener('DOMContentLoaded', () => requestAnimationFrame(frame));
 <script src="club/moshpit.js"></script>
 <script src="club/eend.js"></script>
 <script src="club/meeluisteren.js"></script>
-<script src="club/nuspeelt.js"></script>
+<script src="club/nuspeelt.js?v=avatar-brb-2"></script>
 <script src="club/voorwarm.js"></script>
 <script src="club/diag.js"></script>
+<script src="club/visual.js"></script>
+<script src="live/laad.js?v=avatar-visual-optin-1"></script>
+<script src="club/visual-next.js?v=atlas-26"></script>
+<script src="club/broadcast-color.js?v=1"></script>
+<script src="club/geometry-music.js?v=1"></script>
+<script src="club/spatial-timing.js?v=1"></script>
+<script src="club/visual-weave.js?v=1"></script>
 </body>
 </html>
