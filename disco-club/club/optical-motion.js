@@ -2,9 +2,11 @@
 (function(root){
  root.ClubOpticalShader=function(source){
   if(source.includes('uRingClock')||!source.includes('clubLightPrevious'))return source;
-  const marker='vec4 clubLight(vec3 effect,vec2 uv,float strength){';
+  const fn=source.includes('vec4 clubLightWithoutPlasma(')?'clubLightWithoutPlasma':'clubLight';
+  const marker='vec4 '+fn+'(vec3 effect,vec2 uv,float strength){';
+  if(!source.includes(marker))return source;
   const body=`uniform float uRingMotion,uRingClock;
- vec4 clubLight(vec3 effect,vec2 uv,float strength){
+ vec4 ${fn}(vec3 effect,vec2 uv,float strength){
   vec2 uvEffect=uv;
   if(uRingMotion>.001){
    float t=uRingClock;

@@ -1,3 +1,6 @@
+// Load shared constructors once, including when a loader requests this script twice.
+(function(){
+ if(typeof window!=='undefined'){if(window.__clubAtlasDefinitionsReady)return;window.__clubAtlasDefinitionsReady=true;}
 // Shared musical envelope: raw level and sustained onsets, independent of band auto-gain.
 (function(root){
   class MusicMood {
@@ -384,11 +387,12 @@
 })(window);
 
 
-// Deep SamSo VJ atlas. Additive visual episodes; can be loaded while the scene is running.
-(() => {
+// Deep SamSo VJ atlas. Wait for the original layer before capturing its compositor hooks.
+(function initClubAtlas() {
   'use strict';
   if (window.clubVisualNext && window.clubVisualNext.version !== 'atlas-26') { window.clubVisualNext.restore(); delete window.clubVisualNext; }
   if (window.clubVisualNext || typeof THREE === 'undefined' || typeof naTekenHooks === 'undefined' || typeof clubHooks === 'undefined') return;
+  if (!window.clubVisual) { requestAnimationFrame(initClubAtlas); return; }
   const names = ['Vloeibaar pigment','Spiegelgalerij','Glasrozet','Chroomweefsel','Aurora','Optische druk','Drijvende collages','Sterrenstof','Contourlandschap','Zijden portalen','Transformerende deeltjes','Levend koraal','Onmogelijke architectuur','Beeldlandschappen','Lichtnevel','Gyroide weefsel','Vloeibare lenzen','Lichtlinten','Organische cellen','Oneindige beeldtunnel','Magnetische inktstromen','Zwevende orbitale ringen','Interferentiezijde','Vloeibaar facetmozaiek','Knoopsculptuur','Dubbele lichthelix','Golvend parelveld','Kristalzwerm','Orbitale mobiel','Spiraaltrappen'];
   const imageFamilies=new Set([1,2,3,6,8,9,13,15,16,19,23]);
   const files = ['tex/graffiti-1.jpg','tex/graffiti-2.jpg','tex/graffiti-3.jpg',...['arcade','bass-tempel','uv-jungle','rave-flyers','paddenstoelen','neonsteeg','kosmos','chroom','slijmhol','staal'].map(n=>'tex/doolhof/'+n+'.jpg'),...['jellyfish', 'solar-orbits', 'crystal-cavern', 'neon-city', 'cosmic-eye', 'coral-garden', 'mechanical-clock', 'lotus', 'alien-canopy', 'liquid-marble', 'portal-arches', 'deep-sea', 'circuit-world', 'desert-moons', 'prismatic-wings', 'woven-ribbons', 'floating-islands', 'sound-machines', 'star-map', 'botanical-spirals', 'glass-shards', 'retro-landscape', 'luminous-fungi', 'orbital-station'].map(n=>'tex/atlas26/'+n+'.svg')];
@@ -725,3 +729,5 @@
 })();
 
 
+
+})();

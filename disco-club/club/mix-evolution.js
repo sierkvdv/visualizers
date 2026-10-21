@@ -10,8 +10,8 @@
  };
  root.ClubMixEvolutionShader=function(source){
   if(!source.includes('clubLightPrevious'))return source;
-  if(!source.includes('uWeaveEvolution')){
-   source=source.replace('vec4 clubLight(vec3 effect,vec2 uv,float strength){','uniform float uWeaveEvolution,uRingEvolution;\nvec4 clubLight(vec3 effect,vec2 uv,float strength){');
+  if(!source.includes('uniform float uWeaveEvolution,uRingEvolution;')){
+   source=source.replace('precision highp float;','precision highp float;uniform float uWeaveEvolution,uRingEvolution;');
    source=source.replace('return vec4(mapped*coverage,coverage);',`vec4 modern=vec4(mapped*coverage,coverage);
     vec4 original=clubLightPrevious(effect,uv,strength);
     if(uWeaveEvolution<.001)return original;
